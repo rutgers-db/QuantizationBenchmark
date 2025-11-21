@@ -3,14 +3,14 @@ import numpy as np
 from typing import Tuple
 import psutil
 class ProductQuantizationFaiss:
-    def __init__(self, ndim, nsubvec, nbit, data_bit, nthread = 1, space = "l2"):
+    def __init__(self, ndim, nsubvec, nbit, data_bytes, nthread = 1, space = "l2"):
         self.ndim = ndim
         self.nsubvec = nsubvec
         self.nbit = nbit
         self.index = faiss.IndexPQ(ndim, nsubvec, nbit)
         self.space = space
         self.nthread = nthread
-        self.data_bit = data_bit
+        self.data_bytes = data_bytes
         self.data = None
         self.ndata = 0
         pass
@@ -29,14 +29,16 @@ class ProductQuantizationFaiss:
         D, I = self.index.search(nq,query, topk)
         return I, D
 
+    # Need To Test
     def getMemoryUsage(self) -> float:
         return psutil.Process().memory_info().rss/1024
 
     def getCompressionRate(self) -> float:
-        return self.nbit / (self.ndim // self.nsubvec * self.data_bit)  
+        return self.nbit / (self.ndim // self.nsubvec * (self.data_bytes * 8))  
     
     def getCompressionMemory(self) -> float:
-        return (2 ** self.nbit) * self.ndim * self.data_bit + self.ndata * self.nbit * self.nsubvec
+        return (2 ** self.nbit) * self.ndim * 64 + self.ndata * self.nbit * self.nsubvec
+    
     def getMSE(self) -> float:
         recons = np.zeros_like(self.data)
         self.index.reconstruct_n(0,self.ndata,recons)
