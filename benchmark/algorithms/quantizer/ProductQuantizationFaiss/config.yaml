@@ -1,0 +1,20 @@
+# Configuration for Product Quantization using Faiss
+# Organized by dataset name
+
+sift-128-euclidean:
+  nsubvec: 16
+  nbit: 8
+  data_bytes: 4
+  ndim: 128
+  nthread: 1
+  space: "l2"
+
+# You can add more dataset-specific configurations here
+# Example:
+# gist-960-euclidean:
+#   nsubvec: 32
+#   nbit: 8
+#   data_bytes: 4
+#   ndim: 960
+#   nthread: 1
+#   space: "l2"

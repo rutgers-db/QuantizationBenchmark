@@ -44,12 +44,16 @@ class BenchmarkRunner:
         """
         Load configuration for an algorithm.
 
+        Supports two formats:
+        1. Dataset-specific: config.yaml contains a dict with dataset names as keys
+        2. Default: config.yaml contains parameters directly
+
         Args:
             algo_type: 'quantizer' or 'dimreduction'
             algo_name: Name of the algorithm
 
         Returns:
-            Dict containing configuration parameters
+            Dict containing configuration parameters for the current dataset
         """
         config_path = os.path.join(
             "benchmark/algorithms", algo_type, algo_name, "config.yaml"
@@ -58,7 +62,22 @@ class BenchmarkRunner:
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
-                return config if config else {}
+                if not config:
+                    return {}
+
+                # Check if config is organized by dataset
+                if self.dataset_name in config:
+                    # Return dataset-specific config
+                    return config[self.dataset_name]
+                elif isinstance(config, dict) and any(
+                    key in config for key in ['ndim', 'nsubvec', 'nbit', 'target_dim']
+                ):
+                    # Config contains parameters directly (not organized by dataset)
+                    return config
+                else:
+                    # Assume first key is a dataset name, return empty if current dataset not found
+                    print(f"Warning: No configuration found for dataset '{self.dataset_name}' in {config_path}")
+                    return {}
         return {}
 
     def run_benchmark(

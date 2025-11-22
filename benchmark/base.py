@@ -21,13 +21,13 @@ class BaseQuantizer(ABC):
         pass
 
     @abstractmethod
-    def fit(self, data: np.ndarray) -> bool:
+    def fit(self, nd: int, data: np.ndarray) -> bool:
         """
         Train the quantizer on the given data.
 
         Args:
-            data: Training data of shape (n, d) where n is the number of vectors
-                  and d is the dimensionality
+            nd: Number of data vectors
+            data: Training data of shape (nd, d) where d is the dimensionality
 
         Returns:
             bool: True if training was successful, False otherwise
@@ -35,13 +35,13 @@ class BaseQuantizer(ABC):
         pass
 
     @abstractmethod
-    def query(self, queries: np.ndarray, topk: int) -> Tuple[np.ndarray, np.ndarray]:
+    def query(self, nq: int, queries: np.ndarray, topk: int) -> Tuple[np.ndarray, np.ndarray]:
         """
         Search for the top-k nearest neighbors for each query.
 
         Args:
-            queries: Query vectors of shape (nq, d) where nq is the number of queries
-                    and d is the dimensionality
+            nq: Number of query vectors
+            queries: Query vectors of shape (nq, d) where d is the dimensionality
             topk: Number of nearest neighbors to return
 
         Returns:
@@ -105,13 +105,13 @@ class BaseDimReduction(ABC):
         pass
 
     @abstractmethod
-    def fit_transform(self, data: np.ndarray) -> np.ndarray:
+    def fit_transform(self, n: int, data: np.ndarray) -> np.ndarray:
         """
         Fit the dimensionality reduction model and transform the data.
 
         Args:
-            data: Input data of shape (n, d) where n is the number of vectors
-                  and d is the original dimensionality
+            n: Number of data vectors
+            data: Input data of shape (n, d) where d is the original dimensionality
 
         Returns:
             np.ndarray: Transformed data of shape (n, d_reduced) where d_reduced
@@ -120,13 +120,13 @@ class BaseDimReduction(ABC):
         pass
 
     @abstractmethod
-    def transform(self, data: np.ndarray) -> np.ndarray:
+    def transform(self, n: int, data: np.ndarray) -> np.ndarray:
         """
         Transform new data using the fitted model.
 
         Args:
-            data: Input data of shape (n, d) where n is the number of vectors
-                  and d is the original dimensionality
+            n: Number of data vectors
+            data: Input data of shape (n, d) where d is the original dimensionality
 
         Returns:
             np.ndarray: Transformed data of shape (n, d_reduced)

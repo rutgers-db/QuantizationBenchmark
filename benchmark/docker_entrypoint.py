@@ -82,7 +82,8 @@ def run_dimreduction(input_path: str, output_path: str, module_path: str):
     tracemalloc.start()
     start_time = time.time()
 
-    train_transformed = dim_reduction.fit_transform(train_data)
+    n_train = train_data.shape[0]
+    train_transformed = dim_reduction.fit_transform(n_train, train_data)
     fit_time = time.time() - start_time
 
     current, peak_memory = tracemalloc.get_traced_memory()
@@ -90,7 +91,8 @@ def run_dimreduction(input_path: str, output_path: str, module_path: str):
 
     # Transform test data
     print("Transforming test data...")
-    test_transformed = dim_reduction.transform(test_data)
+    n_test = test_data.shape[0]
+    test_transformed = dim_reduction.transform(n_test, test_data)
 
     # Collect metrics
     metrics = {
@@ -158,7 +160,8 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
     tracemalloc.start()
     start_time = time.time()
 
-    success = quantizer.fit(train_data)
+    nd = train_data.shape[0]
+    success = quantizer.fit(nd, train_data)
     training_time = time.time() - start_time
 
     current, peak_train_memory = tracemalloc.get_traced_memory()
@@ -188,7 +191,8 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
     tracemalloc.start()
     start_time = time.time()
 
-    I, D = quantizer.query(test_data, topk)
+    nq = test_data.shape[0]
+    I, D = quantizer.query(nq, test_data, topk)
     query_time = time.time() - start_time
 
     current, peak_query_memory = tracemalloc.get_traced_memory()
