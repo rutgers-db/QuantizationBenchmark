@@ -70,14 +70,34 @@ def list_algorithms():
     print("="*60 + "\n")
 
 
-def build_all_images(force_rebuild: bool = False):
-    """Build Docker images for all algorithms."""
+def build_images(algorithm: str = None, force_rebuild: bool = False):
+    """
+    Build Docker images for algorithms.
+
+    Args:
+        algorithm: Optional algorithm string (e.g., "PQ" or "PCA,PQ")
+                  If None, build all algorithms
+        force_rebuild: Force rebuild even if image exists
+    """
     print("\n" + "="*60)
     print("Building Docker Images")
     print("="*60 + "\n")
 
     docker_runner = DockerRunner()
-    docker_runner.build_all_images(force_rebuild=force_rebuild)
+
+    if algorithm:
+        # Build specific algorithm(s)
+        dimreduction_name, quantizer_name = parse_algorithm_string(algorithm)
+
+        if dimreduction_name:
+            print(f"Building image for dimreduction: {dimreduction_name}")
+            docker_runner.build_image('dimreduction', dimreduction_name, force_rebuild)
+
+        print(f"Building image for quantizer: {quantizer_name}")
+        docker_runner.build_image('quantizer', quantizer_name, force_rebuild)
+    else:
+        # Build all algorithms
+        docker_runner.build_all_images(force_rebuild=force_rebuild)
 
     print("\n" + "="*60)
     print("Build Complete")
@@ -162,6 +182,9 @@ Examples:
   # Build all Docker images
   python run.py --build-images
 
+  # Build Docker image for specific algorithm
+  python run.py --build-images --algorithm ProductQuantizationFaiss
+
   # List available algorithms
   python run.py --list-algorithms
         """
@@ -179,7 +202,7 @@ Examples:
     parser.add_argument('--list-algorithms', action='store_true',
                        help='List all available algorithms and exit')
     parser.add_argument('--build-images', action='store_true',
-                       help='Build all Docker images and exit')
+                       help='Build Docker images. Use with --algorithm to build specific algorithm, or without to build all')
     parser.add_argument('--force-rebuild', action='store_true',
                        help='Force rebuild of Docker images even if they exist')
 
@@ -197,7 +220,7 @@ Examples:
         return 0
 
     if args.build_images:
-        build_all_images(force_rebuild=args.force_rebuild)
+        build_images(algorithm=args.algorithm, force_rebuild=args.force_rebuild)
         return 0
 
     # Validate required arguments for benchmark run

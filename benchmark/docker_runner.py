@@ -48,7 +48,7 @@ class DockerRunner:
             print(f"Error: Dockerfile not found at {dockerfile_path}")
             return False
 
-        image_name = f"quantbench-{algo_type}-{algo_name}:latest"
+        image_name = f"quantbench-{algo_type}-{algo_name.lower()}:latest"
 
         # Check if image exists
         if not force_rebuild:
@@ -63,9 +63,14 @@ class DockerRunner:
 
         print(f"Building Docker image: {image_name}")
 
-        # Build the image
+        # Build the image with project root as context
+        # This allows the Dockerfile to access both the algorithm and the framework
+        project_root = os.path.abspath(".")
         result = subprocess.run(
-            ["docker", "build", "-t", image_name, "-f", dockerfile_path, algo_dir],
+            ["docker", "build", "-t", image_name, "-f", dockerfile_path,
+             "--build-arg", f"ALGO_TYPE={algo_type}",
+             "--build-arg", f"ALGO_NAME={algo_name}",
+             project_root],
             capture_output=True,
             text=True
         )
@@ -111,7 +116,7 @@ class DockerRunner:
             }, f)
 
         # Run container
-        image_name = f"quantbench-dimreduction-{algo_name}:latest"
+        image_name = f"quantbench-dimreduction-{algo_name.lower()}:latest"
 
         cmd = [
             "docker", "run", "--rm",
@@ -187,7 +192,7 @@ class DockerRunner:
             }, f)
 
         # Run container
-        image_name = f"quantbench-quantizer-{algo_name}:latest"
+        image_name = f"quantbench-quantizer-{algo_name.lower()}:latest"
 
         cmd = [
             "docker", "run", "--rm",

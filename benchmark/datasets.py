@@ -3,7 +3,6 @@ import random
 import h5py
 import numpy
 from typing import Any, Callable, Dict, Tuple
-import faiss
 
 
 def get_dataset_fn(dataset_name: str) -> str:
@@ -43,22 +42,24 @@ def get_dataset(dataset_name: str) -> Tuple[h5py.File, int]:
 
 def write_output(train: numpy.ndarray, test: numpy.ndarray, fn: str, distance: str, point_type: str = "float", count: int = 100) -> None:
     """
-    Writes the provided training and testing data to an HDF5 file. It also computes 
-    and stores the nearest neighbors and their distances for the test set using a 
+    Writes the provided training and testing data to an HDF5 file. It also computes
+    and stores the nearest neighbors and their distances for the test set using a
     brute-force approach.
-    
+
     Args:
         train (numpy.ndarray): The training data.
         test (numpy.ndarray): The testing data.
         filename (str): The name of the HDF5 file to which data should be written.
         distance_metric (str): The distance metric to use for computing nearest neighbors.
         point_type (str, optional): The type of the data points. Defaults to "float".
-        neighbors_count (int, optional): The number of nearest neighbors to compute for 
+        neighbors_count (int, optional): The number of nearest neighbors to compute for
             each point in the test set. Defaults to 100.
     """
+    import faiss
+
     if distance not in ("euclidean"):
         raise NotImplementedError
-        
+
     with h5py.File(fn, "w") as f:
         f.attrs["type"] = "dense"
         f.attrs["distance"] = distance
