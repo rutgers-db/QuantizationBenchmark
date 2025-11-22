@@ -7,7 +7,6 @@ Loads the algorithm module, executes training/querying, and collects metrics.
 import argparse
 import pickle
 import time
-import tracemalloc
 import importlib.util
 import sys
 import numpy as np
@@ -79,15 +78,11 @@ def run_dimreduction(input_path: str, output_path: str, module_path: str):
 
     # Fit and transform
     print("\nFitting and transforming training data...")
-    tracemalloc.start()
     start_time = time.time()
 
     n_train = train_data.shape[0]
     train_transformed = dim_reduction.fit_transform(n_train, train_data)
     fit_time = time.time() - start_time
-
-    current, peak_memory = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
 
     # Transform test data
     print("Transforming test data...")
@@ -97,7 +92,6 @@ def run_dimreduction(input_path: str, output_path: str, module_path: str):
     # Collect metrics
     metrics = {
         'fit_time': fit_time,
-        'peak_memory': peak_memory,
         'model_memory': dim_reduction.getMemoryUsage(),
         'compression_rate': dim_reduction.getCompressionRate(),
         'original_dim': train_data.shape[1],
@@ -106,7 +100,6 @@ def run_dimreduction(input_path: str, output_path: str, module_path: str):
 
     print(f"\nDimensionality Reduction Metrics:")
     print(f"  Fit time: {fit_time:.4f}s")
-    print(f"  Peak memory: {peak_memory / 1024 / 1024:.2f} MB")
     print(f"  Model memory: {metrics['model_memory'] / 1024 / 1024:.2f} MB")
     print(f"  Compression rate: {metrics['compression_rate']:.4f}x")
     print(f"  Dimension: {metrics['original_dim']} -> {metrics['reduced_dim']}")
@@ -157,15 +150,11 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
 
     # Training phase
     print("\n=== Training Phase ===")
-    tracemalloc.start()
     start_time = time.time()
 
     nd = train_data.shape[0]
     success = quantizer.fit(nd, train_data)
     training_time = time.time() - start_time
-
-    current, peak_train_memory = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
 
     if not success:
         print("ERROR: Training failed!")
@@ -175,7 +164,6 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
         return
 
     print(f"Training time: {training_time:.4f}s")
-    print(f"Peak memory: {peak_train_memory / 1024 / 1024:.2f} MB")
 
     # Get quantizer metrics
     quantizer_memory = quantizer.getMemoryUsage()
@@ -188,18 +176,13 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
 
     # Query phase
     print("\n=== Query Phase ===")
-    tracemalloc.start()
     start_time = time.time()
 
     nq = test_data.shape[0]
     I, D = quantizer.query(nq, test_data, topk)
     query_time = time.time() - start_time
 
-    current, peak_query_memory = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-
     print(f"Query time: {query_time:.4f}s")
-    print(f"Peak memory: {peak_query_memory / 1024 / 1024:.2f} MB")
 
     # Calculate recall
     recall = calculate_recall(I, ground_truth[:, :topk])
@@ -209,13 +192,10 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
     output = {
         'status': 'success',
         'training_time': training_time,
-        'training_memory': peak_train_memory,
         'quantizer_memory': quantizer_memory,
         'compression_rate': compression_rate,
         'mse': mse,
         'query_time': query_time,
-        'query_memory': peak_query_memory,
-        'max_memory': max(peak_train_memory, peak_query_memory),
         'queries_per_second': len(test_data) / query_time if query_time > 0 else 0,
         'recall': recall,
         'predictions': I,

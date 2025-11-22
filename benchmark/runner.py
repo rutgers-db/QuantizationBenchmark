@@ -12,19 +12,21 @@ class BenchmarkRunner:
     Uses Docker containers to run algorithms in isolated environments.
     """
 
-    def __init__(self, dataset_name: str, topk: int = 100):
+    def __init__(self, dataset_name: str, topk: int = 100, data_dir: str = "data"):
         """
         Initialize the benchmark runner.
 
         Args:
             dataset_name: Name of the HDF5 dataset in the data/ directory
             topk: Number of nearest neighbors to retrieve for recall calculation
+            data_dir: Directory where datasets are stored (default: "data")
         """
         self.dataset_name = dataset_name
         self.topk = topk
+        self.data_dir = data_dir
 
         # Load dataset
-        self.hdf5_file, self.dimension = get_dataset(dataset_name)
+        self.hdf5_file, self.dimension = get_dataset(dataset_name, data_dir)
         self.train_data = np.array(self.hdf5_file['train'])
         self.test_data = np.array(self.hdf5_file['test'])
         self.ground_truth = np.array(self.hdf5_file['neighbors'])
@@ -145,7 +147,6 @@ class BenchmarkRunner:
 
             # Store dimreduction metrics
             results['dim_reduction_time'] = dim_metrics['fit_time']
-            results['dim_reduction_memory'] = dim_metrics['peak_memory']
             results['dim_reduction_model_memory'] = dim_metrics['model_memory']
             results['dim_reduction_compression_rate'] = dim_metrics['compression_rate']
             results['original_dimension'] = dim_metrics['original_dim']
@@ -153,7 +154,6 @@ class BenchmarkRunner:
 
             print(f"\nDimensionality Reduction Results:")
             print(f"  Time: {dim_metrics['fit_time']:.4f}s")
-            print(f"  Peak Memory: {dim_metrics['peak_memory'] / 1024 / 1024:.2f} MB")
             print(f"  Model Memory: {dim_metrics['model_memory'] / 1024 / 1024:.2f} MB")
             print(f"  Compression Rate: {dim_metrics['compression_rate']:.4f}x")
             print(f"  Dimension: {dim_metrics['original_dim']} -> {dim_metrics['reduced_dim']}")
@@ -192,13 +192,10 @@ class BenchmarkRunner:
         # Merge quantizer results
         results.update({
             'training_time': quant_results['training_time'],
-            'training_memory': quant_results['training_memory'],
             'quantizer_memory': quant_results['quantizer_memory'],
             'quantizer_compression_rate': quant_results['compression_rate'],
             'mse': quant_results['mse'],
             'query_time': quant_results['query_time'],
-            'query_memory': quant_results['query_memory'],
-            'max_memory': quant_results['max_memory'],
             'queries_per_second': quant_results['queries_per_second'],
             'recall': quant_results['recall'],
             'status': 'success'
@@ -218,7 +215,6 @@ class BenchmarkRunner:
         print(f"Benchmark Summary")
         print(f"{'='*60}")
         print(f"  Training Time: {results['training_time']:.4f}s")
-        print(f"  Training Memory: {results['training_memory'] / 1024 / 1024:.2f} MB")
         print(f"  Quantizer Memory: {results['quantizer_memory'] / 1024 / 1024:.2f} MB")
         print(f"  Compression Rate (Quantizer): {results['quantizer_compression_rate']:.4f}x")
         print(f"  Total Compression Rate: {results['total_compression_rate']:.4f}x")
@@ -226,7 +222,6 @@ class BenchmarkRunner:
         print(f"  Query Time: {results['query_time']:.4f}s")
         print(f"  Queries/Second: {results['queries_per_second']:.2f}")
         print(f"  Recall@{self.topk}: {results['recall']:.4f}")
-        print(f"  Max Memory: {results['max_memory'] / 1024 / 1024:.2f} MB")
 
         return results
 

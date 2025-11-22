@@ -179,6 +179,9 @@ Examples:
   # Use custom top-k value
   python run.py --dataset sift-128 --algorithm PQ --topk 10
 
+  # Specify custom data directory
+  python run.py --dataset sift-128 --algorithm PQ --data-dir /path/to/datasets
+
   # Build all Docker images
   python run.py --build-images
 
@@ -197,6 +200,8 @@ Examples:
                        help='Algorithm(s) to run. Format: "Quantizer" or "DimReduction,Quantizer"')
     parser.add_argument('--topk', type=int, default=100,
                        help='Number of nearest neighbors to retrieve (default: 100)')
+    parser.add_argument('--data-dir', type=str, default='data',
+                       help='Directory where datasets are stored (default: data)')
 
     # Utility actions
     parser.add_argument('--list-algorithms', action='store_true',
@@ -247,7 +252,7 @@ Examples:
     print("="*60)
 
     try:
-        with BenchmarkRunner(args.dataset, topk=args.topk) as runner:
+        with BenchmarkRunner(args.dataset, topk=args.topk, data_dir=args.data_dir) as runner:
             results = runner.run_benchmark(
                 quantizer_name=quantizer_name,
                 dimreduction_name=dimreduction_name

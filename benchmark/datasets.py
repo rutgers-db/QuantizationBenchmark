@@ -5,34 +5,36 @@ import numpy
 from typing import Any, Callable, Dict, Tuple
 
 
-def get_dataset_fn(dataset_name: str) -> str:
+def get_dataset_fn(dataset_name: str, data_dir: str = "data") -> str:
     """
     Returns the full file path for a given dataset name in the data directory.
-    
+
     Args:
         dataset_name (str): The name of the dataset.
-    
+        data_dir (str): The directory where datasets are stored. Defaults to "data".
+
     Returns:
         str: The full file path of the dataset.
     """
-    if not os.path.exists("data"):
-        os.mkdir("data")
-    return os.path.join("data", f"{dataset_name}.hdf5")
+    if not os.path.exists(data_dir):
+        os.mkdir(data_dir)
+    return os.path.join(data_dir, f"{dataset_name}.hdf5")
 
 
-def get_dataset(dataset_name: str) -> Tuple[h5py.File, int]:
+def get_dataset(dataset_name: str, data_dir: str = "data") -> Tuple[h5py.File, int]:
     """
     hdf5 file should be located in the data directory
-    
+
     Args:
         dataset_name (str): The name of the dataset.
-    
+        data_dir (str): The directory where datasets are stored. Defaults to "data".
+
     Returns:
         Tuple[h5py.File, int]: A tuple containing the opened HDF5 file object and
             the dimension of the dataset.
     """
-    hdf5_filename = get_dataset_fn(dataset_name)
-    
+    hdf5_filename = get_dataset_fn(dataset_name, data_dir)
+
     hdf5_file = h5py.File(hdf5_filename, "r")
 
     # here for backward compatibility, to ensure old datasets can still be used with newer versions
