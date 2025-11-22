@@ -36,8 +36,9 @@ class ProductQuantizationFaiss(BaseQuantizer):
         return True
 
 
-    def query(self, nq: int, query: np.ndarray, topk: int) -> Tuple[np.ndarray, np.ndarray]:
+    def query(self, nq: int, query: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
         # Faiss search expects (queries, k), not (nq, queries, k)
+        # search_params are ignored for PQ (no search-time parameters)
         D, I = self.index.search(query, topk)
         return I, D
 

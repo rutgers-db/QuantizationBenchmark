@@ -100,7 +100,7 @@ def run_dimreduction(input_path: str, output_path: str, module_path: str):
 
     print(f"\nDimensionality Reduction Metrics:")
     print(f"  Fit time: {fit_time:.4f}s")
-    print(f"  Model memory: {metrics['model_memory'] / 1024 / 1024:.2f} MB")
+    print(f"  Model memory: {metrics['model_memory'] / 1024:.2f} MB")
     print(f"  Compression rate: {metrics['compression_rate']:.4f}x")
     print(f"  Dimension: {metrics['original_dim']} -> {metrics['reduced_dim']}")
 
@@ -142,11 +142,23 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
     print(f"Top-k: {topk}")
     print(f"Config: {config}")
 
+    # Check if config has build/search separation
+    if 'build_params' in config and 'search_params' in config:
+        build_params = config['build_params']
+        search_params = config['search_params']
+        print(f"\nUsing build/search separation:")
+        print(f"  Build params: {build_params}")
+        print(f"  Search params: {search_params}")
+    else:
+        # Legacy format: all params for build, no search params
+        build_params = config
+        search_params = {}
+
     # Load algorithm class
     QuantizerClass = load_module_class(module_path, 'BaseQuantizer')
 
-    # Instantiate
-    quantizer = QuantizerClass(**config)
+    # Instantiate with build parameters
+    quantizer = QuantizerClass(**build_params)
 
     # Training phase
     print("\n=== Training Phase ===")
@@ -170,7 +182,7 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
     compression_rate = quantizer.getCompressionRate()
     mse = quantizer.getMSE()
 
-    print(f"Quantizer memory: {quantizer_memory / 1024 / 1024:.2f} MB")
+    print(f"Quantizer memory: {quantizer_memory / 1024:.2f} MB")
     print(f"Compression rate: {compression_rate:.4f}x")
     print(f"MSE: {mse:.6f}")
 
@@ -179,7 +191,7 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
     start_time = time.time()
 
     nq = test_data.shape[0]
-    I, D = quantizer.query(nq, test_data, topk)
+    I, D = quantizer.query(nq, test_data, topk, **search_params)
     query_time = time.time() - start_time
 
     print(f"Query time: {query_time:.4f}s")

@@ -1,20 +1,34 @@
 # Configuration for Product Quantization using Faiss
-# Organized by dataset name
 
 sift-128-euclidean:
-  nsubvec: 16
-  nbit: 8
-  data_bytes: 4
-  ndim: 128
-  nthread: 1
-  space: "l2"
+  # Product Quantization uses simple format (no search-time parameters)
+  # Automatically generates all combinations: 2 x 1 = 2 configurations
+  common:
+    data_bytes: 4
+    ndim: 128  
+    nthread: 1  
+    space: "l2" 
+  build:
+    nsubvec: [16, 32]
+    nbit: [4]
+  # nsubvec: [16, 32]  # Number of subvectors
+  # nbit: [4]          # Bits per subvector
+  # data_bytes: 4      # Data type size in bytes
+  # ndim: 128          # Dimensionality
+  # nthread: 1         # Number of threads
+  # space: "l2"        # Distance metric
 
-# You can add more dataset-specific configurations here
-# Example:
-# gist-960-euclidean:
-#   nsubvec: 32
-#   nbit: 8
-#   data_bytes: 4
-#   ndim: 960
-#   nthread: 1
-#   space: "l2"
+# Example with build/search separation (for future IVF-based methods):
+# sift-128-euclidean:
+#   build:
+#     nsubvec: [16, 32]    # Affects index structure
+#     nbit: [4, 8]         # Affects index structure
+#     ncentroids: 1024     # Number of IVF centroids
+#   search:
+#     nprobe: [1, 4, 16]   # Number of cells to visit (search-time only)
+#   common:
+#     data_bytes: 4        # Used for both build and search
+#     ndim: 128
+#     space: "l2"
+# This would generate: 4 build configs x 3 search configs = 12 total experiments
+# But only 4 index constructions (avoiding redundant training)

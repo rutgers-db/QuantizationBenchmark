@@ -127,24 +127,15 @@ def parse_algorithm_string(algo_string: str):
         )
 
 
-def save_results(results: dict, output_dir: str = "benchmark/results"):
+def save_results(results, output_dir: str = "benchmark/results"):
     """
     Save benchmark results to JSON file.
 
     Args:
-        results: Benchmark results dictionary
+        results: Benchmark results (dict or list of dicts)
         output_dir: Directory to save results
     """
     os.makedirs(output_dir, exist_ok=True)
-
-    # Generate filename
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    algo_str = results['quantizer']
-    if results.get('dimreduction'):
-        algo_str = f"{results['dimreduction']}_{algo_str}"
-
-    filename = f"{results['dataset']}_{algo_str}_{timestamp}.json"
-    filepath = os.path.join(output_dir, filename)
 
     # Convert numpy types to Python types for JSON serialization
     def convert_types(obj):
@@ -154,8 +145,34 @@ def save_results(results: dict, output_dir: str = "benchmark/results"):
             return obj.tolist()
         return obj
 
-    serializable_results = {k: convert_types(v) for k, v in results.items()
-                           if k not in ['predictions', 'distances']}  # Exclude large arrays
+    # Handle single result or list of results
+    if isinstance(results, list):
+        # Multiple configurations
+        first_result = results[0]
+        algo_str = first_result['quantizer']
+        if first_result.get('dimreduction'):
+            algo_str = f"{first_result['dimreduction']}_{algo_str}"
+
+        filename = f"{first_result['dataset']}_{algo_str}.json"
+
+        # Convert all results
+        serializable_results = []
+        for result in results:
+            serializable_result = {k: convert_types(v) for k, v in result.items()
+                                 if k not in ['predictions', 'distances']}  # Exclude large arrays
+            serializable_results.append(serializable_result)
+    else:
+        # Single configuration
+        algo_str = results['quantizer']
+        if results.get('dimreduction'):
+            algo_str = f"{results['dimreduction']}_{algo_str}"
+
+        filename = f"{results['dataset']}_{algo_str}.json"
+
+        serializable_results = {k: convert_types(v) for k, v in results.items()
+                               if k not in ['predictions', 'distances']}  # Exclude large arrays
+
+    filepath = os.path.join(output_dir, filename)
 
     # Save to file
     with open(filepath, 'w') as f:
@@ -255,22 +272,39 @@ Examples:
         with BenchmarkRunner(args.dataset, topk=args.topk, data_dir=args.data_dir) as runner:
             results = runner.run_benchmark(
                 quantizer_name=quantizer_name,
-                dimreduction_name=dimreduction_name
+                dimreduction_name=dimreduction_name,
+                run_all_configs=True  # Run all parameter configurations
             )
 
-        # Save results
-        if not args.no_save and results.get('status') == 'success':
-            save_results(results, args.output_dir)
+        # Handle results (could be a list if multiple configs)
+        if isinstance(results, list):
+            # Multiple configurations
+            success_count = sum(1 for r in results if r.get('status') == 'success')
 
-        # Print final status
-        print("\n" + "="*60)
-        if results.get('status') == 'success':
-            print("Benchmark completed successfully!")
+            # Save all results to a single file
+            if not args.no_save and success_count > 0:
+                save_results(results, args.output_dir)
+
+            # Print summary
+            print("\n" + "="*60)
+            print(f"Benchmark completed: {success_count}/{len(results)} configurations succeeded")
+            print("="*60 + "\n")
+
+            return 0 if success_count == len(results) else 1
         else:
-            print(f"Benchmark failed: {results.get('error', 'Unknown error')}")
-        print("="*60 + "\n")
+            # Single configuration
+            if not args.no_save and results.get('status') == 'success':
+                save_results(results, args.output_dir)
 
-        return 0 if results.get('status') == 'success' else 1
+            # Print final status
+            print("\n" + "="*60)
+            if results.get('status') == 'success':
+                print("Benchmark completed successfully!")
+            else:
+                print(f"Benchmark failed: {results.get('error', 'Unknown error')}")
+            print("="*60 + "\n")
+
+            return 0 if results.get('status') == 'success' else 1
 
     except Exception as e:
         print(f"\nError running benchmark: {e}")

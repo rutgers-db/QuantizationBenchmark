@@ -35,7 +35,7 @@ class BaseQuantizer(ABC):
         pass
 
     @abstractmethod
-    def query(self, nq: int, queries: np.ndarray, topk: int) -> Tuple[np.ndarray, np.ndarray]:
+    def query(self, nq: int, queries: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
         """
         Search for the top-k nearest neighbors for each query.
 
@@ -43,6 +43,7 @@ class BaseQuantizer(ABC):
             nq: Number of query vectors
             queries: Query vectors of shape (nq, d) where d is the dimensionality
             topk: Number of nearest neighbors to return
+            **search_params: Optional search-time parameters (e.g., nprobe for IVF)
 
         Returns:
             Tuple[np.ndarray, np.ndarray]:
@@ -54,10 +55,10 @@ class BaseQuantizer(ABC):
     @abstractmethod
     def getMemoryUsage(self) -> float:
         """
-        Get the memory usage of the quantizer in bytes.
+        Get the memory usage of the quantizer in KB.
 
         Returns:
-            float: Memory usage in bytes
+            float: Memory usage in KB
         """
         pass
 
@@ -136,10 +137,10 @@ class BaseDimReduction(ABC):
     @abstractmethod
     def getMemoryUsage(self) -> float:
         """
-        Get the memory usage of the dimensionality reduction model in bytes.
+        Get the memory usage of the dimensionality reduction model in KB.
 
         Returns:
-            float: Memory usage in bytes
+            float: Memory usage in KB
         """
         pass
 
