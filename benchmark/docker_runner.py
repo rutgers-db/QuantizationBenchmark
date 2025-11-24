@@ -205,7 +205,7 @@ class DockerRunner:
             "--output", "/workspace/output.pkl",
             "--module", f"/algorithms/quantizer/{algo_name}/module.py"
         ]
-
+        
         print(f"Running {algo_name} in Docker container...")
         result = subprocess.run(cmd, capture_output=True, text=True)
 

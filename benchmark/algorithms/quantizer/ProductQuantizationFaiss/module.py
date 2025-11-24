@@ -3,6 +3,7 @@ import numpy as np
 from typing import Tuple
 import psutil
 import sys
+import os
 
 # Add benchmark to path for importing BaseQuantizer
 sys.path.insert(0, '/benchmark')
@@ -20,7 +21,16 @@ class ProductQuantizationFaiss(BaseQuantizer):
         self.data_bytes = data_bytes
         self.data = None
         self.ndata = 0
+        self.setThreadNum(nthread)
         pass
+
+    def setThreadNum(self, nthread):
+        os.environ['OMP_NUM_THREADS'] = str(nthread)
+        os.environ['MKL_NUM_THREADS'] = str(nthread)
+        os.environ['OPENBLAS_NUM_THREADS'] = str(nthread)
+        os.environ['NUM_THREADS'] = str(nthread)
+        faiss.omp_set_num_threads(nthread)
+
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
         self.data = data
