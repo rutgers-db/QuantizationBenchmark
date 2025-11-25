@@ -1,22 +1,20 @@
 import faiss
+import sys
 import numpy as np
 from typing import Tuple
 import psutil
-import sys
-import os
-
-# Add benchmark to path for importing BaseQuantizer
 sys.path.insert(0, '/benchmark')
 from benchmark.base import BaseQuantizer
 
-
-class ProductQuantizationFaiss(BaseQuantizer):
-    def __init__(self, ndim, nsubvec, nbit, data_bytes, nthread = 1, space = "l2"):
+class ProductQuantizationFastScanFaiss(BaseQuantizer):
+    def __init__(self, ndim, nsubvec, nbit, data_bytes, niter, nthread = 1, space = "l2"):
         self.ndim = ndim
         self.nsubvec = nsubvec
         self.nbit = nbit
-        self.index = faiss.IndexPQ(ndim, nsubvec, nbit)
+        self.PQIndex = faiss.IndexPQ(ndim, nsubvec, nbit)
+        self.index = None
         self.space = space
+        self.niter = niter
         self.nthread = nthread
         self.data_bytes = data_bytes
         self.data = None
@@ -32,10 +30,9 @@ class ProductQuantizationFaiss(BaseQuantizer):
         self.data = data
         self.ndata = nd
         try:
-            # Faiss train expects just the data, not the count
-            self.index.train(data)
+            self.PQIndex.train(data)
+            self.index = faiss.IndexPQFastScan(self.PQIndex)
             # Add vectors to index for querying
-            self.index.add(data)
         except Exception as e:
             print(f"Training error: {e}")
             return False
@@ -55,8 +52,10 @@ class ProductQuantizationFaiss(BaseQuantizer):
     def getCompressionRate(self) -> float:
         return self.nbit / (self.ndim // self.nsubvec * (self.data_bytes * 8))  
     
+    # The bit of all memory after compression 
     def getCompressionMemory(self) -> float:
-        return (2 ** self.nbit) * self.ndim * 64 + self.ndata * self.nbit * self.nsubvec
+
+        return (2 ** self.nbit) * self.ndim * 64 + self.ndata * self.nbit * self.nsubvec + self.ndim * self.ndim *  64
     
     def getMSE(self) -> float:
         recons = np.zeros_like(self.data)
