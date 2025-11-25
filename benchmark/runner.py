@@ -384,6 +384,8 @@ class BenchmarkRunner:
             self.topk,
             quantizer_config
         )
+        
+        print(quant_results)
 
         if quant_results is None or quant_results.get('status') == 'failed':
             results['status'] = 'failed'
