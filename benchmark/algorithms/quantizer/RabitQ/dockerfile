@@ -1,0 +1,67 @@
+FROM python:3.9-slim
+
+# Build arguments
+ARG ALGO_TYPE
+ARG ALGO_NAME
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Eigen 3.4.0
+RUN cd /tmp && \
+    wget https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz && \
+    tar -xzf eigen-3.4.0.tar.gz && \
+    cd eigen-3.4.0 && \
+    mkdir build && cd build && \
+    cmake .. && \
+    make install && \
+    cd / && rm -rf /tmp/eigen-3.4.0*
+
+# Clone RaBitQ (we only need the source headers, not build it)
+RUN cd /opt && \
+    git clone https://github.com/gaoj0017/RaBitQ.git
+
+# Copy and apply the RaBitQ patch
+COPY benchmark/algorithms/quantizer/RabitQ/rabitq.patch /tmp/rabitq.patch
+RUN cd /opt/RaBitQ && \
+    git apply /tmp/rabitq.patch && \
+    rm /tmp/rabitq.patch
+
+# Install Python dependencies including pybind11
+RUN pip install --no-cache-dir \
+    numpy \
+    h5py \
+    pyyaml \
+    psutil \
+    pybind11
+
+# Copy the benchmark framework code
+COPY benchmark/ /benchmark/
+
+# Copy the algorithm module
+COPY benchmark/algorithms/${ALGO_TYPE}/${ALGO_NAME}/ /algorithms/${ALGO_TYPE}/${ALGO_NAME}/
+
+# Build the Python bindings
+RUN cd /algorithms/${ALGO_TYPE}/${ALGO_NAME}/ && \
+    mkdir -p build && \
+    cd build && \
+    cmake .. && \
+    make && \
+    cp rabitq_cpp*.so .. && \
+    cd .. && \
+    rm -rf build
+
+# Set Python path to include the root directory, RaBitQ path, and algorithm directory
+ENV PYTHONPATH=/:/opt/RaBitQ:/algorithms/quantizer/RabitQ
+ENV RABITQ_PATH=/opt/RaBitQ
+
+# Set working directory
+WORKDIR /workspace
+
+# The entrypoint will be provided by the framework at runtime

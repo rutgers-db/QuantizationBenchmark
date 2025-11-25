@@ -1,0 +1,9 @@
+# Configuration for RaBitQ (Randomized Bit Quantization)
+# RaBitQ without IVF (C=1, single centroid = data mean)
+
+sift-128-euclidean:
+  # Simple format: all parameters used for both building and searching
+  data_bytes: 4      # Data type size in bytes (float32)
+  ndim: 128          # Dimensionality
+  nthread: 16        # Number of threads for parallel processing
+  space: "l2"        # Distance metric (l2 for Euclidean distance)

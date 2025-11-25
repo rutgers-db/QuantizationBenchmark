@@ -118,17 +118,33 @@ class DockerRunner:
         # Run container
         image_name = f"quantbench-dimreduction-{algo_name.lower()}:latest"
 
+        # Extract nthread from config to set environment variables
+        # This must be set before numpy is imported
+        nthread = config.get('nthread')
+
         cmd = [
             "docker", "run", "--rm",
             "-v", f"{os.path.abspath(input_dir)}:/workspace",
             "-v", f"{os.path.abspath('benchmark')}:/benchmark",
+        ]
+
+        # Add thread environment variables if nthread is specified
+        if nthread is not None:
+            cmd.extend([
+                "-e", f"OMP_NUM_THREADS={nthread}",
+                "-e", f"MKL_NUM_THREADS={nthread}",
+                "-e", f"OPENBLAS_NUM_THREADS={nthread}",
+                "-e", f"NUMEXPR_NUM_THREADS={nthread}",
+            ])
+
+        cmd.extend([
             image_name,
-            "python", "/benchmark/docker_entrypoint.py",
+            "python", "-u", "/benchmark/docker_entrypoint.py",  # -u for unbuffered output
             "--mode", "dimreduction",
             "--input", "/workspace/input.pkl",
             "--output", "/workspace/output.pkl",
             "--module", f"/algorithms/dimreduction/{algo_name}/module.py"
-        ]
+        ])
 
         print(f"Running {algo_name} in Docker container...")
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -194,25 +210,48 @@ class DockerRunner:
         # Run container
         image_name = f"quantbench-quantizer-{algo_name.lower()}:latest"
 
+        # Extract nthread from config to set environment variables
+        # This must be set before numpy is imported
+        nthread = None
+        if 'build_params' in config:
+            nthread = config['build_params'].get('nthread')
+        else:
+            nthread = config.get('nthread')
+
         cmd = [
             "docker", "run", "--rm",
             "-v", f"{os.path.abspath(input_dir)}:/workspace",
             "-v", f"{os.path.abspath('benchmark')}:/benchmark",
+        ]
+
+        # Add thread environment variables if nthread is specified
+        if nthread is not None:
+            cmd.extend([
+                "-e", f"OMP_NUM_THREADS={nthread}",
+                "-e", f"MKL_NUM_THREADS={nthread}",
+                "-e", f"OPENBLAS_NUM_THREADS={nthread}",
+                "-e", f"NUMEXPR_NUM_THREADS={nthread}",
+            ])
+
+        cmd.extend([
             image_name,
-            "python", "/benchmark/docker_entrypoint.py",
+            "python", "-u", "/benchmark/docker_entrypoint.py",  # -u for unbuffered output
             "--mode", "quantizer",
             "--input", "/workspace/input.pkl",
             "--output", "/workspace/output.pkl",
             "--module", f"/algorithms/quantizer/{algo_name}/module.py"
-        ]
-        
+        ])
+
         print(f"Running {algo_name} in Docker container...")
         result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        print(result.stderr)
+        print(result.stdout)
 
-        if result.returncode != 0:
-            print(f"Error running container: {result.stderr}")
-            print(f"Stdout: {result.stdout}")
-            return None
+        # if result.returncode != 0:
+        #     print(f"Error running container: {result.stderr}")
+        #     print(f"Stdout: {result.stdout}")
+        #     return None
 
         # Read output
         if not os.path.exists(output_file):
