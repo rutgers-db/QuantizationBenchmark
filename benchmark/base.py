@@ -3,12 +3,6 @@ import numpy as np
 from typing import Tuple
 import os
 
-def set_num_threads(nthread):
-    """Set the number of threads for various libraries."""
-    os.environ['OMP_NUM_THREADS'] = str(nthread)
-    os.environ['MKL_NUM_THREADS'] = str(nthread)
-    os.environ['OPENBLAS_NUM_THREADS'] = str(nthread)
-    os.environ['NUMEXPR_NUM_THREADS'] = str(nthread)
 
 
 class BaseQuantizer(ABC):
