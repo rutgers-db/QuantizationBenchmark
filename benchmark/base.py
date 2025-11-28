@@ -94,9 +94,6 @@ class BaseQuantizer(ABC):
             float: Mean squared error
         """
         pass
-    
-    def query_and_rerank(self, nq: int, queries: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
-        pass
 
 
 class BaseDimReduction(ABC):
