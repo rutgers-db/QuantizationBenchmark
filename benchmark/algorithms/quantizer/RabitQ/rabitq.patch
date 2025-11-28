@@ -1,7 +1,64 @@
 diff --git a/src/ivf_rabitq.h b/src/ivf_rabitq.h
-index 8b4d9ca..71577f5 100644
+index 8b4d9ca..dbe0aad 100644
 --- a/src/ivf_rabitq.h
 +++ b/src/ivf_rabitq.h
+@@ -56,7 +56,7 @@ public:
+     ~IVFRN();
+ 
+     ResultHeap search(float* query, float* rd_query, uint32_t k, uint32_t nprobe, float distK = std::numeric_limits<float>::max()) const;
+-    
++
+     static void scan(ResultHeap &KNNs, float &distK, uint32_t k, \
+                         uint64_t *quant_query, uint64_t *ptr_binary_code,  uint32_t len, Factor *ptr_fac, \
+                         const float  sqr_y, const float vl, const float  width, const float sumq,\
+@@ -89,7 +89,8 @@ void IVFRN<D, B>::scan(ResultHeap &KNNs, float &distK, uint32_t k, \
+         for(int j=0;j<SIZE;j++){
+             float tmp_dist = (ptr_fac -> sqr_x) + sqr_y + ptr_fac -> factor_ppc * vl + (space.ip_byte_bin(quant_query, ptr_binary_code) * 2 -sumq) * (ptr_fac -> factor_ip) * width;
+             float error_bound = y * (ptr_fac -> error);
+-            *ptr_res = tmp_dist - error_bound;
++            // *ptr_res = tmp_dist - error_bound;
++            *ptr_res = tmp_dist;
+             ptr_binary_code += B / 64;
+             ptr_fac ++;
+             ptr_res ++;
+@@ -98,8 +99,8 @@ void IVFRN<D, B>::scan(ResultHeap &KNNs, float &distK, uint32_t k, \
+         ptr_res = &res[0];
+         for(int j=0;j<SIZE;j++){
+             if(*ptr_res < distK){
+-                
+-                float gt_dist = sqr_dist<D>(query, data);
++                float gt_dist = *ptr_res;
++                // float gt_dist = sqr_dist<D>(query, data);
+                 if(gt_dist < distK){
+                     KNNs.emplace(gt_dist, *id);
+                     if(KNNs.size() > k) KNNs.pop();
+@@ -163,15 +164,15 @@ void IVFRN<D, B>::fast_scan(ResultHeap &KNNs, float &distK, uint32_t k, \
+         for(int i=0;i<SIZE;i++){
+             float tmp_dist = (ptr_fac -> sqr_x) + sqr_y + ptr_fac -> factor_ppc * vl + (result[i]-sumq) * (ptr_fac -> factor_ip) * width;
+             float error_bound = y * (ptr_fac -> error);
+-            *ptr_low_dist = tmp_dist - error_bound;
++            *ptr_low_dist = tmp_dist;
+             ptr_fac ++;
+             ptr_low_dist ++;
+         }
+         ptr_low_dist = &low_dist[0];
+         for(int j=0;j<SIZE;j++){
+             if(*ptr_low_dist < distK){
+-                
+-                float gt_dist = sqr_dist<D>(query, data);
++                float gt_dist = *ptr_low_dist;
++                // float gt_dist = sqr_dist<D>(query, data);
+                 // cerr << *ptr_low_dist << " " << gt_dist << endl;
+                 if(gt_dist < distK){
+                     KNNs.emplace(gt_dist, *id);
+@@ -278,7 +279,6 @@ ResultHeap IVFRN<D, B>::search(float* query, float* rd_query, uint32_t k, uint32
+ 
+ 
+ 
+-
+ // ==============================================================================================================================
+ // Save and Load Functions
+ template <uint32_t D, uint32_t B>
 @@ -435,7 +435,9 @@ IVFRN<D, B>::IVFRN(const Matrix<float> &X, const Matrix<float> &_centroids, cons
  
      centroid        = new float [C * B];

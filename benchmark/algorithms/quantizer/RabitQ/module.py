@@ -46,6 +46,7 @@ class RabitQ(BaseQuantizer):
         self.data = None
         self.ndata = 0
         self.trained = False
+        self.norms = None
 
         # RaBitQ preprocessing results
         self.projection_matrix = None
@@ -93,7 +94,7 @@ class RabitQ(BaseQuantizer):
             bool: True if training was successful, False otherwise
         """
         try:
-            self.data = data.astype(np.float32)
+            self.data = np.ascontiguousarray(data, dtype=np.float32)
             self.ndata = nd
 
             # Pad data to b_dim
@@ -189,7 +190,6 @@ class RabitQ(BaseQuantizer):
                     self._cpp_cluster_id,
                     self._cpp_binary
                 )
-
             self.trained = True
             return True
 
@@ -262,7 +262,7 @@ class RabitQ(BaseQuantizer):
         """
         original_bits = self.ndim * (self.data_bytes * 8)
         compressed_bits = self.b_dim
-        return original_bits / compressed_bits
+        return compressed_bits / original_bits
 
     def getMSE(self) -> float:
         """
@@ -278,30 +278,20 @@ class RabitQ(BaseQuantizer):
             return float('inf')
 
         try:
-            # Approximate reconstruction
-            # Unpack binary codes
-            binary_unpacked = np.unpackbits(
-                self.binary_codes.view(np.uint8).reshape(-1, self.b_dim // 8),
-                axis=1
-            ).astype(np.float32)
+            queries = self.data
 
-            # Convert to {-1, 1}
-            binary_float = binary_unpacked * 2 - 1
+            # C++ implementation is required
+            if self.cpp_index is None:
+                raise RuntimeError("C++ index is not available. This should not happen after __init__ validation.")
 
-            # Inverse projection (approximate)
-            # reconstructed = binary_float @ P^T (but only first ndim dimensions)
-            reconstructed_proj = binary_float @ self.projection_matrix[:self.b_dim, :self.ndim].T
+            # Prepare queries
+            max_bd = max(self.ndim, self.b_dim)
+            queries_pad = np.pad(queries, ((0, 0), (0, max_bd - self.ndim)), 'constant').astype('float32')
 
-            # Add back centroid
-            centroid = np.mean(self.data, axis=0)
-            print(centroid)
-            reconstructed = reconstructed_proj + centroid
-
-            # Compute MSE
-            se_per_row = np.sum((reconstructed - self.data)**2, axis=1)
-            mse = np.mean(se_per_row)
-
-            return float(mse)
+            # Project queries (randomized queries)
+            rd_queries = queries_pad @ self.projection_matrix  # (nq, max_bd)
+            rd_queries = rd_queries[:, :self.b_dim].astype('float32')
+            return self.cpp_index.getMSE(queries, rd_queries, 1000)
 
         except Exception as e:
             print(f"Error computing MSE: {e}")
