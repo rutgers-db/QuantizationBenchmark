@@ -245,13 +245,11 @@ class DockerRunner:
         print(f"Running {algo_name} in Docker container...")
         result = subprocess.run(cmd, capture_output=True, text=True)
         
-        print(result.stderr)
-        print(result.stdout)
 
-        # if result.returncode != 0:
-        #     print(f"Error running container: {result.stderr}")
-        #     print(f"Stdout: {result.stdout}")
-        #     return None
+        if result.returncode != 0:
+            print(f"Error running container: {result.stderr}")
+            print(f"Stdout: {result.stdout}")
+            return None
 
         # Read output
         if not os.path.exists(output_file):
