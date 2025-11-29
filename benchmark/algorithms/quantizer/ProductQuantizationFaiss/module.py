@@ -11,21 +11,22 @@ from benchmark.base import BaseQuantizer
 
 
 class ProductQuantizationFaiss(BaseQuantizer):
-    def __init__(self, ndim, nsubvec, nbit, data_bytes, nthread = 1, space = "l2"):
+    def __init__(self, ndim, nsubvec, nbit, data_bytes, space = "l2"):
         self.ndim = ndim
         self.nsubvec = nsubvec
         self.nbit = nbit
         self.index = faiss.IndexPQ(ndim, nsubvec, nbit)
         self.space = space
-        self.nthread = nthread
         self.data_bytes = data_bytes
         self.data = None
         self.ndata = 0
-        self.setThreadNum(nthread)
+        self.nthread = 1
         pass
 
     def setThreadNum(self, nthread):
+        self.nthread = nthread
         faiss.omp_set_num_threads(nthread)
+
 
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
