@@ -12,6 +12,7 @@
 // Include RaBitQ headers
 #include "ivf_rabitq.h"
 #include <omp.h>
+#include <mutex>
 
 namespace py = pybind11;
 
@@ -21,7 +22,13 @@ template<uint32_t D, uint32_t B>
 class PyIVFRN {
 private:
     IVFRN<D, B>* index;
-
+    Matrix<float>* X;
+    Matrix<float>* centroids;
+    Matrix<float>* dist_to_centroid;
+    Matrix<float>* x0;
+    Matrix<uint32_t>* cluster_id;
+    Matrix<uint64_t>* binary;
+    static Space<D,B> space;
 public:
     PyIVFRN() : index(nullptr) {}
 
@@ -55,39 +62,38 @@ public:
         }
 
         // Create Matrix wrappers
-        Matrix<float> X;
-        X.n = data_buf.shape[0];
-        X.d = data_buf.shape[1];
-        X.data = static_cast<float*>(data_buf.ptr);
+        X = new Matrix<float>();
+        X->n = data_buf.shape[0];
+        X->d = data_buf.shape[1];
+        X->data = static_cast<float*>(data_buf.ptr);
 
-        Matrix<float> centroids;
-        centroids.n = centroids_buf.shape[0];
-        centroids.d = centroids_buf.shape[1];
-        centroids.data = static_cast<float*>(centroids_buf.ptr);
+        centroids = new Matrix<float>();
+        centroids->n = centroids_buf.shape[0];
+        centroids->d = centroids_buf.shape[1];
+        centroids->data = static_cast<float*>(centroids_buf.ptr);
 
-        Matrix<float> dist_to_centroid;
-        dist_to_centroid.n = dist_buf.shape[0];
-        dist_to_centroid.d = 1;
-        dist_to_centroid.data = static_cast<float*>(dist_buf.ptr);
+        dist_to_centroid = new Matrix<float>();
+        dist_to_centroid->n = dist_buf.shape[0];
+        dist_to_centroid->d = 1;
+        dist_to_centroid->data = static_cast<float*>(dist_buf.ptr);
 
-        Matrix<float> x0;
-        x0.n = x0_buf.shape[0];
-        x0.d = 1;
-        x0.data = static_cast<float*>(x0_buf.ptr);
+        x0 = new Matrix<float>();
+        x0->n = x0_buf.shape[0];
+        x0->d = 1;
+        x0->data = static_cast<float*>(x0_buf.ptr);
 
-        Matrix<uint32_t> cluster_id;
-        cluster_id.n = cluster_buf.shape[0];
-        cluster_id.d = 1;
-        cluster_id.data = static_cast<uint32_t*>(cluster_buf.ptr);
+        cluster_id = new Matrix<uint32_t>();
+        cluster_id->n = cluster_buf.shape[0];
+        cluster_id->d = 1;
+        cluster_id->data = static_cast<uint32_t*>(cluster_buf.ptr);
 
-        Matrix<uint64_t> binary;
-        binary.n = binary_buf.shape[0];
-        binary.d = binary_buf.shape[1];
-        binary.data = static_cast<uint64_t*>(binary_buf.ptr);
+        binary = new Matrix<uint64_t>();
+        binary->n = binary_buf.shape[0];
+        binary->d = binary_buf.shape[1];
+        binary->data = static_cast<uint64_t*>(binary_buf.ptr);
 
-        // Build index (this will copy data internally)
         if (index) delete index;
-        index = new IVFRN<D, B>(X, centroids, dist_to_centroid, x0, cluster_id, binary);
+        index = new IVFRN<D, B>(*X, *centroids, *dist_to_centroid, *x0, *cluster_id, *binary);
     }
 
     // Search
@@ -171,6 +177,62 @@ public:
         }
         index->load(const_cast<char*>(filename.c_str()));
     }
+
+    float getMSE(
+        py::array_t<float> py_queries,
+        py::array_t<float> py_rd_queries,
+        uint32_t k
+    ){
+        float mse = 0.0f;
+        auto queries_buf = py_queries.request();
+        auto rd_queries_buf = py_rd_queries.request();
+
+        uint32_t nq = queries_buf.shape[0];
+
+        float* queries = static_cast<float*>(queries_buf.ptr);
+        float* rd_queries = static_cast<float*>(rd_queries_buf.ptr);
+
+        // Allocate result arrays
+
+        int thread_num = omp_get_max_threads();
+        std::mutex mtx;
+        int found_count = 0;
+        int negative_count = 0;
+        // Search each query
+        #pragma omp parallel for num_threads(thread_num)
+        for (uint32_t i = 0; i < nq; i++) {
+            
+            ResultHeap result = index->search(
+                queries + i * D,
+                rd_queries + i * B,
+                k,
+                1
+            );
+
+            // Extract results (they come in reverse order from heap)
+            bool found = false;
+
+            while (!result.empty()) {
+                if (result.top().second == i){
+                    mtx.lock();
+                    found_count++;
+                    mse += abs(result.top().first);
+                    if (result.top().first < 0){
+                        negative_count++;
+                    }
+                    mtx.unlock();
+                }
+                result.pop();
+            }
+
+
+        }
+        
+        std::cout << "found_count: " << found_count << std::endl;
+        std::cout << "negative_count: " << negative_count << std::endl;
+        mse /= found_count;
+        return mse;
+    }
 };
 
 PYBIND11_MODULE(rabitq_cpp, m) {
@@ -194,7 +256,11 @@ PYBIND11_MODULE(rabitq_cpp, m) {
         .def("save", &PyIVFRN<128, 128>::save,
              py::arg("filename"))
         .def("load", &PyIVFRN<128, 128>::load,
-             py::arg("filename"));
+             py::arg("filename"))
+        .def("getMSE", &PyIVFRN<128, 128>::getMSE,
+             py::arg("queries"),
+             py::arg("rd_queries"),
+             py::arg("k"));
 
     // Add more dimension instantiations as needed
     // For 960 dimensions (common in embeddings), B would be 960 rounded to 64-multiple = 960
@@ -215,5 +281,9 @@ PYBIND11_MODULE(rabitq_cpp, m) {
         .def("save", &PyIVFRN<960, 960>::save,
              py::arg("filename"))
         .def("load", &PyIVFRN<960, 960>::load,
-             py::arg("filename"));
+             py::arg("filename"))
+        .def("getMSE", &PyIVFRN<960, 960>::getMSE,
+             py::arg("queries"),
+             py::arg("rd_queries"),
+             py::arg("k"));
 }
