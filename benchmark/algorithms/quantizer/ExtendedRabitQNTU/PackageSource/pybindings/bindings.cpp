@@ -20,18 +20,24 @@ class Index{
     uint32_t dim;
     uint32_t Nlist = 1;
     uint32_t bit;
+
+    float * data;
+    size_t ndata;
+
     public:
         Index(uint32_t D, uint32_t B):dim(D),bit(B)
         {}
-        ~Index(){}
+        ~Index(){delete ivf;}
         py::object train(py::object input, py::object centroids, py::object cids, size_t N, int num_threads = -1){
             py::array_t < float, py::array::c_style | py::array::forcecast > data_items(input);
             py::array_t < float, py::array::c_style | py::array::forcecast > centroids_items(centroids);
             py::array_t < uint32_t, py::array::c_style | py::array::forcecast > cids_items(cids);
+            ndata = N;
 
             float* data_ptr = static_cast<float*> (data_items.request().ptr);
             float* centroids_ptr = static_cast<float*> (centroids_items.request().ptr);
             uint32_t* cids_ptr = static_cast<uint32_t*> (cids_items.request().ptr);
+            data = data_ptr;
 
             ivf = new IVF(N, dim, Nlist, bit);
             ivf->construct(data_ptr, centroids_ptr, cids_ptr);
@@ -49,8 +55,7 @@ class Index{
             rp.rotate(padded_query, rotated_query);
 #pragma omp parallel for if(num_threads > 1)
             for (size_t i = 0; i < NQ; i++) {
-                ivf->search(&rotated_query(i, 0), raw, TOPK, 1, ret_list + i * TOPK);
-                // TODO: GetDist
+                ivf->search(&rotated_query(i, 0), raw, TOPK, 1, ret_list + i * TOPK, dist_list + i * TOPK);
             }
             
             py::capsule free_when_done_id(ret_list, [](void* f) {
@@ -73,8 +78,9 @@ class Index{
                 dist_list,  // the data pointer
                 free_when_done_dist));
         }
-        void getMSE(){
 
+        float getMSE(){
+            return ivf->get_mse(data, ndata, 1);
         }
 
 

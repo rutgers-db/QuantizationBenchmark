@@ -7,7 +7,7 @@ sys.path.insert(0, '/benchmark')
 from benchmark.base import BaseQuantizer
 
 class ProductQuantizationFastScanFaiss(BaseQuantizer):
-    def __init__(self, ndim, nsubvec, nbit, data_bytes, niter, space = "l2"):
+    def __init__(self, ndim, nsubvec, nbit, data_bytes, niter, nthread = 1, space = "l2"):
         self.ndim = ndim
         self.nsubvec = nsubvec
         self.nbit = nbit
@@ -18,12 +18,11 @@ class ProductQuantizationFastScanFaiss(BaseQuantizer):
         self.data_bytes = data_bytes
         self.data = None
         self.ndata = 0
-        self.nthread = 1
-        pass
-
-    def setThreadNum(self, nthread):
         self.nthread = nthread
         faiss.omp_set_num_threads(nthread)
+        pass
+
+
 
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
