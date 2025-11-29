@@ -232,6 +232,15 @@ class DockerRunner:
                 "-e", f"OPENBLAS_NUM_THREADS={nthread}",
                 "-e", f"NUMEXPR_NUM_THREADS={nthread}",
             ])
+        else:
+            nthread = 1
+            cmd.extend([
+                "-e", f"OMP_NUM_THREADS={nthread}",
+                "-e", f"MKL_NUM_THREADS={nthread}",
+                "-e", f"OPENBLAS_NUM_THREADS={nthread}",
+                "-e", f"NUMEXPR_NUM_THREADS={nthread}",
+            ])
+
 
         cmd.extend([
             image_name,

@@ -89,9 +89,6 @@ class BaseQuantizer(ABC):
         """
         pass
 
-    @abstractmethod
-    def setThreadNum(self, nthread: int):
-        pass
 
 
 class BaseDimReduction(ABC):

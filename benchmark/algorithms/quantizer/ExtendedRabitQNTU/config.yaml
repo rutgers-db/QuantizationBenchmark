@@ -4,10 +4,7 @@ sift-128-euclidean:
   common:
     data_bytes: 4
     ndim: 128  
-    nthread: 4
-    space: "l2" 
-  build:
+    # space: "l2" 
     nthread: 1
-    niter : [20,30]
-    nsubvec: [16, 32]
-    nbit: [4]
+  build:
+    nbit: [3,4]

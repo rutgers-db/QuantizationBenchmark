@@ -1,0 +1,34 @@
+FROM python:3.11-slim
+
+# Build arguments
+ARG ALGO_TYPE
+ARG ALGO_NAME
+
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    numpy \
+    h5py \
+    pyyaml \
+    psutil \
+    faiss-cpu
+
+
+
+COPY benchmark/ /benchmark/
+
+# Copy the algorithm module
+COPY benchmark/algorithms/${ALGO_TYPE}/${ALGO_NAME}/ /algorithms/${ALGO_TYPE}/${ALGO_NAME}/
+
+# Install from Source
+RUN pip install --no-cache-dir /algorithms/${ALGO_TYPE}/${ALGO_NAME}/PackageSource
+
+# Set Python path to include the root directory
+ENV PYTHONPATH=/
+
+# Set working directory
+WORKDIR /workspace
