@@ -31,6 +31,10 @@ struct ResultPool {
     }
 
     void copy_results(PID* KNN) { std::copy(ids_.begin(), ids_.end() - 1, KNN); }
+    void copy_dists(float* KNN_dist){
+        std::copy(distances_.begin(), distances_.end() - 1, KNN_dist);
+    }
+
 
    private:
     std::vector<PID, memory::align_allocator<PID>> ids_;
