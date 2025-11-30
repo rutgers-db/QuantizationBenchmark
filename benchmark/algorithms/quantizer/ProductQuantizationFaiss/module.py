@@ -12,6 +12,7 @@ from benchmark.base import BaseQuantizer
 
 class ProductQuantizationFaiss(BaseQuantizer):
     def __init__(self, ndim, nsubvec, nbit, data_bytes, nthread = 1, space = "l2"):
+        super().__init__()
         self.ndim = ndim
         self.nsubvec = nsubvec
         self.nbit = nbit
@@ -30,6 +31,7 @@ class ProductQuantizationFaiss(BaseQuantizer):
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
         self.data = data
+        self._original_data = self.data  # For default search_and_rerank
         self.ndata = nd
         try:
             # Faiss train expects just the data, not the count

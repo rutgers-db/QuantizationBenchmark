@@ -8,6 +8,7 @@ from benchmark.base import BaseQuantizer
 
 class ProductQuantizationFastScanFaiss(BaseQuantizer):
     def __init__(self, ndim, nsubvec, nbit, data_bytes, niter, nthread = 1, space = "l2"):
+        super().__init__()
         self.ndim = ndim
         self.nsubvec = nsubvec
         self.nbit = nbit
@@ -28,6 +29,7 @@ class ProductQuantizationFastScanFaiss(BaseQuantizer):
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
         self.data = data
+        self._original_data = self.data  # For default search_and_rerank
         self.ndata = nd
         try:
             self.PQIndex.train(data)

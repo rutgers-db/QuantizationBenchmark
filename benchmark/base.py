@@ -20,7 +20,9 @@ class BaseQuantizer(ABC):
         Args:
             **kwargs: Algorithm-specific parameters
         """
-        pass
+        # Store original data for default search_and_rerank implementation
+        # Subclasses should set this in fit() if they want to use the default implementation
+        self._original_data = None
 
     @abstractmethod
     def fit(self, nd: int, data: np.ndarray) -> bool:
@@ -89,9 +91,62 @@ class BaseQuantizer(ABC):
         """
         pass
 
-    @abstractmethod
+
     def setThreadNum(self, nthread: int):
         pass
+
+    def search_and_rerank(self, nq: int, queries: np.ndarray, topk: int, nrerank: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Search for the top-k nearest neighbors for each query with reranking.
+
+        This default implementation:
+        1. Calls query() with nrerank as topk to get candidate neighbors
+        2. Reranks candidates using exact L2 distance
+        3. Returns top-k results after reranking
+
+        Subclasses can override this for custom reranking strategies.
+
+        Args:
+            nq: Number of query vectors
+            queries: Query vectors of shape (nq, d) where d is the dimensionality
+            topk: Number of nearest neighbors to return
+            nrerank: Number of neighbors to rerank using exact distance
+            **search_params: Optional search-time parameters (e.g., nprobe for IVF)
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray]:
+                - I: Indices of nearest neighbors, shape (nq, topk)
+                - D: Distances to nearest neighbors, shape (nq, topk)
+        """
+        if self._original_data is None:
+            raise RuntimeError(
+                "Original data not available for reranking. "
+                "Subclass must either: (1) set self._original_data in fit(), or "
+                "(2) override search_and_rerank() method."
+            )
+
+        # Step 1: Get nrerank candidates using approximate search
+        I_candidates, _ = self.query(nq, queries, nrerank, **search_params)
+
+        # Step 2: Rerank using exact L2 distance
+        I_reranked = np.zeros((nq, topk), dtype=np.int64)
+        D_reranked = np.zeros((nq, topk), dtype=np.float32)
+
+        for i in range(nq):
+            # Get candidate vectors
+            candidate_indices = I_candidates[i]
+            candidate_vectors = self._original_data[candidate_indices]
+
+            # Compute exact L2 distances
+            query_vector = queries[i]
+            distances = np.linalg.norm(candidate_vectors - query_vector, axis=1)
+
+            # Sort by distance and take top-k
+            sorted_idx = np.argsort(distances)[:topk]
+            I_reranked[i] = candidate_indices[sorted_idx]
+            D_reranked[i] = distances[sorted_idx]
+
+        return I_reranked, D_reranked
 
 
 class BaseDimReduction(ABC):

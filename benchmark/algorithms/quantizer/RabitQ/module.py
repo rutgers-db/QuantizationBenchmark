@@ -6,7 +6,7 @@ import os
 
 # Add benchmark to path for importing BaseQuantizer
 sys.path.insert(0, '/benchmark')
-from benchmark.base import BaseQuantizer, set_num_threads
+from benchmark.base import BaseQuantizer
 
 # Import the C++ module
 try:
@@ -32,13 +32,11 @@ class RabitQ(BaseQuantizer):
             nthread: Number of threads to use for parallel processing
             space: Distance metric ("l2" for Euclidean)
         """
+        super().__init__()
         self.ndim = ndim
         self.data_bytes = data_bytes
         self.nthread = nthread
         self.space = space
-
-        # Set thread count for all libraries
-        set_num_threads(nthread)
 
         # Round B up to multiple of 64
         self.b_dim = ((ndim + 63) // 64) * 64
@@ -95,6 +93,7 @@ class RabitQ(BaseQuantizer):
         """
         try:
             self.data = np.ascontiguousarray(data, dtype=np.float32)
+            self._original_data = self.data  # For default search_and_rerank
             self.ndata = nd
 
             # Pad data to b_dim
@@ -296,3 +295,47 @@ class RabitQ(BaseQuantizer):
         except Exception as e:
             print(f"Error computing MSE: {e}")
             return float('inf')
+
+    def search_and_rerank(self, nq: int, queries: np.ndarray, topk: int, nrerank: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Search for the top-k nearest neighbors with reranking.
+
+        This implementation calls the C++ search_and_rerank method which:
+        1. Uses RabitQ approximate search to get nrerank candidates
+        2. Reranks candidates using exact L2 distance
+
+        Args:
+            nq: Number of query vectors
+            queries: Query vectors of shape (nq, d) where d is the dimensionality
+            topk: Number of nearest neighbors to return
+            nrerank: Number of neighbors to rerank using exact distance
+            **search_params: Optional search-time parameters (ignored for C=1)
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray]:
+                - I: Indices of nearest neighbors, shape (nq, topk)
+                - D: Distances to nearest neighbors, shape (nq, topk)
+        """
+        if not self.trained:
+            raise RuntimeError("Index not trained. Call fit() first.")
+
+        queries = queries.astype(np.float32)
+        # nprobe is always 1 since we only have C=1 (single centroid)
+        nprobe = 1
+
+        # C++ implementation is required
+        if self.cpp_index is None:
+            raise RuntimeError("C++ index is not available. This should not happen after __init__ validation.")
+
+        # Prepare queries
+        max_bd = max(self.ndim, self.b_dim)
+        queries_pad = np.pad(queries, ((0, 0), (0, max_bd - self.ndim)), 'constant').astype('float32')
+
+        # Project queries (randomized queries)
+        rd_queries = queries_pad @ self.projection_matrix  # (nq, max_bd)
+        rd_queries = rd_queries[:, :self.b_dim].astype('float32')
+
+        # Call C++ search_and_rerank
+        I, D = self.cpp_index.search_and_rerank(queries, rd_queries, topk, nprobe, nrerank)
+
+        return I, D

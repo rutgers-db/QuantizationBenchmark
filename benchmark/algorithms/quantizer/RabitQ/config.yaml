@@ -2,8 +2,13 @@
 # RaBitQ without IVF (C=1, single centroid = data mean)
 
 sift-128-euclidean:
-  # Simple format: all parameters used for both building and searching
-  data_bytes: 4      # Data type size in bytes (float32)
-  ndim: 128          # Dimensionality
-  nthread: 16        # Number of threads for parallel processing
-  space: "l2"        # Distance metric (l2 for Euclidean distance)
+  # Build/Search separation format
+  common:
+    data_bytes: 4      # Data type size in bytes (float32)
+    ndim: 128          # Dimensionality
+    nthread: 16        # Number of threads for parallel processing
+    space: "l2"        # Distance metric (l2 for Euclidean distance)
+  build: {}            # No build-specific parameters for RaBitQ
+  search: {}           # No search-specific parameters for RabitQ (nprobe=1 always)
+    # Optional: Add nrerank values for search_and_rerank test
+    # nrerank: [100, 200]  # If not specified, defaults to [topk, 2*topk]

@@ -200,6 +200,49 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
     recall = calculate_recall(I, ground_truth[:, :topk])
     print(f"Recall@{topk}: {recall:.4f}")
 
+    # Search and Rerank phase
+    print("\n=== Search and Rerank Phase ===")
+
+    # Determine nrerank values
+    if 'nrerank' in search_params:
+        nrerank_values = search_params['nrerank'] if isinstance(search_params['nrerank'], list) else [search_params['nrerank']]
+    else:
+        nrerank_values = [topk, 2 * topk]
+
+    print(f"Testing with nrerank values: {nrerank_values}")
+
+    rerank_results = []
+    for nrerank in nrerank_values:
+        print(f"\nTesting nrerank={nrerank}...")
+        start_time = time.time()
+
+        try:
+            I_rerank, D_rerank = quantizer.search_and_rerank(nq, test_data, topk, nrerank, **search_params)
+            rerank_time = time.time() - start_time
+
+            # Calculate recall for reranked results
+            rerank_recall = calculate_recall(I_rerank, ground_truth[:, :topk])
+
+            print(f"  Rerank time: {rerank_time:.4f}s")
+            print(f"  Recall@{topk} (after rerank): {rerank_recall:.4f}")
+
+            rerank_results.append({
+                'nrerank': nrerank,
+                'rerank_time': rerank_time,
+                'rerank_queries_per_second': len(test_data) / rerank_time if rerank_time > 0 else 0,
+                'rerank_recall': rerank_recall,
+                'predictions': I_rerank,
+                'distances': D_rerank
+            })
+        except Exception as e:
+            print(f"  Error in search_and_rerank with nrerank={nrerank}: {e}")
+            import traceback
+            traceback.print_exc()
+            rerank_results.append({
+                'nrerank': nrerank,
+                'error': str(e)
+            })
+
     # Collect all metrics
     output = {
         'status': 'success',
@@ -211,7 +254,8 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
         'queries_per_second': len(test_data) / query_time if query_time > 0 else 0,
         'recall': recall,
         'predictions': I,
-        'distances': D
+        'distances': D,
+        'rerank_results': rerank_results
     }
 
     # Save output

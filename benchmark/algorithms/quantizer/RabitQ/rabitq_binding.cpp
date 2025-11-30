@@ -162,6 +162,72 @@ public:
         return std::make_pair(indices, distances);
     }
 
+    std::pair<py::array_t<int64_t>, py::array_t<float>> search_and_rerank(
+        py::array_t<float> py_queries,
+        py::array_t<float> py_rd_queries,
+        uint32_t k,
+        uint32_t nprobe,
+        uint32_t nrerank
+    ) {
+
+        if (!index) {
+            throw std::runtime_error("Index not built");
+        }
+
+
+        auto queries_buf = py_queries.request();
+        auto rd_queries_buf = py_rd_queries.request();
+
+        uint32_t nq = queries_buf.shape[0];
+
+        float* queries = static_cast<float*>(queries_buf.ptr);
+        float* rd_queries = static_cast<float*>(rd_queries_buf.ptr);
+
+        // Allocate result arrays
+        py::array_t<int64_t> indices({nq, k});
+        py::array_t<float> distances({nq, k});
+
+        auto idx_buf = indices.request();
+        auto dist_buf = distances.request();
+        int64_t* idx_ptr = static_cast<int64_t*>(idx_buf.ptr);
+        float* dist_ptr = static_cast<float*>(dist_buf.ptr);
+
+        int thread_num = omp_get_max_threads();
+        // Search each query
+        cout << "[C++ Search] Number of threads: " << thread_num <<endl;
+        #pragma omp parallel for num_threads(thread_num)
+        for (uint32_t i = 0; i < nq; i++) {
+            
+            ResultHeap result = index->search_and_rerank(
+                queries + i * D,
+                rd_queries + i * B,
+                nrerank,
+                nprobe
+            );
+
+            // Extract results (they come in reverse order from heap)
+            std::vector<std::pair<float, uint32_t>> res_vec;
+            while (!result.empty()) {
+                res_vec.push_back(result.top());
+                result.pop();
+            }
+            std::reverse(res_vec.begin(), res_vec.end());
+
+            // Fill output arrays
+            for (uint32_t j = 0; j < k; j++) {
+                if (j < res_vec.size()) {
+                    idx_ptr[i * k + j] = res_vec[j].second;
+                    dist_ptr[i * k + j] = res_vec[j].first;
+                } else {
+                    idx_ptr[i * k + j] = -1;
+                    dist_ptr[i * k + j] = std::numeric_limits<float>::max();
+                }
+            }
+        }
+
+        return std::make_pair(indices, distances);
+    }
+
     // Save index
     void save(const std::string& filename) {
         if (!index) {
@@ -260,7 +326,14 @@ PYBIND11_MODULE(rabitq_cpp, m) {
         .def("getMSE", &PyIVFRN<128, 128>::getMSE,
              py::arg("queries"),
              py::arg("rd_queries"),
-             py::arg("k"));
+             py::arg("k"))
+        .def("search_and_rerank", &PyIVFRN<128, 128>::search_and_rerank,
+             py::arg("queries"),
+             py::arg("rd_queries"),
+             py::arg("k"),
+             py::arg("nprobe"),
+             py::arg("nrerank"));
+
 
     // Add more dimension instantiations as needed
     // For 960 dimensions (common in embeddings), B would be 960 rounded to 64-multiple = 960
@@ -285,5 +358,11 @@ PYBIND11_MODULE(rabitq_cpp, m) {
         .def("getMSE", &PyIVFRN<960, 960>::getMSE,
              py::arg("queries"),
              py::arg("rd_queries"),
-             py::arg("k"));
+             py::arg("k"))
+        .def("search_and_rerank", &PyIVFRN<960, 960>::search_and_rerank,
+             py::arg("queries"),
+             py::arg("rd_queries"),
+             py::arg("k"),
+             py::arg("nprobe"),
+             py::arg("nrerank"));
 }

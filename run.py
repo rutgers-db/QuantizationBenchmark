@@ -138,8 +138,14 @@ def save_results(results, output_dir: str = "benchmark/results"):
     os.makedirs(output_dir, exist_ok=True)
 
     # Convert numpy types to Python types for JSON serialization
-    def convert_types(obj):
-        if hasattr(obj, 'item'):  # numpy types
+    # Also recursively exclude large arrays (predictions, distances)
+    def convert_types(obj, exclude_keys={'predictions', 'distances'}):
+        if isinstance(obj, dict):
+            return {k: convert_types(v, exclude_keys) for k, v in obj.items()
+                   if k not in exclude_keys}
+        elif isinstance(obj, list):
+            return [convert_types(item, exclude_keys) for item in obj]
+        elif hasattr(obj, 'item'):  # numpy scalar types
             return obj.item()
         elif hasattr(obj, 'tolist'):  # numpy arrays
             return obj.tolist()
@@ -155,12 +161,8 @@ def save_results(results, output_dir: str = "benchmark/results"):
 
         filename = f"{first_result['dataset']}_{algo_str}.json"
 
-        # Convert all results
-        serializable_results = []
-        for result in results:
-            serializable_result = {k: convert_types(v) for k, v in result.items()
-                                 if k not in ['predictions', 'distances']}  # Exclude large arrays
-            serializable_results.append(serializable_result)
+        # Convert all results (convert_types now handles exclusion recursively)
+        serializable_results = [convert_types(result) for result in results]
     else:
         # Single configuration
         algo_str = results['quantizer']
@@ -169,8 +171,8 @@ def save_results(results, output_dir: str = "benchmark/results"):
 
         filename = f"{results['dataset']}_{algo_str}.json"
 
-        serializable_results = {k: convert_types(v) for k, v in results.items()
-                               if k not in ['predictions', 'distances']}  # Exclude large arrays
+        # Convert result (convert_types now handles exclusion recursively)
+        serializable_results = convert_types(results)
 
     filepath = os.path.join(output_dir, filename)
 

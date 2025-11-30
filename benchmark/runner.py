@@ -81,9 +81,9 @@ def _expand_build_search_combinations(config: Dict[str, Any]) -> List[Dict[str, 
     Returns:
         List of config dicts, each with 'build_params' and 'search_params' keys
     """
-    common_params = config.get('common', {})
-    build_config = config.get('build', {})
-    search_config = config.get('search', {})
+    common_params = config.get('common', {}) or {}  # Handle None case
+    build_config = config.get('build', {}) or {}  # Handle None case
+    search_config = config.get('search', {}) or {}  # Handle None case
 
     # Expand build parameters (include common params)
     build_list_params = {}
@@ -401,6 +401,7 @@ class BenchmarkRunner:
             'query_time (s)': quant_results['query_time'],
             'queries_per_second': quant_results['queries_per_second'],
             'recall': quant_results['recall'],
+            'rerank_results': quant_results.get('rerank_results', []),
             'status': 'success'
         })
 
