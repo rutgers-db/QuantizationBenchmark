@@ -51,6 +51,17 @@ class Searcher {
         size_t
     );
 
+    FORCE_INLINE float scan_one_index(
+        uint8_t*, 
+        float*,
+        PID,
+        float,
+        float,
+        const Cluster&,
+        size_t
+    );
+
+
    public:
     explicit Searcher(const float* q, size_t d, size_t ex_bits, const DataQuantizer& dq)
         : D(d), TABLE_LENGTH(D / 4 * 16), query(q), DQ(dq), FAC_RESCALE(1 << ex_bits) {
@@ -80,6 +91,36 @@ class Searcher {
         std::free(LUT_upper);
         std::free(LUT_lower);
         std::free(LUT_total);
+    }
+
+    float get_mse_cluster(
+        const Cluster& cur_cluster, const float* centroid, float sqr_y, uint32_t index
+    ){
+        preparing(centroid);
+
+        size_t ITER = cur_cluster.iter();
+        size_t REMAIN = cur_cluster.remain();
+
+        uint8_t* block = cur_cluster.first_block();
+        float y = std::sqrt(sqr_y);
+
+        /* Compute distances block by block */
+        for (size_t i = 0; i < ITER; ++i) {
+            float* block_fac = DQ.block_factor(block);
+            if(i * FAST_SIZE <= index && index < (i+1) * FAST_SIZE ){
+                return scan_one_index(
+                    block, block_fac, index - i*FAST_SIZE, sqr_y, y, cur_cluster, i
+                );
+            }  
+            block = DQ.next_block(block_fac);
+        }
+
+        if (REMAIN > 0) {
+            float* block_fac = DQ.block_factor(block);
+            return scan_one_index(
+                block, block_fac, index - ITER*FAST_SIZE, sqr_y, y, cur_cluster, ITER
+            );
+        }
     }
 
     void search_cluster(
@@ -169,6 +210,61 @@ inline void Searcher::pack_LUT() {
         __m256i lower8 = _mm512_cvtepi16_epi8(total);
         _mm256_store_epi32(&LUT_lower[i], lower8);
     }
+}
+
+
+FORCE_INLINE float Searcher::scan_one_index(uint8_t* block,
+    float* block_fac,
+    PID offset,
+    float sqr_y,
+    float y,
+    const Cluster& cur_cluster,
+    size_t scanned_block){
+
+    accumulate_robust(block, LUT_upper, result_upper, D);
+    accumulate_robust(block, LUT_lower, result_lower, D);
+    const float* factor_x2 = DQ.factor_x2(block_fac);
+    const float* factor_ip = DQ.factor_ip(block_fac);
+    const float* factor_sumxb = DQ.factor_sumxb(block_fac);
+    const float* factor_err = DQ.factor_err(block_fac);
+#if defined(__AVX512F__)
+    __m512 sqr_y_simd = _mm512_set1_ps(sqr_y);
+    __m512 y_simd = _mm512_set1_ps(y);
+    __m512 width_simd = _mm512_set1_ps(width);
+    __m512 vl_simd = _mm512_set1_ps(vl);
+    __m512 half_sumresidual_simd = _mm512_set1_ps(half_sumresidual);
+    for (size_t j = 0; j < FAST_SIZE; j += 16) {
+        __m512 sum_sqr = _mm512_add_ps(_mm512_load_ps(&factor_x2[j]), sqr_y_simd);
+        __m512 xbvl = _mm512_mul_ps(_mm512_load_ps(&factor_sumxb[j]), vl_simd);
+
+        __m512 resf = _mm512_cvtepi32_ps(_mm512_add_epi32(
+            _mm512_slli_epi32(_mm512_load_epi32(&result_upper[j]), 8),
+            _mm512_load_epi32(&result_lower[j])
+        ));
+        __m512 ip = _mm512_add_ps(_mm512_mul_ps(resf, width_simd), xbvl);
+
+        ip = _mm512_sub_ps(ip, half_sumresidual_simd);
+        _mm512_store_ps(&rabitq_ip[j], ip);
+        __m512 fac_ip = _mm512_load_ps(&factor_ip[j]);
+        ip = _mm512_mul_ps(ip, fac_ip);
+
+        __m512 err = _mm512_mul_ps(_mm512_load_ps(&factor_err[j]), y_simd);
+        __m512 lower = _mm512_sub_ps(sum_sqr, _mm512_add_ps(ip, err));
+        _mm512_store_ps(&lower_distances[j], lower);
+    }
+
+        
+    float sqr_x = factor_x2[offset];
+    size_t idx = offset + scanned_block * FAST_SIZE;
+    uint8_t* long_code = cur_cluster.long_code(idx, DQ);
+    ExFactor ex_fac = *cur_cluster.ex_factor(idx);
+    float ex_dist = sqr_x + sqr_y -
+                    ex_fac.xipnorm * (FAC_RESCALE * rabitq_ip[offset] +
+                                        IP_FUNC(residual, long_code, D) -
+                                        (FAC_RESCALE - 1) * half_sumresidual);
+    return ex_dist;
+
+#endif
 }
 
 FORCE_INLINE void Searcher::scan_one_block(

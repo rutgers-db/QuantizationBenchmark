@@ -47,6 +47,16 @@ class HASearcher {
         size_t
     );
 
+    FORCE_INLINE float scan_one_index(
+        uint8_t*, 
+        float*,
+        PID,
+        float,
+        float,
+        const Cluster&,
+        size_t
+    );
+
    public:
     explicit HASearcher(const float* q, size_t d, size_t ex_bits, const DataQuantizer& dq)
         : D(d)
@@ -107,6 +117,35 @@ class HASearcher {
             // scan the last block
             scan_one_block(
                 block, block_fac, ids, sqr_y, y, distk, cur_cluster, KNNs, ITER, REMAIN
+            );
+        }
+    }
+
+    float get_mse_cluster(
+        const Cluster& cur_cluster, const float* centroid, float sqr_y, uint32_t index
+    ){
+        float y = std::sqrt(sqr_y);
+        preparing(centroid, y);
+
+        size_t ITER = cur_cluster.iter();
+        size_t REMAIN = cur_cluster.remain();
+
+        uint8_t* block = cur_cluster.first_block();
+        /* Compute distances block by block */
+        for (size_t i = 0; i < ITER; ++i) {
+            float* block_fac = DQ.block_factor(block);
+            if(i * FAST_SIZE <= index && index < (i+1) * FAST_SIZE ){
+                return scan_one_index(
+                    block, block_fac, index - i*FAST_SIZE, sqr_y, y, cur_cluster, i
+                );
+            }  
+            block = DQ.next_block(block_fac);
+        }
+
+        if (REMAIN > 0) {
+            float* block_fac = DQ.block_factor(block);
+            return scan_one_index(
+                block, block_fac, index - ITER*FAST_SIZE, sqr_y, y, cur_cluster, ITER
             );
         }
     }
@@ -182,6 +221,27 @@ inline void HASearcher::pack_high_acc_LUT() {
         shift += v_min;
         quan_query += 4;
     }
+}
+
+FORCE_INLINE float HASearcher::scan_one_index(uint8_t* block,
+    float* block_fac,
+    PID offset,
+    float sqr_y,
+    float y,
+    const Cluster& cur_cluster,
+    size_t scanned_block){
+    const float* factor_x = DQ.factor_x2(block_fac);
+    
+        // std::cerr << j << " ";
+    float sqr_x = factor_x[offset] * factor_x[offset];
+    size_t idx = offset + scanned_block * FAST_SIZE;
+    uint8_t* long_code = cur_cluster.long_code(idx, DQ);
+    ExFactor ex_fac = *cur_cluster.ex_factor(idx);
+    float ex_dist = sqr_x + sqr_y -
+                    ex_fac.xipnorm * y *
+                        (FAC_RESCALE * ip_xb_qprime[offset] + IP_FUNC(unit_q, long_code, D) -
+                            (FAC_RESCALE - 0.5) * sumq);
+
 }
 
 FORCE_INLINE void HASearcher::scan_one_block(

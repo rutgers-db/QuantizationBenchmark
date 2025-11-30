@@ -84,7 +84,7 @@ class IVF {
     void search(const float*, const float*, size_t, size_t, PID* ,
     float*) const;
 
-    void get_mse(const float*, int , int ) const;
+    float get_mse(const float*, int , int ) const;
 
     size_t padded_dim() { return this->D; }
 
@@ -296,26 +296,25 @@ void IVF::load(const char* filename) {
 }
 
 
-void IVF::get_mse(const float* __restrict__ data, int ndata, int nlist) const {
+float IVF::get_mse(const float* __restrict__ data, int ndata, int nlist) const {
     float total_num = 0;
+    double total_mse = 0;
     for(int i = 0 ; i < nlist; i++){
-        PID cid = centroid_dist[i].id;
-        float sqr_y = centroid_dist[i].distance;
-        float* cur_centroid = this->initer->centroid(cid);
-        const Cluster& cur_cluster = ClusterLst[cid];
+        float* cur_centroid = this->initer->centroid(i);
+        const Cluster& cur_cluster = ClusterLst[i];
         PID* ids = cur_cluster.ids();
-        double total_mse = 0
         for(int j = 0 ; j < cur_cluster.num() ; j++){
-            query = data + ids[j] * D;
-            this->initer->centroids_distances(query, nprobe, centroid_dist);
-            
+            const float* query = data + ids[j] * D;
+            std::vector<Candidate> centroid_dist(1);
+            this->initer->centroids_distances(query, 1 , centroid_dist);
+            float sqr_y = centroid_dist[i].distance;
             #if defined(HIGH_ACC_FAST_SCAN)
                 HASearcher searcher(query, D, EX_BITS, DQ);
             #else
                 Searcher searcher(query, D, EX_BITS, DQ);
             #endif            
 
-            total_mse = total_mse * (total_num / (total_num + 1)) + std::abs(get_mse_cluster(cur_cluster, cur_centroid, sqr_y, ids[j])) / (total_num + 1) ;
+            total_mse = total_mse * (total_num / (total_num + 1)) + std::abs(searcher.get_mse_cluster(cur_cluster, cur_centroid, sqr_y, ids[j])) / (total_num + 1) ;
             total_num += 1;
 
         }
