@@ -111,9 +111,9 @@ class RabitQ(BaseQuantizer):
 
             # For C=1, we use a single centroid which is the mean of the dataset
             # This is critical: centroid MUST be the dataset mean
-            centroid_orig = np.mean(self.data, axis=0, keepdims=True).astype('float32')
+            self.centroid_orig = np.mean(self.data, axis=0, keepdims=True).astype('float32')
 
-            centroid_pad = np.pad(centroid_orig, ((0, 0), (0, max_bd - self.ndim)), 'constant').astype('float32')
+            centroid_pad = np.pad(self.centroid_orig, ((0, 0), (0, max_bd - self.ndim)), 'constant').astype('float32')
 
             # Project data and centroid
             t0 = time.time()
@@ -127,7 +127,7 @@ class RabitQ(BaseQuantizer):
             cluster_id = np.zeros(nd, dtype=np.uint32)
 
             # Compute distance to centroid (before projection)
-            dist_to_c = np.linalg.norm(self.data - centroid_orig, axis=1).astype('float32')
+            dist_to_c = np.linalg.norm(self.data - self.centroid_orig, axis=1).astype('float32')
             self.dist_to_centroid = dist_to_c
 
             # Subtract centroid from projected data
@@ -135,6 +135,7 @@ class RabitQ(BaseQuantizer):
 
             # Generate binary codes (first b_dim dimensions)
             bin_XP = (XP_residual[:, :self.b_dim] > 0).astype(np.bool_)
+            self.bin_XP = bin_XP
 
             # Compute x0 values
             # x0 = sum(XP * sign(bin_XP) / sqrt(B)) / ||XP||
@@ -276,25 +277,27 @@ class RabitQ(BaseQuantizer):
         if not self.trained or self.data is None:
             return float('inf')
 
-        try:
-            queries = self.data
+        
+        bin_XP = (2 * self.bin_XP - 1)/np.sqrt(self.ndim)
+        o_bar = bin_XP @ self.projection_matrix + self.centroid_orig
+        mse = np.mean(np.sum((self.data - o_bar) ** 2, axis = 1))
+        return mse            
+            # queries = self.data
 
-            # C++ implementation is required
-            if self.cpp_index is None:
-                raise RuntimeError("C++ index is not available. This should not happen after __init__ validation.")
+            # # C++ implementation is required
+            # if self.cpp_index is None:
+            #     raise RuntimeError("C++ index is not available. This should not happen after __init__ validation.")
 
-            # Prepare queries
-            max_bd = max(self.ndim, self.b_dim)
-            queries_pad = np.pad(queries, ((0, 0), (0, max_bd - self.ndim)), 'constant').astype('float32')
+            # # Prepare queries
+            # max_bd = max(self.ndim, self.b_dim)
+            # queries_pad = np.pad(queries, ((0, 0), (0, max_bd - self.ndim)), 'constant').astype('float32')
 
-            # Project queries (randomized queries)
-            rd_queries = queries_pad @ self.projection_matrix  # (nq, max_bd)
-            rd_queries = rd_queries[:, :self.b_dim].astype('float32')
-            return self.cpp_index.getMSE(queries, rd_queries, 1000)
+            # # Project queries (randomized queries)
+            # rd_queries = queries_pad @ self.projection_matrix  # (nq, max_bd)
+            # rd_queries = rd_queries[:, :self.b_dim].astype('float32')
+            # return self.cpp_index.getMSE(queries, rd_queries, 1000)
 
-        except Exception as e:
-            print(f"Error computing MSE: {e}")
-            return float('inf')
+        
 
     def search_and_rerank(self, nq: int, queries: np.ndarray, topk: int, nrerank: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
         """

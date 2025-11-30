@@ -149,7 +149,7 @@ class BenchmarkRunner:
     Uses Docker containers to run algorithms in isolated environments.
     """
 
-    def __init__(self, dataset_name: str, topk: int = 100, data_dir: str = "data"):
+    def __init__(self, dataset_name: str, topk: int = 100, data_dir: str = "data", debug: bool = False):
         """
         Initialize the benchmark runner.
 
@@ -157,10 +157,12 @@ class BenchmarkRunner:
             dataset_name: Name of the HDF5 dataset in the data/ directory
             topk: Number of nearest neighbors to retrieve for recall calculation
             data_dir: Directory where datasets are stored (default: "data")
+            debug: Enable debug mode with real-time Docker output (default: False)
         """
         self.dataset_name = dataset_name
         self.topk = topk
         self.data_dir = data_dir
+        self.debug = debug
 
         # Load dataset
         self.hdf5_file, self.dimension = get_dataset(dataset_name, data_dir)
@@ -175,9 +177,11 @@ class BenchmarkRunner:
         print(f"  Train size: {self.train_data.shape}")
         print(f"  Test size: {self.test_data.shape}")
         print(f"  Ground truth size: {self.ground_truth.shape}")
+        if debug:
+            print(f"  Debug mode: ENABLED (real-time Docker output)")
 
         # Initialize Docker runner
-        self.docker_runner = DockerRunner()
+        self.docker_runner = DockerRunner(debug=debug)
 
     def load_config(self, algo_type: str, algo_name: str) -> List[Dict[str, Any]]:
         """

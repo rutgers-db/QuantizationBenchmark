@@ -313,4 +313,15 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\n{'='*60}")
+        print("FATAL ERROR IN DOCKER CONTAINER")
+        print("="*60)
+        print(f"Error: {e}")
+        print("="*60)
+        import traceback
+        traceback.print_exc()
+        print("="*60 + "\n")
+        sys.exit(1)

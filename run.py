@@ -236,6 +236,10 @@ Examples:
     parser.add_argument('--no-save', action='store_true',
                        help='Do not save results to file')
 
+    # Debug options
+    parser.add_argument('--debug', action='store_true',
+                       help='Enable debug mode with real-time Docker output')
+
     args = parser.parse_args()
 
     # Handle utility actions
@@ -271,7 +275,7 @@ Examples:
     print("="*60)
 
     try:
-        with BenchmarkRunner(args.dataset, topk=args.topk, data_dir=args.data_dir) as runner:
+        with BenchmarkRunner(args.dataset, topk=args.topk, data_dir=args.data_dir, debug=args.debug) as runner:
             results = runner.run_benchmark(
                 quantizer_name=quantizer_name,
                 dimreduction_name=dimreduction_name,

@@ -14,16 +14,18 @@ class DockerRunner:
     Similar to ann-benchmarks, each algorithm runs in its own Docker container.
     """
 
-    def __init__(self, base_path: str = "benchmark/algorithms"):
+    def __init__(self, base_path: str = "benchmark/algorithms", debug: bool = False):
         """
         Initialize the Docker runner.
 
         Args:
             base_path: Base path to the algorithms directory
+            debug: Enable debug mode with real-time Docker output
         """
         self.base_path = base_path
         self.quantizer_path = os.path.join(base_path, "quantizer")
         self.dimreduction_path = os.path.join(base_path, "dimreduction")
+        self.debug = debug
 
         # Create temp directory for data exchange with containers
         self.temp_dir = os.path.abspath("temp")
@@ -147,10 +149,20 @@ class DockerRunner:
         ])
 
         print(f"Running {algo_name} in Docker container...")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        if self.debug:
+            # Debug mode: show real-time output
+            print("\n" + "="*60)
+            print("DEBUG MODE: Real-time Docker output")
+            print("="*60 + "\n")
+            result = subprocess.run(cmd)
+        else:
+            # Normal mode: capture output
+            result = subprocess.run(cmd, capture_output=True, text=True)
 
         if result.returncode != 0:
-            print(f"Error running container: {result.stderr}")
+            if not self.debug:
+                print(f"Error running container: {result.stderr}")
+                print(f"Stdout: {result.stdout}")
             return None, None, None
 
         # Read output
@@ -252,12 +264,20 @@ class DockerRunner:
         ])
 
         print(f"Running {algo_name} in Docker container...")
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
+        if self.debug:
+            # Debug mode: show real-time output
+            print("\n" + "="*60)
+            print("DEBUG MODE: Real-time Docker output")
+            print("="*60 + "\n")
+            result = subprocess.run(cmd)
+        else:
+            # Normal mode: capture output
+            result = subprocess.run(cmd, capture_output=True, text=True)
 
         if result.returncode != 0:
-            print(f"Error running container: {result.stderr}")
-            print(f"Stdout: {result.stdout}")
+            if not self.debug:
+                print(f"Error running container: {result.stderr}")
+                print(f"Stdout: {result.stdout}")
             return None
 
         # Read output

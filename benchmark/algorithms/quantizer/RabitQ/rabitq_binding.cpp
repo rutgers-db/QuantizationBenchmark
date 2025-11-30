@@ -33,6 +33,30 @@ public:
     PyIVFRN() : index(nullptr) {}
 
     ~PyIVFRN() {
+        if (X){
+            X->data = nullptr;
+            delete X;
+        }
+        if (centroids){
+            centroids->data = nullptr;
+            delete centroids;
+        }
+        if (dist_to_centroid){
+            dist_to_centroid->data = nullptr;
+            delete dist_to_centroid;
+        }
+        if (x0){
+            x0->data = nullptr;
+            delete x0;
+        }
+        if (cluster_id){
+            cluster_id->data = nullptr;
+            delete cluster_id;
+        }
+        if (binary){
+            binary->data = nullptr;
+            delete binary;
+        }
         if (index) delete index;
     }
 
