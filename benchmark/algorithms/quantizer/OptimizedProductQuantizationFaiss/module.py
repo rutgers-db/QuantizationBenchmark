@@ -17,14 +17,13 @@ class OptimizedProductQuantizationFaiss(BaseQuantizer):
         self.space = space
         self.niter = niter
         self.nthread = nthread
+        faiss.omp_set_num_threads(nthread)
         self.data_bytes = data_bytes
         self.data = None
         self.ndata = 0
-        self.setThreadNum(nthread)
         pass
 
-    def setThreadNum(self, nthread):
-        faiss.omp_set_num_threads(nthread)
+
 
 
     def fit(self, nd: int, data: np.ndarray) -> bool:

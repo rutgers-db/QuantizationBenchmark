@@ -92,9 +92,6 @@ class BaseQuantizer(ABC):
         pass
 
 
-    def setThreadNum(self, nthread: int):
-        pass
-
     def search_and_rerank(self, nq: int, queries: np.ndarray, topk: int, nrerank: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
         """
         Search for the top-k nearest neighbors for each query with reranking.
