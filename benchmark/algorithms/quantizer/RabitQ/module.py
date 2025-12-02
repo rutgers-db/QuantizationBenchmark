@@ -282,20 +282,6 @@ class RabitQ(BaseQuantizer):
         o_bar = bin_XP @ self.projection_matrix + self.centroid_orig
         mse = np.mean(np.sum((self.data - o_bar) ** 2, axis = 1))
         return mse            
-            # queries = self.data
-
-            # # C++ implementation is required
-            # if self.cpp_index is None:
-            #     raise RuntimeError("C++ index is not available. This should not happen after __init__ validation.")
-
-            # # Prepare queries
-            # max_bd = max(self.ndim, self.b_dim)
-            # queries_pad = np.pad(queries, ((0, 0), (0, max_bd - self.ndim)), 'constant').astype('float32')
-
-            # # Project queries (randomized queries)
-            # rd_queries = queries_pad @ self.projection_matrix  # (nq, max_bd)
-            # rd_queries = rd_queries[:, :self.b_dim].astype('float32')
-            # return self.cpp_index.getMSE(queries, rd_queries, 1000)
 
         
 
