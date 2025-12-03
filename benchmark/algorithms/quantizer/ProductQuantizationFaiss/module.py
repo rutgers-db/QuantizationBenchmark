@@ -30,7 +30,6 @@ class ProductQuantizationFaiss(BaseQuantizer):
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
         self.data = data
-        self._original_data = self.data  # For default search_and_rerank
         self.ndata = nd
         try:
             # Faiss train expects just the data, not the count
@@ -67,7 +66,10 @@ class ProductQuantizationFaiss(BaseQuantizer):
         return mse
     
     def searchAndRerank(self, nq, query, topk, nrerank):
-        refine = faiss.IndexRefineFlat(self.index)
-        refine.k_factor = nrerank / topk
-        D, I = self.index.search(query, topk)
+        refine = faiss.IndexFlatL2(self.ndim)
+        refine.add(self.data)
+
+        refiner = faiss.IndexRefine(self.index, refine)
+        refiner.k_factor = nrerank / topk
+        D, I = refiner.search(query, topk)
         return I, D
