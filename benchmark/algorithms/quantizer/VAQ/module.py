@@ -150,7 +150,7 @@ class VAQ(BaseQuantizer):
 
         return I, D
 
-    def search_and_rerank(self, nq: int, queries: np.ndarray, topk: int, nrerank: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
+    def searchAndRerank(self, nq: int, queries: np.ndarray, topk: int, nrerank: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
         """
         Search for the top-k nearest neighbors with reranking.
 

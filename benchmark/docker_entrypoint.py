@@ -141,20 +141,26 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
     print(f"Config: {config}")
 
     # Check if config has build/search separation
-    if 'build_params' in config and 'search_params' in config:
+    if 'build_params' in config:
         build_params = config['build_params']
-        search_params = config['search_params']
-        print(f"\nUsing build/search separation:")
-        print(f"  Build params: {build_params}")
-        print(f"  Search params: {search_params}")
+
+        # Check if we have multiple search configs (build once, search multiple times)
+        if 'search_params_list' in config:
+            search_params_list = config['search_params_list']
+            print(f"\nUsing build/search separation with multiple search configs:")
+            print(f"  Build params: {build_params}")
+            print(f"  Number of search configs: {len(search_params_list)}")
+        elif 'search_params' in config:
+            search_params_list = [config['search_params']]
+            print(f"\nUsing build/search separation:")
+            print(f"  Build params: {build_params}")
+            print(f"  Search params: {config['search_params']}")
+        else:
+            search_params_list = [{}]
     else:
         # Legacy format: all params for build, no search params
         build_params = config
-        search_params = {}
-
-    # Extract topk from search_params (default: 100)
-    topk = search_params.get('topk', 100)
-    print(f"Top-k: {topk}")
+        search_params_list = [{}]
 
     # Load algorithm class
     QuantizerClass = load_module_class(module_path, 'BaseQuantizer')
@@ -162,7 +168,7 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
     # Instantiate with build parameters
     quantizer = QuantizerClass(**build_params)
 
-    # Training phase
+    # Training phase (done once for all search configs)
     print("\n=== Training Phase ===")
     start_time = time.time()
 
@@ -179,7 +185,7 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
 
     print(f"Training time: {training_time:.4f}s")
 
-    # Get quantizer metrics
+    # Get quantizer metrics (shared across all search configs)
     quantizer_memory = quantizer.getMemoryUsage()
     compression_rate = quantizer.getCompressionRate()
     mse = quantizer.getMSE()
@@ -188,96 +194,120 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
     print(f"Compression rate: {compression_rate:.4f}x")
     print(f"MSE: {mse:.6f}")
 
-    # Query phase
-    print("\n=== Query Phase ===")
-    start_time = time.time()
+    # Loop through all search configs
+    all_results = []
+    for search_idx, search_params in enumerate(search_params_list):
+        print(f"\n{'='*60}")
+        print(f"Search Config {search_idx + 1}/{len(search_params_list)}")
+        print(f"{'='*60}")
+        print(f"Search params: {search_params}")
 
-    nq = test_data.shape[0]
-    # Remove topk from search_params to avoid duplicate argument error
-    search_params_without_topk = {k: v for k, v in search_params.items() if k != 'topk'}
-    I, D = quantizer.query(nq, test_data, topk, **search_params_without_topk)
-    query_time = time.time() - start_time
+        # Extract topk from search_params (default: 100)
+        topk = search_params.get('topk', 100)
+        print(f"Top-k: {topk}")
 
-    print(f"Query time: {query_time:.4f}s")
+        # Query phase
+        print("\n=== Query Phase ===")
+        start_time = time.time()
 
-    # Calculate recall, MAP, and Recall@1
-    recall = calculate_recall(I, ground_truth[:, :topk])
-    map_score = calculate_map(I, ground_truth[:, :topk])
-    recall_at_1 = calculate_recall_at_1(I, ground_truth[:, :topk])
-    print(f"Recall@{topk}: {recall:.4f}")
-    print(f"MAP@{topk}: {map_score:.4f}")
-    print(f"Recall@1: {recall_at_1:.4f}")
+        nq = test_data.shape[0]
+        # Remove topk from search_params to avoid duplicate argument error
+        search_params_without_topk = {k: v for k, v in search_params.items() if k != 'topk'}
+        I, D = quantizer.query(nq, test_data, topk, **search_params_without_topk)
+        query_time = time.time() - start_time
 
-    # Search and Rerank phase
-    rerank_results = []
+        print(f"Query time: {query_time:.4f}s")
 
-    # Only perform rerank tests if nrerank is specified in config
-    if 'nrerank' in search_params:
-        print("\n=== Search and Rerank Phase ===")
+        # Calculate recall, MAP, and Recall@1
+        recall = calculate_recall(I, ground_truth[:, :topk])
+        map_score = calculate_map(I, ground_truth[:, :topk])
+        recall_at_1 = calculate_recall_at_1(I, ground_truth[:, :topk])
+        print(f"Recall@{topk}: {recall:.4f}")
+        print(f"MAP@{topk}: {map_score:.4f}")
+        print(f"Recall@1: {recall_at_1:.4f}")
 
-        # Determine nrerank values
-        nrerank_values = search_params['nrerank'] if isinstance(search_params['nrerank'], list) else [search_params['nrerank']]
-        print(f"Testing with nrerank values: {nrerank_values}")
+        # Search and Rerank phase
+        rerank_results = []
 
-        for nrerank in nrerank_values:
-            print(f"\nTesting nrerank={nrerank}...")
-            start_time = time.time()
+        # Only perform rerank tests if nrerank is specified in config
+        if 'nrerank' in search_params:
+            print("\n=== Search and Rerank Phase ===")
 
-            try:
-                # Remove topk and nrerank from search_params to avoid duplicate argument error
-                search_params_clean = {k: v for k, v in search_params.items() if k not in ['topk', 'nrerank']}
-                I_rerank, D_rerank = quantizer.searchAndRerank(nq, test_data, topk, nrerank, **search_params_clean)
-                rerank_time = time.time() - start_time
+            # Determine nrerank values
+            nrerank_values = search_params['nrerank'] if isinstance(search_params['nrerank'], list) else [search_params['nrerank']]
+            print(f"Testing with nrerank values: {nrerank_values}")
 
-                # Calculate recall, MAP, and Recall@1 for reranked results
-                rerank_recall = calculate_recall(I_rerank, ground_truth[:, :topk])
-                rerank_map = calculate_map(I_rerank, ground_truth[:, :topk])
-                rerank_recall_at_1 = calculate_recall_at_1(I_rerank, ground_truth[:, :topk])
+            for nrerank in nrerank_values:
+                print(f"\nTesting nrerank={nrerank}...")
+                start_time = time.time()
 
-                print(f"  Rerank time: {rerank_time:.4f}s")
-                print(f"  Recall@{topk} (after rerank): {rerank_recall:.4f}")
-                print(f"  MAP@{topk} (after rerank): {rerank_map:.4f}")
-                print(f"  Recall@1 (after rerank): {rerank_recall_at_1:.4f}")
+                try:
+                    # Remove topk and nrerank from search_params to avoid duplicate argument error
+                    search_params_clean = {k: v for k, v in search_params.items() if k not in ['topk', 'nrerank']}
+                    I_rerank, D_rerank = quantizer.searchAndRerank(nq, test_data, topk, nrerank, **search_params_clean)
+                    rerank_time = time.time() - start_time
 
-                rerank_results.append({
-                    'nrerank': nrerank,
-                    'rerank_time': rerank_time,
-                    'rerank_queries_per_second': len(test_data) / rerank_time if rerank_time > 0 else 0,
-                    'rerank_recall': rerank_recall,
-                    'rerank_map': rerank_map,
-                    'rerank_recall@1': rerank_recall_at_1,
-                    'predictions': I_rerank,
-                    'distances': D_rerank
-                })
-            except Exception as e:
-                print(f"  Error in searchAndRerank with nrerank={nrerank}: {e}")
-                import traceback
-                traceback.print_exc()
-                rerank_results.append({
-                    'nrerank': nrerank,
-                    'error': str(e)
-                })
-    else:
-        print("\n=== Skipping Rerank Phase (no nrerank parameter in config) ===")
+                    # Calculate recall, MAP, and Recall@1 for reranked results
+                    rerank_recall = calculate_recall(I_rerank, ground_truth[:, :topk])
+                    rerank_map = calculate_map(I_rerank, ground_truth[:, :topk])
+                    rerank_recall_at_1 = calculate_recall_at_1(I_rerank, ground_truth[:, :topk])
 
-    # Collect all metrics
-    output = {
-        'status': 'success',
-        'training_time': training_time,
-        'quantizer_memory': quantizer_memory,
-        'compression_rate': compression_rate,
-        'mse': mse,
-        'query_time': query_time,
-        'queries_per_second': len(test_data) / query_time if query_time > 0 else 0,
-        'recall': recall,
-        'map': map_score,
-        'recall@1': recall_at_1,
-        'predictions': I,
-        'distances': D,
-        'rerank_results': rerank_results
-    }
+                    print(f"  Rerank time: {rerank_time:.4f}s")
+                    print(f"  Recall@{topk} (after rerank): {rerank_recall:.4f}")
+                    print(f"  MAP@{topk} (after rerank): {rerank_map:.4f}")
+                    print(f"  Recall@1 (after rerank): {rerank_recall_at_1:.4f}")
+
+                    rerank_results.append({
+                        'nrerank': nrerank,
+                        'rerank_time': rerank_time,
+                        'rerank_queries_per_second': len(test_data) / rerank_time if rerank_time > 0 else 0,
+                        'rerank_recall': rerank_recall,
+                        'rerank_map': rerank_map,
+                        'rerank_recall@1': rerank_recall_at_1,
+                        'predictions': I_rerank,
+                        'distances': D_rerank
+                    })
+                except Exception as e:
+                    print(f"  Error in searchAndRerank with nrerank={nrerank}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    rerank_results.append({
+                        'nrerank': nrerank,
+                        'error': str(e)
+                    })
+        else:
+            print("\n=== Skipping Rerank Phase (no nrerank parameter in config) ===")
+
+        # Collect metrics for this search config
+        search_result = {
+            'status': 'success',
+            'search_params': search_params,
+            'training_time': training_time,
+            'quantizer_memory': quantizer_memory,
+            'compression_rate': compression_rate,
+            'mse': mse,
+            'query_time': query_time,
+            'queries_per_second': len(test_data) / query_time if query_time > 0 else 0,
+            'recall': recall,
+            'map': map_score,
+            'recall@1': recall_at_1,
+            'predictions': I,
+            'distances': D,
+            'rerank_results': rerank_results
+        }
+
+        all_results.append(search_result)
 
     # Save output
+    # If multiple search configs, return results_list; otherwise return single result for backward compatibility
+    if len(all_results) > 1:
+        output = {
+            'status': 'success',
+            'results_list': all_results
+        }
+    else:
+        output = all_results[0]
+
     with open(output_path, 'wb') as f:
         pickle.dump(output, f)
 
