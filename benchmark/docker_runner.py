@@ -63,10 +63,33 @@ class DockerRunner:
                 print(f"Image {image_name} already exists, skipping build")
                 return True
 
-        print(f"Building Docker image: {image_name}")
 
         # Build the image with project root as context
         # This allows the Dockerfile to access both the algorithm and the framework
+        if force_rebuild:
+            result = subprocess.run(
+                ["docker", "images", "-q", image_name],
+                capture_output=True,
+                text=True
+            )
+            if result.stdout.strip():
+                print(f"Removing Docker image: {image_name}")
+
+                result = subprocess.run(
+                    ["docker", "rmi", image_name],
+                    capture_output=True,
+                    text=True
+                )
+
+
+                if result.returncode != 0:
+                    print(f"Error removing image: {result.stderr}")
+                    return False
+
+                print(f"Successfully removed image: {image_name}")
+
+        print(f"Building Docker image: {image_name}")
+
         project_root = os.path.abspath(".")
         result = subprocess.run(
             ["docker", "build", "-t", image_name, "-f", dockerfile_path,
@@ -158,9 +181,10 @@ class DockerRunner:
         else:
             # Normal mode: capture output
             result = subprocess.run(cmd, capture_output=True, text=True)
-
+        
         if result.returncode != 0:
             if not self.debug:
+                print(f"Docker returncode: {result.returncode}")
                 print(f"Error running container: {result.stderr}")
                 print(f"Stdout: {result.stdout}")
             return None, None, None
@@ -276,6 +300,7 @@ class DockerRunner:
 
         if result.returncode != 0:
             if not self.debug:
+                print(f"Docker returncode: {result.returncode}")
                 print(f"Error running container: {result.stderr}")
                 print(f"Stdout: {result.stdout}")
             return None
