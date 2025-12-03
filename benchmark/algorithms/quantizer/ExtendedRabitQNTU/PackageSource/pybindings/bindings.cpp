@@ -80,7 +80,8 @@ class Index{
         }
 
         float getMSE(){
-            return ivf->get_mse(data, ndata, 1);
+            nlist =  ivf -> ClusterLst.size();
+            return 
         }
 
 

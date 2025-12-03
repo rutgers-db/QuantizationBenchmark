@@ -7,12 +7,17 @@ sift-128-euclidean:
     data_bytes: 4
     ndim: 128
     space: "l2"
-    nthread: 2
+    nthread: 32
   build:
     nsubvec: [16, 32]
-    nbit: [8,16]
+    nbit: [4] # Only bit = 4 allowed
   search:
-    topk: 100  # Number of nearest neighbors to retrieve (default: 100)
+    - topk: 100  # Number of nearest neighbors to retrieve (default: 100)
+      nrerank: [100, 200]
+    - topk: 10  # Number of nearest neighbors to retrieve (default: 100)
+      nrerank: [10, 20]
+
+
   # nsubvec: [16, 32]  # Number of subvectors
   # nbit: [4]          # Bits per subvector
   # data_bytes: 4      # Data type size in bytes

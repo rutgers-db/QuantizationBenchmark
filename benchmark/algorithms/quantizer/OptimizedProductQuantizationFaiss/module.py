@@ -28,7 +28,6 @@ class OptimizedProductQuantizationFaiss(BaseQuantizer):
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
         self.data = data
-        self._original_data = self.data  # For default search_and_rerank
         self.ndata = nd
         try:
             # Faiss train expects just the data, not the count
@@ -37,7 +36,7 @@ class OptimizedProductQuantizationFaiss(BaseQuantizer):
             opq.niter = self.niter
             opq.train(data)
 
-            self.index = faiss.IndexPreTransform(opq, faiss.IndexPQ(self.dim, self.nsubvec, self.PQIndex))
+            self.index = faiss.IndexPreTransform(opq,  self.PQIndex)
             self.index.train(data)
             self.index.add(data)
             # Add vectors to index for querying
@@ -73,7 +72,10 @@ class OptimizedProductQuantizationFaiss(BaseQuantizer):
         return mse
     
     def searchAndRerank(self, nq, query, topk, nrerank):
-        refine = faiss.IndexRefineFlat(self.index)
-        refine.k_factor = nrerank / topk
-        D, I = self.index.search(query, topk)
+        refine = faiss.IndexFlatL2(self.ndim)
+        refine.add(self.data)
+
+        refiner = faiss.IndexRefine(self.index, refine)
+        refiner.k_factor = nrerank / topk
+        D, I = refiner.search(query, topk)
         return I, D

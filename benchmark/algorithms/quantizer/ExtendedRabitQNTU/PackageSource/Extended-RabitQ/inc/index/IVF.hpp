@@ -69,6 +69,41 @@ class IVF {
         std::free(IDs);
     }
 
+    inline uint32_t read1(const uint8_t* data, size_t bit_pos) {
+        size_t byte_idx = bit_pos >> 3;
+        int bit_idx = 7 - (bit_pos & 7);
+        return (data[byte_idx] >> bit_idx) & 1u;
+    }
+
+    inline uint32_t readk(const uint8_t* data, size_t bit_pos, int k) {
+        uint32_t v = 0;
+        for (int i = 0; i < k; i++) {
+            v = (v << 1) | read1(data, bit_pos + i);
+        }
+        return v;
+    }
+
+    void recover_data(
+    const uint8_t* long_code, const uint8_t* short_code, int k, int m, float* out)
+    {
+
+        size_t bitA = 0;
+        size_t bitB = 0;
+
+        for (int i = 0; i < m; i++) {
+            uint32_t a_bits = readk(long_code, bitA, k);  // k bits
+            uint32_t b_bit  = read1(short_code, bitB);     // 1 bit
+
+            uint32_t result = (b_bit << k) | a_bits;
+
+            out[i] = static_cast<float>(result) - static_cast<float>((1 << (EX_BITS + 1)) - 1) / 2;
+
+            bitA += k;
+            bitB += 1;
+        }
+
+    }
+
    public:
     explicit IVF() {}
     explicit IVF(size_t, size_t, size_t, size_t);
@@ -299,26 +334,24 @@ void IVF::load(const char* filename) {
 float IVF::get_mse(const float* __restrict__ data, int ndata, int nlist) const {
     float total_num = 0;
     double total_mse = 0;
+    float* recover_vector = new float[DIM];
     for(int i = 0 ; i < nlist; i++){
         float* cur_centroid = this->initer->centroid(i);
         const Cluster& cur_cluster = ClusterLst[i];
         PID* ids = cur_cluster.ids();
         for(int j = 0 ; j < cur_cluster.num() ; j++){
             const float* query = data + ids[j] * D;
-            std::vector<Candidate> centroid_dist(1);
-            this->initer->centroids_distances(query, 1 , centroid_dist);
-            float sqr_y = centroid_dist[i].distance;
-            #if defined(HIGH_ACC_FAST_SCAN)
-                HASearcher searcher(query, D, EX_BITS, DQ);
-            #else
-                Searcher searcher(query, D, EX_BITS, DQ);
-            #endif            
-
-            total_mse = total_mse * (total_num / (total_num + 1)) + std::abs(searcher.get_mse_cluster(cur_cluster, cur_centroid, sqr_y, ids[j])) / (total_num + 1) ;
-            total_num += 1;
-
+            norm = query - cur_centroid
+            uint8_t* long_code = cur_cluster.long_code + j * DQ.long_code_length();
+            uint8_t* short_code = cur_cluster.short_data + j * DQ.short_code_length();
+            recover_data(long_code, short_code, EX_BITS, dim , recover_vector)
+            // TODO: Norm and rotator
+            
         }
+        SHORT_DATA_CUR_CLUSTER += cur_cluster.num
+
     }
+    delete recover_vector
     return total_mse / total_num;
 
 }
@@ -355,3 +388,5 @@ void IVF::search(
     KNNs.copy_results(results);
     KNNs.copy_dists(dist_results);
 }
+
+
