@@ -64,3 +64,10 @@ class ProductQuantizationFastScanFaiss(BaseQuantizer):
         se_per_row = np.sum((recons - self.data)**2, axis=1)
         mse = np.mean(se_per_row)
         return mse
+    
+    def searchAndRerank(self, nq, query, topk, nrerank):
+        refine = faiss.IndexRefineFlat(self.index)
+        refine.k_factor = nrerank / topk
+        D, I = self.index.search(query, topk)
+        return I, D
+        
