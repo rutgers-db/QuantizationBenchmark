@@ -67,13 +67,14 @@ class MyQuantizer(BaseQuantizer):
             print(f"Training failed: {e}")
             return False
 
-    def query(self, queries: np.ndarray, topk: int) -> tuple:
+    def query(self, queries: np.ndarray, topk: int, **kwargs) -> tuple:
         """
         Search for top-k nearest neighbors.
 
         Args:
             queries: Query vectors of shape (nq, d)
             topk: Number of nearest neighbors
+            **kwargs: Additional search parameters from config.yaml (e.g., nprobe)
 
         Returns:
             Tuple[np.ndarray, np.ndarray]:
@@ -82,6 +83,9 @@ class MyQuantizer(BaseQuantizer):
         """
         if not self.trained:
             raise RuntimeError("Quantizer not trained")
+
+        # Extract search parameters if needed
+        # nprobe = kwargs.get('nprobe', 1)
 
         # Your search logic here
         # Return indices and distances
@@ -142,13 +146,57 @@ class MyQuantizer(BaseQuantizer):
 
 ### config.yaml
 
+The config.yaml uses the build/search separation format. There are two ways to specify search experiments:
+
+**Format 1: List format (recommended for per-topk nrerank)**
 ```yaml
-# Default configuration parameters
-param1: value1
-param2: value2
-num_codebooks: 8
-bits_per_vector: 64
+# Configuration using build/search separation format
+# Each topk can have its own nrerank values
+
+sift-128-euclidean:
+  common:
+    # Parameters used for both build and search
+    data_bytes: 4      # Data type size in bytes (float32)
+    ndim: 128          # Dimensionality
+    nthread: 1         # Number of threads
+    space: "l2"        # Distance metric
+
+  build:
+    # Parameters that affect index structure (build-time only)
+    num_codebooks: 8
+    bits_per_vector: 64
+
+  search:
+    # List of search experiments - each topk can have different nrerank values
+    - topk: 10         # Experiment 1: topk=10, no rerank
+    - topk: 50
+      nrerank: [100]   # Experiment 2: topk=50, nrerank=100
+    - topk: 100
+      nrerank: [200, 300]  # Experiments 3&4: topk=100, nrerank=200 and nrerank=300
+    # Total: 4 search experiments (1 + 1 + 2)
 ```
+
+**Format 2: Dict format (legacy - Cartesian product)**
+```yaml
+sift-128-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 128
+
+  build:
+    num_codebooks: [8, 16]      # This will generate 2 build configs
+    bits_per_vector: [32, 64]   # Combined: 2 x 2 = 4 build configs
+
+  search:
+    topk: 100                   # Single topk value
+    nprobe: [1, 4, 16]          # This will generate 3 search configs
+# Total: 4 build configs x 3 search configs = 12 experiments
+# Note: This format cannot assign different nrerank values per topk
+```
+
+**Key differences:**
+- **List format**: Each topk can have its own optional nrerank values. No search_and_rerank is run if nrerank is not specified.
+- **Dict format**: All search params use Cartesian product. If both topk and nrerank are lists, every topk will test every nrerank.
 
 ### dockerfile
 
@@ -283,14 +331,16 @@ After creating your algorithm, you can test it:
 
 ```bash
 # Build the Docker image
-python run.py --build-images
+python run.py --build-images --algorithm YourAlgorithm
 
-# Run benchmark
+# Run benchmark (topk is configured in config.yaml)
 python run.py --dataset your-dataset --algorithm YourAlgorithm
 
 # Or with dimensionality reduction
 python run.py --dataset your-dataset --algorithm YourDimReduction,YourQuantizer
 ```
+
+**Note:** The number of nearest neighbors (topk) is configured in the `search` section of your config.yaml file. You can test multiple topk values, and each can have its own nrerank values for search_and_rerank experiments.
 
 ## Important Notes
 

@@ -133,13 +133,11 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
     train_data = input_data['train_data']
     test_data = input_data['test_data']
     ground_truth = input_data['ground_truth']
-    topk = input_data['topk']
     config = input_data['config']
 
     print(f"Train data shape: {train_data.shape}")
     print(f"Test data shape: {test_data.shape}")
     print(f"Ground truth shape: {ground_truth.shape}")
-    print(f"Top-k: {topk}")
     print(f"Config: {config}")
 
     # Check if config has build/search separation
@@ -153,6 +151,10 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
         # Legacy format: all params for build, no search params
         build_params = config
         search_params = {}
+
+    # Extract topk from search_params (default: 100)
+    topk = search_params.get('topk', 100)
+    print(f"Top-k: {topk}")
 
     # Load algorithm class
     QuantizerClass = load_module_class(module_path, 'BaseQuantizer')
@@ -191,14 +193,20 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
     start_time = time.time()
 
     nq = test_data.shape[0]
-    I, D = quantizer.query(nq, test_data, topk, **search_params)
+    # Remove topk from search_params to avoid duplicate argument error
+    search_params_without_topk = {k: v for k, v in search_params.items() if k != 'topk'}
+    I, D = quantizer.query(nq, test_data, topk, **search_params_without_topk)
     query_time = time.time() - start_time
 
     print(f"Query time: {query_time:.4f}s")
 
-    # Calculate recall
+    # Calculate recall, MAP, and Recall@1
     recall = calculate_recall(I, ground_truth[:, :topk])
+    map_score = calculate_map(I, ground_truth[:, :topk])
+    recall_at_1 = calculate_recall_at_1(I, ground_truth[:, :topk])
     print(f"Recall@{topk}: {recall:.4f}")
+    print(f"MAP@{topk}: {map_score:.4f}")
+    print(f"Recall@1: {recall_at_1:.4f}")
 
     # Search and Rerank phase
     rerank_results = []
@@ -216,20 +224,28 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
             start_time = time.time()
 
             try:
-                I_rerank, D_rerank = quantizer.searchAndRerank(nq, test_data, topk, nrerank, **search_params)
+                # Remove topk and nrerank from search_params to avoid duplicate argument error
+                search_params_clean = {k: v for k, v in search_params.items() if k not in ['topk', 'nrerank']}
+                I_rerank, D_rerank = quantizer.searchAndRerank(nq, test_data, topk, nrerank, **search_params_clean)
                 rerank_time = time.time() - start_time
 
-                # Calculate recall for reranked results
+                # Calculate recall, MAP, and Recall@1 for reranked results
                 rerank_recall = calculate_recall(I_rerank, ground_truth[:, :topk])
+                rerank_map = calculate_map(I_rerank, ground_truth[:, :topk])
+                rerank_recall_at_1 = calculate_recall_at_1(I_rerank, ground_truth[:, :topk])
 
                 print(f"  Rerank time: {rerank_time:.4f}s")
                 print(f"  Recall@{topk} (after rerank): {rerank_recall:.4f}")
+                print(f"  MAP@{topk} (after rerank): {rerank_map:.4f}")
+                print(f"  Recall@1 (after rerank): {rerank_recall_at_1:.4f}")
 
                 rerank_results.append({
                     'nrerank': nrerank,
                     'rerank_time': rerank_time,
                     'rerank_queries_per_second': len(test_data) / rerank_time if rerank_time > 0 else 0,
                     'rerank_recall': rerank_recall,
+                    'rerank_map': rerank_map,
+                    'rerank_recall@1': rerank_recall_at_1,
                     'predictions': I_rerank,
                     'distances': D_rerank
                 })
@@ -254,6 +270,8 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
         'query_time': query_time,
         'queries_per_second': len(test_data) / query_time if query_time > 0 else 0,
         'recall': recall,
+        'map': map_score,
+        'recall@1': recall_at_1,
         'predictions': I,
         'distances': D,
         'rerank_results': rerank_results
@@ -288,6 +306,65 @@ def calculate_recall(predictions: np.ndarray, ground_truth: np.ndarray) -> float
 
     recall = total_correct / (nq * k) if (nq * k) > 0 else 0.0
     return recall
+
+
+def calculate_map(predictions: np.ndarray, ground_truth: np.ndarray) -> float:
+    """
+    Calculate MAP@k (Mean Average Precision at k).
+
+    Args:
+        predictions: Predicted neighbor indices, shape (nq, k)
+        ground_truth: Ground truth neighbor indices, shape (nq, k)
+
+    Returns:
+        MAP@k score
+    """
+    nq = predictions.shape[0]
+    k = predictions.shape[1]
+
+    map_score = 0.0
+    for i in range(nq):
+        gt_set = set(ground_truth[i])
+        num_relevant = len(gt_set)
+
+        # Calculate AP (Average Precision) for this query
+        num_hits = 0
+        sum_precisions = 0.0
+        for j in range(k):
+            if predictions[i][j] in gt_set:
+                num_hits += 1
+                precision_at_j = num_hits / (j + 1)
+                sum_precisions += precision_at_j
+
+        # AP = sum of precisions / min(k, num_relevant)
+        ap = sum_precisions / min(k, num_relevant) if num_relevant > 0 else 0.0
+        map_score += ap
+
+    return map_score / nq if nq > 0 else 0.0
+
+
+def calculate_recall_at_1(predictions: np.ndarray, ground_truth: np.ndarray) -> float:
+    """
+    Calculate Recall@1 - the fraction of queries where the ground truth top-1
+    appears in the predicted top-k.
+
+    Args:
+        predictions: Predicted neighbor indices, shape (nq, k)
+        ground_truth: Ground truth neighbor indices, shape (nq, k)
+
+    Returns:
+        Recall@1 score
+    """
+    nq = predictions.shape[0]
+
+    num_correct = 0
+    for i in range(nq):
+        gt_top1 = ground_truth[i][0]
+        pred_set = set(predictions[i])
+        if gt_top1 in pred_set:
+            num_correct += 1
+
+    return num_correct / nq if nq > 0 else 0.0
 
 
 def main():

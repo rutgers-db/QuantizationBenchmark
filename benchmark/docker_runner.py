@@ -186,7 +186,6 @@ class DockerRunner:
         train_data: np.ndarray,
         test_data: np.ndarray,
         ground_truth: np.ndarray,
-        topk: int,
         config: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """
@@ -197,11 +196,13 @@ class DockerRunner:
             train_data: Training data array
             test_data: Test data array
             ground_truth: Ground truth neighbor indices
-            topk: Number of nearest neighbors to retrieve
-            config: Configuration parameters
+            config: Configuration parameters (topk should be in search_params)
 
         Returns:
             Dict containing all benchmark results
+
+        Note:
+            topk is now extracted from config['search_params']['topk'] with default value 100
         """
         # Prepare input data
         input_dir = os.path.join(self.temp_dir, f"quantizer_{algo_name}_{int(time.time())}")
@@ -215,7 +216,6 @@ class DockerRunner:
                 'train_data': train_data,
                 'test_data': test_data,
                 'ground_truth': ground_truth,
-                'topk': topk,
                 'config': config
             }, f)
 

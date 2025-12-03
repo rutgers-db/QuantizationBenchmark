@@ -1,10 +1,12 @@
 sift-128-euclidean:
-  # Product Quantization uses simple format (no search-time parameters)
-  # Automatically generates all combinations: 2 x 1 = 2 configurations
+  # ExtendedRabitQNTU with build/search separation format
+  # Automatically generates all combinations based on build parameters
   common:
     data_bytes: 4
-    ndim: 128  
-    # space: "l2" 
+    ndim: 128
+    # space: "l2"
     nthread: 1
   build:
     nbit: [3,4]
+  search:
+    topk: 100  # Number of nearest neighbors to retrieve (default: 100)
