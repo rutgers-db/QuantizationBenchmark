@@ -206,6 +206,51 @@ def _expand_search_experiments(experiments: List[Dict[str, Any]]) -> List[Dict[s
     return result
 
 
+def group_configs_by_build_params(configs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Group configurations by their build_params to avoid redundant index building.
+
+    For build/search separation configs, groups by build_params and collects
+    all search_params that use the same build configuration.
+
+    Args:
+        configs: List of configuration dicts (may have build_params/search_params)
+
+    Returns:
+        List of grouped configs with format:
+        {
+            'build_params': {...},
+            'search_params_list': [{...}, {...}, ...]  # List of search configs
+        }
+        or for non-build/search configs, returns them unchanged
+    """
+    # Check if configs use build/search separation
+    if not configs or 'build_params' not in configs[0]:
+        # No build/search separation, return as-is
+        return configs
+
+    # Group by build_params
+    from collections import defaultdict
+    import json
+
+    groups = defaultdict(list)
+    for config in configs:
+        # Use JSON serialization of build_params as key for grouping
+        build_key = json.dumps(config['build_params'], sort_keys=True)
+        groups[build_key].append(config['search_params'])
+
+    # Convert back to list format
+    result = []
+    for build_key, search_params_list in groups.items():
+        build_params = json.loads(build_key)
+        result.append({
+            'build_params': build_params,
+            'search_params_list': search_params_list
+        })
+
+    return result
+
+
 class BenchmarkRunner:
     """
     Main benchmark runner that coordinates the entire benchmarking process.
@@ -328,8 +373,11 @@ class BenchmarkRunner:
             if dimreduction_name:
                 dimreduction_configs = self.load_config('dimreduction', dimreduction_name)
 
+            # Group configs by build_params to avoid redundant building
+            grouped_configs = group_configs_by_build_params(quantizer_configs)
+
             all_results = []
-            for i, q_config in enumerate(quantizer_configs):
+            for i, q_config in enumerate(grouped_configs):
                 # If dimreduction has configs, use the corresponding one (or first one)
                 dr_config = None
                 if dimreduction_configs:
@@ -338,7 +386,11 @@ class BenchmarkRunner:
                 result = self._run_single_benchmark(
                     quantizer_name, dimreduction_name, q_config, dr_config
                 )
-                all_results.append(result)
+                # If result is a list (from build/search separation), extend all_results
+                if isinstance(result, list):
+                    all_results.extend(result)
+                else:
+                    all_results.append(result)
 
             return all_results
 
@@ -357,25 +409,167 @@ class BenchmarkRunner:
             quantizer_config, dimreduction_config
         )
 
+    def _run_build_search_benchmark(
+        self,
+        quantizer_name: str,
+        dimreduction_name: Optional[str],
+        quantizer_config: Dict[str, Any],
+        dimreduction_config: Optional[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Run benchmark with build/search separation - build once, search multiple times.
+
+        Args:
+            quantizer_name: Name of the quantizer algorithm
+            dimreduction_name: Optional name of dimensionality reduction algorithm
+            quantizer_config: Config with 'build_params' and 'search_params_list'
+            dimreduction_config: Config for dimreduction
+
+        Returns:
+            List of result dicts, one per search configuration
+        """
+        build_params = quantizer_config['build_params']
+        search_params_list = quantizer_config['search_params_list']
+
+        print(f"\n{'='*60}")
+        print(f"Build/Search Separation Mode")
+        print(f"{'='*60}")
+        print(f"Build params: {build_params}")
+        print(f"Number of search configs: {len(search_params_list)}")
+
+        # Prepare data
+        train_data = self.train_data.copy()
+        test_data = self.test_data.copy()
+
+        # Phase 1: Dimensionality Reduction (if applicable)
+        if dimreduction_name is not None:
+            print(f"\n{'='*60}")
+            print(f"Phase 1: Dimensionality Reduction - {dimreduction_name}")
+            print(f"{'='*60}")
+
+            # Build Docker image
+            if not self.docker_runner.build_image('dimreduction', dimreduction_name):
+                error_result = {
+                    'status': 'failed',
+                    'error': f'Failed to build dimreduction image: {dimreduction_name}'
+                }
+                return [error_result]
+
+            # Run in Docker
+            train_transformed, test_transformed, dim_metrics = self.docker_runner.run_dimreduction(
+                dimreduction_name,
+                train_data,
+                test_data,
+                dimreduction_config
+            )
+
+            if train_transformed is None:
+                error_result = {
+                    'status': 'failed',
+                    'error': 'Dimensionality reduction failed'
+                }
+                return [error_result]
+
+            # Update data
+            train_data = train_transformed
+            test_data = test_transformed
+
+            print(f"\nDimensionality Reduction Results:")
+            print(f"  Time: {dim_metrics['fit_time']:.4f}s")
+            print(f"  Model Memory: {dim_metrics['model_memory'] / 1024:.2f} MB")
+
+        # Phase 2: Quantization with multiple search configs
+        print(f"\n{'='*60}")
+        print(f"Phase 2: Quantization - {quantizer_name}")
+        print(f"{'='*60}")
+
+        # Build Docker image
+        if not self.docker_runner.build_image('quantizer', quantizer_name):
+            error_result = {
+                'status': 'failed',
+                'error': f'Failed to build quantizer image: {quantizer_name}'
+            }
+            return [error_result]
+
+        # Run in Docker with build/search separation config
+        config_for_docker = {
+            'build_params': build_params,
+            'search_params_list': search_params_list
+        }
+
+        quant_results = self.docker_runner.run_quantizer(
+            quantizer_name,
+            train_data,
+            test_data,
+            self.ground_truth,
+            config_for_docker
+        )
+
+        if quant_results is None or quant_results.get('status') == 'failed':
+            error_result = {
+                'dataset': self.dataset_name,
+                'quantizer': quantizer_name,
+                'dimreduction': dimreduction_name,
+                'status': 'failed',
+                'error': quant_results.get('error', 'Unknown error') if quant_results else 'Quantizer failed'
+            }
+            return [error_result]
+
+        # quant_results should contain a list of results, one per search config
+        all_results = []
+        results_list = quant_results.get('results_list', [quant_results])
+
+        for i, search_result in enumerate(results_list):
+            result = {
+                'dataset': self.dataset_name,
+                'quantizer': quantizer_name,
+                'dimreduction': dimreduction_name,
+                'quantizer_config': {
+                    'build_params': build_params,
+                    'search_params': search_params_list[i] if i < len(search_params_list) else search_result.get('search_params', {})
+                }
+            }
+
+            # Add dimreduction metrics if applicable
+            if dimreduction_name is not None:
+                result['dimreduction_config'] = dimreduction_config
+                result['dim_reduction_time'] = dim_metrics['fit_time']
+                result['dim_reduction_model_memory'] = dim_metrics['model_memory']
+                result['dim_reduction_compression_rate'] = dim_metrics['compression_rate']
+                result['original_dimension'] = dim_metrics['original_dim']
+                result['reduced_dimension'] = dim_metrics['reduced_dim']
+
+            # Add quantizer results
+            result.update(search_result)
+            all_results.append(result)
+
+        return all_results
+
     def _run_single_benchmark(
         self,
         quantizer_name: str,
         dimreduction_name: Optional[str],
         quantizer_config: Dict[str, Any],
         dimreduction_config: Optional[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+    ):
         """
         Run a single benchmark with specific configs.
 
         Args:
             quantizer_name: Name of the quantizer algorithm
             dimreduction_name: Optional name of dimensionality reduction algorithm
-            quantizer_config: Config for quantizer
+            quantizer_config: Config for quantizer (may contain search_params_list for grouped configs)
             dimreduction_config: Config for dimreduction
 
         Returns:
-            Dict containing all benchmark results
+            Dict containing all benchmark results, or List[Dict] if grouped config
         """
+        # Check if this is a grouped config (build/search separation with multiple searches)
+        if 'search_params_list' in quantizer_config:
+            return self._run_build_search_benchmark(
+                quantizer_name, dimreduction_name, quantizer_config, dimreduction_config
+            )
+
         results = {
             'dataset': self.dataset_name,
             'quantizer': quantizer_name,
