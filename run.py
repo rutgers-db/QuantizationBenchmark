@@ -15,8 +15,8 @@ Usage examples:
     # List available algorithms
     python run.py --list-algorithms
 
-    # Specify custom top-k
-    python run.py --dataset sift-128 --algorithm PQ --topk 10
+    # Specify custom data directory
+    python run.py --dataset sift-128 --algorithm PQ --data-dir /path/to/datasets
 """
 
 import argparse
@@ -195,9 +195,6 @@ Examples:
   # Run PCA dimensionality reduction + PQ quantizer
   python run.py --dataset sift-128 --algorithm PCA,PQ
 
-  # Use custom top-k value
-  python run.py --dataset sift-128 --algorithm PQ --topk 10
-
   # Specify custom data directory
   python run.py --dataset sift-128 --algorithm PQ --data-dir /path/to/datasets
 
@@ -217,8 +214,6 @@ Examples:
                        help='Name of the dataset (HDF5 file in data/ directory without .hdf5 extension)')
     parser.add_argument('--algorithm', type=str,
                        help='Algorithm(s) to run. Format: "Quantizer" or "DimReduction,Quantizer"')
-    parser.add_argument('--topk', type=int, default=100,
-                       help='Number of nearest neighbors to retrieve (default: 100)')
     parser.add_argument('--data-dir', type=str, default='data',
                        help='Directory where datasets are stored (default: data)')
 
@@ -271,11 +266,10 @@ Examples:
     if dimreduction_name:
         print(f"  Dimensionality Reduction: {dimreduction_name}")
     print(f"  Quantizer: {quantizer_name}")
-    print(f"Top-k: {args.topk}")
     print("="*60)
 
     try:
-        with BenchmarkRunner(args.dataset, topk=args.topk, data_dir=args.data_dir, debug=args.debug) as runner:
+        with BenchmarkRunner(args.dataset, data_dir=args.data_dir, debug=args.debug) as runner:
             results = runner.run_benchmark(
                 quantizer_name=quantizer_name,
                 dimreduction_name=dimreduction_name,

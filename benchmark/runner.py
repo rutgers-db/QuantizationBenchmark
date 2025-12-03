@@ -75,6 +75,20 @@ def _expand_build_search_combinations(config: Dict[str, Any]) -> List[Dict[str, 
     """
     Expand build/search parameter combinations.
 
+    Supports two search formats:
+    1. List format (new): Each topk can have its own nrerank values
+       search:
+         - topk: 100
+           nrerank: [200, 300]
+         - topk: 50
+           nrerank: [100]
+         - topk: 10  # no nrerank
+
+    2. Dict format (legacy): Cartesian product of all search params
+       search:
+         topk: 100
+         nrerank: [200, 300]
+
     Args:
         config: Config dict with 'build', 'search', and optionally 'common' keys
 
@@ -108,28 +122,34 @@ def _expand_build_search_combinations(config: Dict[str, Any]) -> List[Dict[str, 
     else:
         build_combinations = [build_fixed_params]
 
-    # Expand search parameters (DO NOT include common params - they're only for build)
-    search_list_params = {}
-    search_fixed_params = {}
-
-    for key, value in search_config.items():
-        if isinstance(value, list):
-            search_list_params[key] = value
-        else:
-            search_fixed_params[key] = value
-
-    # Generate all search combinations
-    if search_list_params:
-        search_param_names = list(search_list_params.keys())
-        search_param_values = [search_list_params[name] for name in search_param_names]
-        search_combinations = []
-        for combination in product(*search_param_values):
-            search_combo = search_fixed_params.copy()
-            for name, value in zip(search_param_names, combination):
-                search_combo[name] = value
-            search_combinations.append(search_combo)
+    # Expand search parameters
+    # Check if search is a list (new format)
+    if isinstance(search_config, list):
+        # New format: search is a list where each item defines topk with optional nrerank
+        search_combinations = _expand_search_experiments(search_config)
     else:
-        search_combinations = [search_fixed_params]
+        # Legacy format: search is a dict, use Cartesian product of all search params
+        search_list_params = {}
+        search_fixed_params = {}
+
+        for key, value in search_config.items():
+            if isinstance(value, list):
+                search_list_params[key] = value
+            else:
+                search_fixed_params[key] = value
+
+        # Generate all search combinations
+        if search_list_params:
+            search_param_names = list(search_list_params.keys())
+            search_param_values = [search_list_params[name] for name in search_param_names]
+            search_combinations = []
+            for combination in product(*search_param_values):
+                search_combo = search_fixed_params.copy()
+                for name, value in zip(search_param_names, combination):
+                    search_combo[name] = value
+                search_combinations.append(search_combo)
+        else:
+            search_combinations = [search_fixed_params]
 
     # Generate all (build, search) pairs
     result = []
@@ -143,24 +163,68 @@ def _expand_build_search_combinations(config: Dict[str, Any]) -> List[Dict[str, 
     return result
 
 
+def _expand_search_experiments(experiments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Expand search experiments where each topk can have its own nrerank values.
+
+    Each experiment in the list can have:
+    - topk: int (required)
+    - nrerank: list or int (optional)
+    - other search params (will be included as-is)
+
+    Args:
+        experiments: List of experiment configurations
+
+    Returns:
+        List of expanded search parameter dicts
+    """
+    result = []
+
+    for exp in experiments:
+        if 'topk' not in exp:
+            raise ValueError("Each search experiment must have a 'topk' value")
+
+        topk = exp['topk']
+        nrerank = exp.get('nrerank', None)
+
+        # Get other params (excluding topk and nrerank)
+        other_params = {k: v for k, v in exp.items() if k not in ['topk', 'nrerank']}
+
+        if nrerank is None:
+            # No nrerank - create single search config
+            search_params = {'topk': topk}
+            search_params.update(other_params)
+            result.append(search_params)
+        else:
+            # nrerank specified - create one config per nrerank value
+            nrerank_list = nrerank if isinstance(nrerank, list) else [nrerank]
+            for nr in nrerank_list:
+                search_params = {'topk': topk, 'nrerank': nr}
+                search_params.update(other_params)
+                result.append(search_params)
+
+    return result
+
+
 class BenchmarkRunner:
     """
     Main benchmark runner that coordinates the entire benchmarking process.
     Uses Docker containers to run algorithms in isolated environments.
     """
 
-    def __init__(self, dataset_name: str, topk: int = 100, data_dir: str = "data", debug: bool = False):
+    def __init__(self, dataset_name: str, data_dir: str = "data", debug: bool = False):
         """
         Initialize the benchmark runner.
 
         Args:
             dataset_name: Name of the HDF5 dataset in the data/ directory
-            topk: Number of nearest neighbors to retrieve for recall calculation
             data_dir: Directory where datasets are stored (default: "data")
             debug: Enable debug mode with real-time Docker output (default: False)
+
+        Note:
+            topk is now specified in the search parameters of config.yaml files
         """
         self.dataset_name = dataset_name
-        self.topk = topk
         self.data_dir = data_dir
         self.debug = debug
 
@@ -385,11 +449,8 @@ class BenchmarkRunner:
             train_data,
             test_data,
             self.ground_truth,
-            self.topk,
             quantizer_config
         )
-        
-        print(quant_results)
 
         if quant_results is None or quant_results.get('status') == 'failed':
             results['status'] = 'failed'
@@ -405,6 +466,8 @@ class BenchmarkRunner:
             'query_time (s)': quant_results['query_time'],
             'queries_per_second': quant_results['queries_per_second'],
             'recall': quant_results['recall'],
+            'map': quant_results['map'],
+            'recall@1': quant_results['recall@1'],
             'rerank_results': quant_results.get('rerank_results', []),
             'status': 'success'
         })
