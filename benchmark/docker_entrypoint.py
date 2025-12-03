@@ -216,7 +216,7 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
             start_time = time.time()
 
             try:
-                I_rerank, D_rerank = quantizer.search_and_rerank(nq, test_data, topk, nrerank, **search_params)
+                I_rerank, D_rerank = quantizer.searchAndRerank(nq, test_data, topk, nrerank, **search_params)
                 rerank_time = time.time() - start_time
 
                 # Calculate recall for reranked results
@@ -234,7 +234,7 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
                     'distances': D_rerank
                 })
             except Exception as e:
-                print(f"  Error in search_and_rerank with nrerank={nrerank}: {e}")
+                print(f"  Error in searchAndRerank with nrerank={nrerank}: {e}")
                 import traceback
                 traceback.print_exc()
                 rerank_results.append({
