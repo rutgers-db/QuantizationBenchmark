@@ -7,7 +7,7 @@ sys.path.insert(0, '/benchmark')
 from benchmark.base import BaseQuantizer
 
 class ProductQuantizationFastScanFaiss(BaseQuantizer):
-    def __init__(self, ndim, nsubvec, nbit, data_bytes, niter, nthread = 1, space = "l2"):
+    def __init__(self, ndim, nsubvec, nbit, data_bytes, nthread = 1, space = "l2"):
         super().__init__()
         self.ndim = ndim
         self.nsubvec = nsubvec
@@ -15,7 +15,6 @@ class ProductQuantizationFastScanFaiss(BaseQuantizer):
         self.PQIndex = faiss.IndexPQ(ndim, nsubvec, nbit)
         self.index = None
         self.space = space
-        self.niter = niter
         self.data_bytes = data_bytes
         self.data = None
         self.ndata = 0
@@ -28,10 +27,11 @@ class ProductQuantizationFastScanFaiss(BaseQuantizer):
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
         self.data = data
-        self._original_data = self.data  # For default search_and_rerank
         self.ndata = nd
         try:
             self.PQIndex.train(data)
+            self.PQIndex.add(data)
+
             self.index = faiss.IndexPQFastScan(self.PQIndex)
             # Add vectors to index for querying
         except Exception as e:
@@ -66,8 +66,11 @@ class ProductQuantizationFastScanFaiss(BaseQuantizer):
         return mse
     
     def searchAndRerank(self, nq, query, topk, nrerank):
-        refine = faiss.IndexRefineFlat(self.index)
-        refine.k_factor = nrerank / topk
-        D, I = self.index.search(query, topk)
+        refine = faiss.IndexFlatL2(self.ndim)
+        refine.add(self.data)
+
+        refiner = faiss.IndexRefine(self.index, refine)
+        refiner.k_factor = nrerank / topk
+        D, I = refiner.search(query, topk)
         return I, D
         
