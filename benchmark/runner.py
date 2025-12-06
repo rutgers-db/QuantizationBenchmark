@@ -196,12 +196,11 @@ def _expand_search_experiments(experiments: List[Dict[str, Any]]) -> List[Dict[s
             search_params.update(other_params)
             result.append(search_params)
         else:
-            # nrerank specified - create one config per nrerank value
-            nrerank_list = nrerank if isinstance(nrerank, list) else [nrerank]
-            for nr in nrerank_list:
-                search_params = {'topk': topk, 'nrerank': nr}
-                search_params.update(other_params)
-                result.append(search_params)
+            # nrerank specified - keep as list in single search config
+            # docker_entrypoint.py handles nrerank as list correctly
+            search_params = {'topk': topk, 'nrerank': nrerank}
+            search_params.update(other_params)
+            result.append(search_params)
 
     return result
 
