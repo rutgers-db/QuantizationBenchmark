@@ -1,4 +1,5 @@
-FROM python:3.9-slim
+# Use base image which includes common dependencies (numpy, faiss, etc.)
+FROM quantbench-base:latest
 
 # Build arguments
 ARG ALGO_TYPE
@@ -36,12 +37,8 @@ RUN cd /opt/VAQ && \
     cmake .. && \
     make -j$(nproc)
 
-# Install Python dependencies including pybind11
+# Install additional Python dependencies for VAQ (base image already has numpy, h5py, pyyaml, psutil, faiss)
 RUN pip install --no-cache-dir \
-    numpy \
-    h5py \
-    pyyaml \
-    psutil \
     pybind11
 
 # Copy the benchmark framework code

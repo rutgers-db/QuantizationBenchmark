@@ -41,7 +41,26 @@ def expand_param_combinations(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     # Check if config has build/search structure
     if 'build' in config or 'search' in config:
-        return _expand_build_search_combinations(config)
+        base_configs = _expand_build_search_combinations(config)
+    else:
+        # Simple format: expand list parameters
+        base_configs = None  # Will be handled below
+
+    # Check if config has IVF structure - IVF experiments are ADDITIONAL
+    if 'ivf' in config:
+        ivf_configs = _expand_ivf_combinations(config)
+
+        # If we also have base configs, combine them
+        if base_configs is not None:
+            # Return IVF configs first, then base configs
+            return ivf_configs + base_configs
+        else:
+            # Only IVF configs
+            return ivf_configs
+
+    # No IVF, return base configs if available
+    if base_configs is not None:
+        return base_configs
 
     # Simple format: expand list parameters
     list_params = {}
@@ -205,6 +224,133 @@ def _expand_search_experiments(experiments: List[Dict[str, Any]]) -> List[Dict[s
     return result
 
 
+def _expand_ivf_combinations(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Expand IVF parameter combinations.
+
+    IVF format (new):
+        {
+          common: {nsubvec: 8, nbit: 8, data_bytes: 4, ndim: 128, ...},
+          build: {nsubvec: [16, 32]},  # optional overrides for base quantizer
+          ivf: {
+            nlist: [100, 256],  # List of cluster counts
+            search:             # List of search experiments
+              - topk: 100
+                nrerank: [100, 200]
+                nprobe: [1, 4, 16]
+              - topk: 10
+                nrerank: [10, 20]
+                nprobe: [1, 4]
+          }
+        }
+
+    For each nlist value:
+        - Build index once with that nlist
+        - For each search experiment, expand (nprobe, nrerank) combinations
+
+    Returns configs with format:
+        {
+            'ivf_mode': True,
+            'build_params': {
+                'nlist': 100,
+                'nsubvec': 16,
+                'nbit': 8,
+                ...  # other common/build params for the base quantizer
+            },
+            'search_params_list': [
+                {'topk': 100, 'nprobe': 1, 'nrerank': [100, 200]},
+                {'topk': 100, 'nprobe': 4, 'nrerank': [100, 200]},
+                ...
+            ]
+        }
+
+    Args:
+        config: Config dict with 'ivf' and optionally 'common', 'build' keys
+
+    Returns:
+        List of IVF config dicts grouped by nlist (build once, search multiple)
+    """
+    common_params = config.get('common', {}) or {}
+    build_config = config.get('build', {}) or {}
+    ivf_config = config.get('ivf', {})
+
+    if not ivf_config:
+        raise ValueError("IVF config is empty")
+
+    # Extract IVF parameters
+    nlist_values = ivf_config.get('nlist', [])
+    if not isinstance(nlist_values, list):
+        nlist_values = [nlist_values]
+
+    # Get search experiments (list format)
+    search_experiments = ivf_config.get('search', [])
+    if not isinstance(search_experiments, list):
+        raise ValueError("IVF 'search' must be a list of search experiment configurations")
+
+    # Expand build params for the base quantizer (excluding nlist)
+    base_build_list_params = {}
+    base_build_fixed_params = common_params.copy()
+
+    for key, value in build_config.items():
+        if isinstance(value, list):
+            base_build_list_params[key] = value
+        else:
+            base_build_fixed_params[key] = value
+
+    # Generate all base build combinations
+    if base_build_list_params:
+        base_param_names = list(base_build_list_params.keys())
+        base_param_values = [base_build_list_params[name] for name in base_param_names]
+        base_build_combinations = []
+        for combination in product(*base_param_values):
+            base_combo = base_build_fixed_params.copy()
+            for name, value in zip(base_param_names, combination):
+                base_combo[name] = value
+            base_build_combinations.append(base_combo)
+    else:
+        base_build_combinations = [base_build_fixed_params]
+
+    # For each (base_build, nlist) combination, generate all search configs
+    result = []
+    for base_build_params in base_build_combinations:
+        for nlist in nlist_values:
+            # Build params = base quantizer params + nlist
+            build_params = base_build_params.copy()
+            build_params['nlist'] = nlist
+
+            # Expand search experiments
+            search_params_list = []
+            for exp in search_experiments:
+                if 'topk' not in exp:
+                    raise ValueError("Each IVF search experiment must have a 'topk' value")
+
+                topk = exp['topk']
+                nprobe_values = exp.get('nprobe', [1])
+                if not isinstance(nprobe_values, list):
+                    nprobe_values = [nprobe_values]
+
+                nrerank = exp.get('nrerank', None)
+
+                # Get other params (excluding topk, nprobe, nrerank)
+                other_params = {k: v for k, v in exp.items() if k not in ['topk', 'nprobe', 'nrerank']}
+
+                # Generate combinations of nprobe values for this topk
+                for nprobe in nprobe_values:
+                    search_params = {'topk': topk, 'nprobe': nprobe}
+                    if nrerank is not None:
+                        search_params['nrerank'] = nrerank
+                    search_params.update(other_params)
+                    search_params_list.append(search_params)
+
+            result.append({
+                'ivf_mode': True,
+                'build_params': build_params,
+                'search_params_list': search_params_list
+            })
+
+    return result
+
+
 def group_configs_by_build_params(configs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Group configurations by their build_params to avoid redundant index building.
@@ -236,7 +382,17 @@ def group_configs_by_build_params(configs: List[Dict[str, Any]]) -> List[Dict[st
     for config in configs:
         # Use JSON serialization of build_params as key for grouping
         build_key = json.dumps(config['build_params'], sort_keys=True)
-        groups[build_key].append(config['search_params'])
+
+        # Check if config already has search_params_list (e.g., from IVF expansion)
+        if 'search_params_list' in config:
+            # Already grouped, extend the list
+            groups[build_key].extend(config['search_params_list'])
+        elif 'search_params' in config:
+            # Single search_params, append it
+            groups[build_key].append(config['search_params'])
+        else:
+            # No search params, use empty dict
+            groups[build_key].append({})
 
     # Convert back to list format
     result = []

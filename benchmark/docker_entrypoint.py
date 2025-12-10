@@ -162,11 +162,43 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
         build_params = config
         search_params_list = [{}]
 
+    # Check if this is IVF mode
+    # IVF mode is indicated by either 'ivf_mode' flag in config or presence of 'nlist' in build_params
+    is_ivf_mode = config.get('ivf_mode', False) or 'nlist' in build_params
+
     # Load algorithm class
     QuantizerClass = load_module_class(module_path, 'BaseQuantizer')
 
-    # Instantiate with build parameters
-    quantizer = QuantizerClass(**build_params)
+    # Instantiate quantizer (possibly wrapped with IVF)
+    if is_ivf_mode:
+        print("\n" + "="*60)
+        print("IVF MODE ENABLED")
+        print("="*60)
+
+        # Extract nlist from build_params
+        nlist = build_params.get('nlist')
+        if nlist is None:
+            raise ValueError("IVF mode requires 'nlist' parameter in build_params")
+
+        # Remove IVF-specific params from build_params for base quantizer
+        base_quantizer_params = {k: v for k, v in build_params.items()
+                                  if k not in ['nlist', 'ivf_mode']}
+
+        # Import IVF wrapper
+        from benchmark.algorithms.ivf import IVFWrapper
+
+        # Create IVF-wrapped quantizer
+        quantizer = IVFWrapper(
+            quantizer_class=QuantizerClass,
+            nlist=nlist,
+            **base_quantizer_params
+        )
+        print(f"Created IVF wrapper with nlist={nlist}")
+        print(f"Base quantizer: {QuantizerClass.__name__}")
+        print(f"Base quantizer params: {base_quantizer_params}")
+    else:
+        # Regular quantizer (no IVF)
+        quantizer = QuantizerClass(**build_params)
 
     # Training phase (done once for all search configs)
     print("\n=== Training Phase ===")
