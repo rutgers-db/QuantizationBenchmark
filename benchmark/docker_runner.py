@@ -31,6 +31,70 @@ class DockerRunner:
         self.temp_dir = os.path.abspath("temp")
         os.makedirs(self.temp_dir, exist_ok=True)
 
+        # Ensure base image exists (for IVF support)
+        self._ensure_base_image()
+
+    def _ensure_base_image(self, force_rebuild: bool = False) -> bool:
+        """
+        Ensure the base Docker image exists (contains common dependencies like faiss).
+
+        Args:
+            force_rebuild: Force rebuild even if image exists
+
+        Returns:
+            bool: True if base image exists or was successfully built
+        """
+        base_image_name = "quantbench-base:latest"
+        base_dockerfile = os.path.join(self.base_path, "base.dockerfile")
+
+        # Check if base image exists
+        result = subprocess.run(
+            ["docker", "images", "-q", base_image_name],
+            capture_output=True,
+            text=True
+        )
+        image_exists = bool(result.stdout.strip())
+
+        # If image exists and we're not forcing rebuild, just return
+        if image_exists and not force_rebuild:
+            return True
+
+        # If forcing rebuild and image exists, remove old image first
+        if force_rebuild and image_exists:
+            print(f"Removing old base Docker image: {base_image_name}")
+            result = subprocess.run(
+                ["docker", "rmi", base_image_name],
+                capture_output=True,
+                text=True
+            )
+
+            if result.returncode != 0:
+                print(f"Error removing base image: {result.stderr}")
+                return False
+
+            print(f"Successfully removed old base image")
+
+        # Build base image if dockerfile exists
+        if not os.path.exists(base_dockerfile):
+            print(f"Warning: Base dockerfile not found at {base_dockerfile}")
+            print("IVF functionality may not work for all algorithms")
+            return False
+
+        print(f"Building base Docker image: {base_image_name}")
+        project_root = os.path.abspath(".")
+        result = subprocess.run(
+            ["docker", "build", "-t", base_image_name, "-f", base_dockerfile, project_root],
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode != 0:
+            print(f"Error building base image: {result.stderr}")
+            return False
+
+        print(f"Successfully built base image: {base_image_name}")
+        return True
+
     def build_image(self, algo_type: str, algo_name: str, force_rebuild: bool = False) -> bool:
         """
         Build Docker image for an algorithm.
@@ -327,6 +391,11 @@ class DockerRunner:
         Args:
             force_rebuild: Force rebuild even if images exist
         """
+        # Build base image first (if needed)
+        if force_rebuild:
+            print("\nRebuilding base image...")
+            self._ensure_base_image(force_rebuild=True)
+
         # Build quantizer images
         if os.path.exists(self.quantizer_path):
             for algo_name in os.listdir(self.quantizer_path):
