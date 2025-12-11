@@ -11,8 +11,15 @@ sift-128-euclidean:
   build: {}            # No build-specific parameters for RaBitQ
   search:
     topk: 100          # Number of nearest neighbors to retrieve (default: 100)
+    nrerank: 100
     # Optional: Add nrerank values for search_and_rerank test
     # nrerank: [100, 200]  # If not specified, defaults to [topk, 2*topk]
+  ivf:
+    nlist: [100]    # Number of inverted lists (coarse clusters)
+    search:
+    - topk: 100
+      nrerank: [100]
+      nprobe: [1]
 
 siftsmall-128-euclidean:
   # Build/Search separation format
