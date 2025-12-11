@@ -1,4 +1,4 @@
-FROM python:3.9-slim
+FROM quantbench-base:latest
 
 # Build arguments
 ARG ALGO_TYPE
@@ -6,7 +6,6 @@ ARG ALGO_NAME
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    build-essential \
     cmake \
     git \
     wget \
@@ -35,10 +34,6 @@ RUN cd /opt/RaBitQ && \
 
 # Install Python dependencies including pybind11
 RUN pip install --no-cache-dir \
-    numpy \
-    h5py \
-    pyyaml \
-    psutil \
     pybind11
 
 # Copy the benchmark framework code
@@ -61,7 +56,5 @@ RUN cd /algorithms/${ALGO_TYPE}/${ALGO_NAME}/ && \
 ENV PYTHONPATH=/:/opt/RaBitQ:/algorithms/quantizer/RabitQ
 ENV RABITQ_PATH=/opt/RaBitQ
 
-# Set working directory
-WORKDIR /workspace
 
 # The entrypoint will be provided by the framework at runtime

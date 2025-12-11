@@ -184,18 +184,43 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
         base_quantizer_params = {k: v for k, v in build_params.items()
                                   if k not in ['nlist', 'ivf_mode']}
 
-        # Import IVF wrapper
+        # Import base classes
+        from benchmark.base import BaseIVFQuantizer
         from benchmark.algorithms.ivf import IVFWrapper
 
-        # Create IVF-wrapped quantizer
+        # Check if module has BaseIVFQuantizer subclass
+        ivf_quantizer_class = None
+        spec = importlib.util.spec_from_file_location("algorithm_module", module_path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["algorithm_module"] = module
+        spec.loader.exec_module(module)
+
+        for attr_name in dir(module):
+            attr = getattr(module, attr_name)
+            if (isinstance(attr, type) and
+                issubclass(attr, BaseIVFQuantizer) and
+                attr is not BaseIVFQuantizer):
+                ivf_quantizer_class = attr
+                break
+
+        if ivf_quantizer_class is not None:
+            # Module has BaseIVFQuantizer subclass, instantiate base quantizer first
+            print(f"Found BaseIVFQuantizer subclass: {ivf_quantizer_class.__name__}")
+            base_quantizer = QuantizerClass(**base_quantizer_params)
+            ivf_quantizer = ivf_quantizer_class(base_quantizer)
+        else:
+            # No BaseIVFQuantizer subclass, wrap BaseQuantizer with default BaseIVFQuantizer
+            print(f"No BaseIVFQuantizer found, wrapping BaseQuantizer: {QuantizerClass.__name__}")
+            base_quantizer = QuantizerClass(**base_quantizer_params)
+            ivf_quantizer = BaseIVFQuantizer(base_quantizer)
+
+        # Create IVF wrapper
         quantizer = IVFWrapper(
-            quantizer_class=QuantizerClass,
-            nlist=nlist,
-            **base_quantizer_params
+            ivf_quantizer=ivf_quantizer,
+            nlist=nlist
         )
         print(f"Created IVF wrapper with nlist={nlist}")
-        print(f"Base quantizer: {QuantizerClass.__name__}")
-        print(f"Base quantizer params: {base_quantizer_params}")
+        print(f"IVF quantizer: {ivf_quantizer.__class__.__name__}")
     else:
         # Regular quantizer (no IVF)
         quantizer = QuantizerClass(**build_params)
