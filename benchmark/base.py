@@ -145,42 +145,6 @@ class BaseQuantizer(ABC):
 
         return I_reranked, D_reranked
 
-class BaseIVFQuantizer(ABC):
-    def __init__(self, base_quantizer: BaseQuantizer, **kargs):
-        self.base_quantizer = base_quantizer
-    
-    def fit(self, data: np.ndarray, assignments: np.ndarray, centroids: np.ndarray):
-        """
-        Fit function when ivf is used.
-        Args:
-            data (np.ndarray): (nd,d) vectors
-            assignments (np.ndarray): (nd, 1), assign each vector to centroid
-            centroids (np.ndarray): (nclusters, d) cluster centroids
-        """
-        return self.base_quantizer.fit(data.shape[0], data)
-    
-    def query(self, queries: np.ndarray, assignments: np.ndarray, topk: int, **search_params):
-        """
-        Query Function when ivf is used
-        Args:
-            queries (np.ndarray): _description_
-            assignments (np.ndarray): (nq, nprobe), the bucket each query should probe
-            topk (int): _description_
-        """
-        return self.base_quantizer.query(queries.shape[0], queries, topk, search_params)
-    
-    def searchAndRerank(self, queries: np.ndarray, assignments: np.ndarray, topk: int, nrerank: int, **search_params):
-        return self.base_quantizer.searchAndRerank(queries.shape[0], queries, topk, nrerank, search_params)
-    
-    def getMSE(self):
-        return self.base_quantizer.getMSE()
-    
-    def getCompressionRate(self):
-        return self.base_quantizer.getCompressionRate()
-    
-    def getMemoryUsage(self):
-        return self.base_quantizer.getMemoryUsage()
-
 
 class BaseDimReduction(ABC):
     """
