@@ -30,9 +30,7 @@ private:
     Matrix<uint64_t>* binary;
     static Space<D,B> space;
 public:
-    PyIVFRN() : index(nullptr), X(nullptr), centroids(nullptr),
-                 dist_to_centroid(nullptr), x0(nullptr),
-                 cluster_id(nullptr), binary(nullptr) {}
+    PyIVFRN() : index(nullptr) {}
 
     ~PyIVFRN() {
         if (X){
@@ -154,9 +152,10 @@ public:
 
         int thread_num = omp_get_max_threads();
         // Search each query
+        cout << "[C++ Search] Number of threads: " << thread_num <<endl;
         #pragma omp parallel for num_threads(thread_num)
         for (uint32_t i = 0; i < nq; i++) {
-
+            
             ResultHeap result = index->search(
                 queries + i * D,
                 rd_queries + i * B,
@@ -169,170 +168,6 @@ public:
             while (!result.empty()) {
                 res_vec.push_back(result.top());
                 result.pop();
-            }
-            std::reverse(res_vec.begin(), res_vec.end());
-
-            // Fill output arrays
-            for (uint32_t j = 0; j < k; j++) {
-                if (j < res_vec.size()) {
-                    idx_ptr[i * k + j] = res_vec[j].second;
-                    dist_ptr[i * k + j] = res_vec[j].first;
-                } else {
-                    idx_ptr[i * k + j] = -1;
-                    dist_ptr[i * k + j] = std::numeric_limits<float>::max();
-                }
-            }
-        }
-
-        return std::make_pair(indices, distances);
-    }
-
-    std::pair<py::array_t<int64_t>, py::array_t<float>> search_clusters(
-        py::array_t<float> py_queries,
-        py::array_t<float> py_rd_queries,
-        py::array_t<uint32_t> py_assignments,
-        uint32_t k
-    ) {
-
-        if (!index) {
-            throw std::runtime_error("Index not built");
-        }
-
-
-        auto queries_buf = py_queries.request();
-        auto rd_queries_buf = py_rd_queries.request();
-        auto assignments_buf = py_assignments.request();
-
-        uint32_t nq = queries_buf.shape[0];
-        uint32_t nprobe = assignments_buf.shape[1];
-
-        float* queries = static_cast<float*>(queries_buf.ptr);
-        float* rd_queries = static_cast<float*>(rd_queries_buf.ptr);
-        uint32_t* assignments = static_cast<uint32_t*>(assignments_buf.ptr);
-
-        // Allocate result arrays
-        py::array_t<int64_t> indices({nq, k});
-        py::array_t<float> distances({nq, k});
-
-        auto idx_buf = indices.request();
-        auto dist_buf = distances.request();
-        int64_t* idx_ptr = static_cast<int64_t*>(idx_buf.ptr);
-        float* dist_ptr = static_cast<float*>(dist_buf.ptr);
-
-
-        int thread_num = omp_get_max_threads();
-        // Search each query
-        #pragma omp parallel for num_threads(thread_num)
-        for (uint32_t i = 0; i < nq; i++) {
-
-            ResultHeap KNNs;
-            float *query = queries + i * D;
-            float *rd_query = rd_queries + i * B;
-            uint8_t PORTABLE_ALIGN64 byte_query[B];
-            float distK = std::numeric_limits<float>::max();
-            for (uint32_t j = 0; j < nprobe; j++){
-                int cluster_id = assignments[i * nprobe + j];
-                float sqr_y = sqr_dist<B>(rd_query, index->centroid + cluster_id * B);
-                float vl, vr;
-                index->space.range(rd_query, index->centroid + cluster_id * B, vl, vr);
-                float width = (vr - vl) / ((1 << B_QUERY) - 1);
-                uint32_t sum_q = 0;
-                index->space.quantize(byte_query, rd_query, index->centroid + cluster_id * B, index->u, vl, width, sum_q);
-                uint8_t PORTABLE_ALIGN32 LUT[B/4*16];
-                pack_LUT<B>(byte_query, LUT);
-                index->fast_scan(KNNs, distK, k, LUT, index->packed_code + index->packed_start[cluster_id],
-                                index->len[cluster_id], index->fac + index->start[cluster_id],
-                                sqr_y, vl, width, sum_q, query, index->data + index->start[cluster_id] * D,
-                                index->id + index->start[cluster_id]);
-            }
-
-            // Extract results (they come in reverse order from heap)
-            std::vector<std::pair<float, uint32_t>> res_vec;
-            while (!KNNs.empty()) {
-                res_vec.push_back(KNNs.top());
-                KNNs.pop();
-            }
-            std::reverse(res_vec.begin(), res_vec.end());
-
-            // Fill output arrays
-            for (uint32_t j = 0; j < k; j++) {
-                if (j < res_vec.size()) {
-                    idx_ptr[i * k + j] = res_vec[j].second;
-                    dist_ptr[i * k + j] = res_vec[j].first;
-                } else {
-                    idx_ptr[i * k + j] = -1;
-                    dist_ptr[i * k + j] = std::numeric_limits<float>::max();
-                }
-            }
-        }
-
-        return std::make_pair(indices, distances);
-    }
-
-    std::pair<py::array_t<int64_t>, py::array_t<float>> search_and_rerank_clusters(
-        py::array_t<float> py_queries,
-        py::array_t<float> py_rd_queries,
-        py::array_t<uint32_t> py_assignments,
-        uint32_t k,
-        uint32_t nrerank
-    ) {
-        if (!index) {
-            throw std::runtime_error("Index not built");
-        }
-
-
-        auto queries_buf = py_queries.request();
-        auto rd_queries_buf = py_rd_queries.request();
-        auto assignments_buf = py_assignments.request();
-
-        uint32_t nq = queries_buf.shape[0];
-        uint32_t nprobe = assignments_buf.shape[1];
-
-        float* queries = static_cast<float*>(queries_buf.ptr);
-        float* rd_queries = static_cast<float*>(rd_queries_buf.ptr);
-        uint32_t* assignments = static_cast<uint32_t*>(assignments_buf.ptr);
-
-        // Allocate result arrays
-        py::array_t<int64_t> indices({nq, k});
-        py::array_t<float> distances({nq, k});
-
-        auto idx_buf = indices.request();
-        auto dist_buf = distances.request();
-        int64_t* idx_ptr = static_cast<int64_t*>(idx_buf.ptr);
-        float* dist_ptr = static_cast<float*>(dist_buf.ptr);
-
-
-        int thread_num = omp_get_max_threads();
-        // Search each query
-        #pragma omp parallel for num_threads(thread_num)
-        for (uint32_t i = 0; i < nq; i++) {
-
-            ResultHeap KNNs;
-            float *query = queries + i * D;
-            float *rd_query = rd_queries + i * B;
-            uint8_t PORTABLE_ALIGN64 byte_query[B];
-            float distK = std::numeric_limits<float>::max();
-            for (uint32_t j = 0; j < nprobe; j++){
-                int cluster_id = assignments[i * nprobe + j];
-                float sqr_y = sqr_dist<B>(rd_query, index->centroid + cluster_id * B);
-                float vl, vr;
-                index->space.range(rd_query, index->centroid + cluster_id * B, vl, vr);
-                float width = (vr - vl) / ((1 << B_QUERY) - 1);
-                uint32_t sum_q = 0;
-                index->space.quantize(byte_query, rd_query, index->centroid + cluster_id * B, index->u, vl, width, sum_q);
-                uint8_t PORTABLE_ALIGN32 LUT[B/4*16];
-                pack_LUT<B>(byte_query, LUT);
-                index->fast_scan_with_rerank(KNNs, distK, nrerank, LUT, index->packed_code + index->packed_start[cluster_id],
-                                index->len[cluster_id], index->fac + index->start[cluster_id],
-                                sqr_y, vl, width, sum_q, query, index->data + index->start[cluster_id] * D,
-                                index->id + index->start[cluster_id]);
-            }
-
-            // Extract results (they come in reverse order from heap)
-            std::vector<std::pair<float, uint32_t>> res_vec;
-            while (!KNNs.empty()) {
-                res_vec.push_back(KNNs.top());
-                KNNs.pop();
             }
             std::reverse(res_vec.begin(), res_vec.end());
 
@@ -383,9 +218,10 @@ public:
 
         int thread_num = omp_get_max_threads();
         // Search each query
+        cout << "[C++ Search] Number of threads: " << thread_num <<endl;
         #pragma omp parallel for num_threads(thread_num)
         for (uint32_t i = 0; i < nq; i++) {
-
+            
             ResultHeap result = index->search_and_rerank(
                 queries + i * D,
                 rd_queries + i * B,
@@ -507,18 +343,6 @@ PYBIND11_MODULE(rabitq_cpp, m) {
              py::arg("rd_queries"),
              py::arg("k"),
              py::arg("nprobe"))
-        .def("search_clusters", &PyIVFRN<128,128>::search_clusters,
-            py::arg("queries"),
-            py::arg("rd_queries"),
-            py::arg("assignments"),
-            py::arg("k"))
-        .def("search_and_rerank_clusters", &PyIVFRN<128,128>::search_and_rerank_clusters,
-            py::arg("queries"),
-            py::arg("rd_queries"),
-            py::arg("assignments"),
-            py::arg("k"),
-            py::arg("nrerank")
-        )
         .def("save", &PyIVFRN<128, 128>::save,
              py::arg("filename"))
         .def("load", &PyIVFRN<128, 128>::load,
@@ -551,18 +375,6 @@ PYBIND11_MODULE(rabitq_cpp, m) {
              py::arg("rd_queries"),
              py::arg("k"),
              py::arg("nprobe"))
-        .def("search_clusters", &PyIVFRN<960,960>::search_clusters,
-            py::arg("queries"),
-            py::arg("rd_queries"),
-            py::arg("assignments"),
-            py::arg("k"))
-        .def("search_and_rerank_clusters", &PyIVFRN<960,960>::search_and_rerank_clusters,
-            py::arg("queries"),
-            py::arg("rd_queries"),
-            py::arg("assignments"),
-            py::arg("k"),
-            py::arg("nrerank")
-        )
         .def("save", &PyIVFRN<960, 960>::save,
              py::arg("filename"))
         .def("load", &PyIVFRN<960, 960>::load,

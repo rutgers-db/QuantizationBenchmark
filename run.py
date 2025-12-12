@@ -129,28 +129,7 @@ def parse_algorithm_string(algo_string: str):
 
 def save_results(results, output_dir: str = "benchmark/results"):
     """
-    Save benchmark results to JSON file with hierarchical structure.
-
-    New structure:
-    [
-        {
-            "experiment_type": "quantizer" or "ivf",
-            "results": [
-                {
-                    "build_params": {...},
-                    "search_results": [
-                        {
-                            "search_params": {...},
-                            "metrics": {...}
-                        },
-                        ...
-                    ]
-                },
-                ...
-            ]
-        },
-        ...
-    ]
+    Save benchmark results to JSON file.
 
     Args:
         results: Benchmark results (dict or list of dicts)
@@ -172,49 +151,28 @@ def save_results(results, output_dir: str = "benchmark/results"):
             return obj.tolist()
         return obj
 
-    # Ensure results is a list
-    if not isinstance(results, list):
-        results = [results]
+    # Handle single result or list of results
+    if isinstance(results, list):
+        # Multiple configurations
+        first_result = results[0]
+        algo_str = first_result['quantizer']
+        if first_result.get('dimreduction'):
+            algo_str = f"{first_result['dimreduction']}_{algo_str}"
 
-    if not results:
-        return
+        filename = f"{first_result['dataset']}_{algo_str}.json"
 
-    # Extract metadata from first result
-    first_result = results[0]
-    algo_str = first_result['quantizer']
-    if first_result.get('dimreduction'):
-        algo_str = f"{first_result['dimreduction']}_{algo_str}"
-    filename = f"{first_result['dataset']}_{algo_str}.json"
+        # Convert all results (convert_types now handles exclusion recursively)
+        serializable_results = [convert_types(result) for result in results]
+    else:
+        # Single configuration
+        algo_str = results['quantizer']
+        if results.get('dimreduction'):
+            algo_str = f"{results['dimreduction']}_{algo_str}"
 
-    # Group results by experiment type (IVF vs quantizer)
-    ivf_results = []
-    quantizer_results = []
+        filename = f"{results['dataset']}_{algo_str}.json"
 
-    for result in results:
-        # Check if this is an IVF result
-        is_ivf = (result.get('quantizer_config', {}).get('build_params', {}).get('nlist') is not None or
-                  'nlist' in str(result.get('quantizer_config', {})))
-
-        if is_ivf:
-            ivf_results.append(result)
-        else:
-            quantizer_results.append(result)
-
-    # Structure the output
-    structured_output = []
-
-    # Add IVF experiments first
-    if ivf_results:
-        ivf_experiment = _structure_experiment_results("ivf", ivf_results)
-        structured_output.append(ivf_experiment)
-
-    # Add quantizer experiments
-    if quantizer_results:
-        quantizer_experiment = _structure_experiment_results("quantizer", quantizer_results)
-        structured_output.append(quantizer_experiment)
-
-    # Convert to serializable format
-    serializable_results = convert_types(structured_output)
+        # Convert result (convert_types now handles exclusion recursively)
+        serializable_results = convert_types(results)
 
     filepath = os.path.join(output_dir, filename)
 
@@ -223,90 +181,6 @@ def save_results(results, output_dir: str = "benchmark/results"):
         json.dump(serializable_results, f, indent=2)
 
     print(f"\nResults saved to: {filepath}")
-
-
-def _structure_experiment_results(experiment_type: str, results: list) -> dict:
-    """
-    Structure results for a single experiment type.
-
-    Args:
-        experiment_type: "ivf" or "quantizer"
-        results: List of result dicts
-
-    Returns:
-        Structured experiment dict
-    """
-    from collections import defaultdict
-    import json
-
-    # Group by build_params
-    grouped = defaultdict(list)
-    for result in results:
-        # Extract build params
-        if 'quantizer_config' in result and 'build_params' in result['quantizer_config']:
-            build_params = result['quantizer_config']['build_params']
-        else:
-            build_params = result.get('quantizer_config', {})
-
-        # Use JSON as key for grouping
-        build_key = json.dumps(build_params, sort_keys=True)
-        grouped[build_key].append(result)
-
-    # Build-related metrics (shared across all searches with same build params)
-    build_metrics_keys = {
-        'training_time (s)', 'training_time',
-        'quantizer_memory (KB)', 'quantizer_memory',
-        'quantizer_compression_rate', 'compression_rate',
-        'mse',
-        'dim_reduction_time', 'dim_reduction_model_memory',
-        'dim_reduction_compression_rate',
-        'original_dimension', 'reduced_dimension',
-        'total_compression_rate'
-    }
-
-    # Structure the output
-    experiment_results = []
-    for build_key, group_results in grouped.items():
-        build_params = json.loads(build_key)
-
-        # Extract build metrics from first result (they should be same for all results in group)
-        build_metrics = {}
-        if group_results:
-            first_result = group_results[0]
-            for key in build_metrics_keys:
-                if key in first_result:
-                    build_metrics[key] = first_result[key]
-
-        # Collect search results
-        search_results = []
-        for result in group_results:
-            # Extract search params
-            if 'quantizer_config' in result and 'search_params' in result['quantizer_config']:
-                search_params = result['quantizer_config']['search_params']
-            else:
-                search_params = {}
-
-            # Extract search-specific metrics (query time, recall, etc.)
-            search_metrics = {k: v for k, v in result.items()
-                             if k not in ['quantizer_config', 'dimreduction_config', 'status',
-                                         'dataset', 'quantizer', 'dimreduction']
-                             and k not in build_metrics_keys}
-
-            search_results.append({
-                "search_params": search_params,
-                "metrics": search_metrics
-            })
-
-        experiment_results.append({
-            "build_params": build_params,
-            "build_metrics": build_metrics,
-            "search_results": search_results
-        })
-
-    return {
-        "experiment_type": experiment_type,
-        "results": experiment_results
-    }
 
 
 def main():
