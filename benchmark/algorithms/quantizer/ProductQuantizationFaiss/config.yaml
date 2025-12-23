@@ -6,10 +6,10 @@ sift-128-euclidean:
   common:
     data_bytes: 4
     ndim: 128
-    nthread: 32
+    nthread: 4
     space: "l2"
   build:
-    nsubvec: [8]
+    nsubvec: [16]
     nbit: [8]
   search:
     - topk: 100

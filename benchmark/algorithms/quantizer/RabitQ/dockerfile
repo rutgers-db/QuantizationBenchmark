@@ -39,7 +39,8 @@ RUN pip install --no-cache-dir \
     h5py \
     pyyaml \
     psutil \
-    pybind11
+    pybind11 \
+    faiss-cpu
 
 # Copy the benchmark framework code
 COPY benchmark/ /benchmark/

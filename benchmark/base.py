@@ -90,6 +90,37 @@ class BaseQuantizer(ABC):
             float: Mean squared error
         """
         pass
+    
+    @abstractmethod
+    def set_query(self, query: np.ndarray, thread_id: int) -> None:
+        """
+        This should be called before estimate_distance so that the distance table of the query can be pre-computed.
+
+        This method is used by graph algorithms to prepare for distance computations.
+
+        Args:
+            query: numpy float32 array of query vector
+
+        Returns:
+            None
+        """
+        pass
+
+    @abstractmethod
+    def estimate_distance(self, idx: int, thread_id: int) -> float:
+        """
+        Given an idx, estimate the distance between the previously set query and the idx.
+
+        This method is used by graph algorithms for approximate distance computation during search.
+        set_query() must be called before using this method.
+
+        Args:
+            idx: int - index of the data point
+
+        Returns:
+            float: estimated distance
+        """
+        pass
 
 
     def searchAndRerank(self, nq: int, queries: np.ndarray, topk: int, nrerank: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
@@ -212,5 +243,67 @@ class BaseDimReduction(ABC):
 
         Returns:
             float: Compression rate (higher is better)
+        """
+        pass
+
+
+class BaseGraphIndex(ABC):
+    """
+    Base class for graph-based index algorithms (e.g., DiskANN, HNSW, NSG).
+
+    Graph algorithms can use quantizers for approximate distance computation
+    during search by calling the quantizer's set_query() and estimate_distance() methods.
+    """
+
+    def __init__(self, quantizer: BaseQuantizer, **kwargs):
+        """
+        Initialize the graph index with a quantizer.
+
+        Args:
+            quantizer: A quantizer instance that implements set_query() and estimate_distance()
+            **kwargs: Algorithm-specific parameters
+        """
+        self.quantizer = quantizer
+        self._original_data = None
+
+    @abstractmethod
+    def build(self, nd: int, data: np.ndarray) -> bool:
+        """
+        Build the graph index on the given data.
+
+        Args:
+            nd: Number of data vectors
+            data: Training data of shape (nd, d) where d is the dimensionality
+
+        Returns:
+            bool: True if building was successful, False otherwise
+        """
+        pass
+
+    @abstractmethod
+    def search(self, nq: int, queries: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Search for the top-k nearest neighbors for each query.
+
+        Args:
+            nq: Number of query vectors
+            queries: Query vectors of shape (nq, d) where d is the dimensionality
+            topk: Number of nearest neighbors to return
+            **search_params: Optional search-time parameters (e.g., search_list_size, beam_width)
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray]:
+                - I: Indices of nearest neighbors, shape (nq, topk)
+                - D: Distances to nearest neighbors, shape (nq, topk)
+        """
+        pass
+
+    @abstractmethod
+    def getMemoryUsage(self) -> float:
+        """
+        Get the memory usage of the graph index in KB.
+
+        Returns:
+            float: Memory usage in KB
         """
         pass

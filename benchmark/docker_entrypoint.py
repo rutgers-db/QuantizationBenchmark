@@ -19,7 +19,7 @@ def load_module_class(module_path: str, base_class_name: str):
 
     Args:
         module_path: Path to the Python module file
-        base_class_name: Name of the base class (e.g., 'BaseQuantizer')
+        base_class_name: Name of the base class (e.g., 'BaseQuantizer', 'BaseGraphIndex')
 
     Returns:
         The loaded class
@@ -30,12 +30,14 @@ def load_module_class(module_path: str, base_class_name: str):
     spec.loader.exec_module(module)
 
     # Find the class that inherits from the base class
-    from benchmark.base import BaseQuantizer, BaseDimReduction
+    from benchmark.base import BaseQuantizer, BaseDimReduction, BaseGraphIndex
 
     if base_class_name == 'BaseQuantizer':
         base_class = BaseQuantizer
     elif base_class_name == 'BaseDimReduction':
         base_class = BaseDimReduction
+    elif base_class_name == 'BaseGraphIndex':
+        base_class = BaseGraphIndex
     else:
         raise ValueError(f"Unknown base class: {base_class_name}")
 
@@ -314,6 +316,132 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
     print(f"\nResults saved to {output_path}")
 
 
+def run_graph(input_path: str, output_path: str, quantizer_module_path: str, graph_module_path: str):
+    """
+    Run graph algorithm with quantizer.
+
+    Args:
+        input_path: Path to input pickle file
+        output_path: Path to output pickle file
+        quantizer_module_path: Path to quantizer module
+        graph_module_path: Path to graph module
+    """
+    # Load input data
+    with open(input_path, 'rb') as f:
+        input_data = pickle.load(f)
+
+    train_data = input_data['train_data']
+    test_data = input_data['test_data']
+    ground_truth = input_data['ground_truth']
+    config = input_data['config']
+
+    graph_params = config.get('graph_params', {})
+    quantizer_params = config.get('quantizer_params', {})
+
+    print(f"Train data shape: {train_data.shape}")
+    print(f"Test data shape: {test_data.shape}")
+    print(f"Ground truth shape: {ground_truth.shape}")
+    print(f"Graph params: {graph_params}")
+    print(f"Quantizer params: {quantizer_params}")
+
+    # Load algorithm classes
+    QuantizerClass = load_module_class(quantizer_module_path, 'BaseQuantizer')
+    GraphClass = load_module_class(graph_module_path, 'BaseGraphIndex')
+
+    # Instantiate quantizer
+    # Extract build_params for quantizer initialization
+    print("\n=== Initializing Quantizer ===")
+    quantizer_build_params = quantizer_params.get('build_params', {})
+    quantizer = QuantizerClass(**quantizer_build_params)
+
+    # Train quantizer
+    print("\n=== Training Quantizer ===")
+    start_time = time.time()
+    nd, d = train_data.shape
+    success = quantizer.fit(nd, train_data)
+    training_time = time.time() - start_time
+
+    if not success:
+        raise RuntimeError("Quantizer training failed")
+
+    print(f"Training time: {training_time:.4f}s")
+
+    # Instantiate graph with quantizer
+    # Extract build_params for graph initialization
+    print("\n=== Initializing Graph Index ===")
+    graph_build_params = graph_params.get('build_params', {})
+    graph_index = GraphClass(quantizer=quantizer, **graph_build_params)
+
+    # Build graph
+    print("\n=== Building Graph Index ===")
+    start_time = time.time()
+    success = graph_index.build(nd, train_data)
+    build_time = time.time() - start_time
+
+    if not success:
+        raise RuntimeError("Graph index build failed")
+
+    print(f"Build time: {build_time:.4f}s")
+
+    # Search with multiple parameter sets
+    print("\n=== Searching ===")
+    nq = test_data.shape[0]
+
+    # Get search parameter configurations
+    search_params_list = graph_params.get('search_params_list', [{}])
+
+    all_results = []
+    for idx, search_params in enumerate(search_params_list):
+        # Extract topk from search_params
+        search_params_copy = search_params.copy()
+        topk = search_params_copy.pop('topk', 100)
+        print(f"\nSearch configuration {idx + 1}/{len(search_params_list)}: {search_params}")
+
+        start_time = time.time()
+        I, D = graph_index.search(nq, test_data, topk, **search_params_copy)
+        query_time = time.time() - start_time
+
+        # Calculate metrics
+        recall = calculate_recall(I, ground_truth[:, :topk])
+        map_score = calculate_map(I, ground_truth[:, :topk])
+        recall_at_1 = calculate_recall_at_1(I, ground_truth[:, :topk])
+
+        print(f"  Query time: {query_time:.4f}s")
+        print(f"  Queries per second: {len(test_data) / query_time:.2f}")
+        print(f"  Recall@{topk}: {recall:.4f}")
+        print(f"  MAP@{topk}: {map_score:.4f}")
+        print(f"  Recall@1: {recall_at_1:.4f}")
+
+        # Collect results for this configuration
+        result = {
+            'search_params': search_params,
+            'query_time': query_time,
+            'queries_per_second': len(test_data) / query_time if query_time > 0 else 0,
+            'recall': recall,
+            'map': map_score,
+            'recall@1': recall_at_1,
+            'predictions': I,
+            'distances': D
+        }
+        all_results.append(result)
+
+    # Prepare final output with training/build times and all search results
+    output = {
+        'training_time': training_time,
+        'build_time': build_time,
+        'quantizer_memory': quantizer.getMemoryUsage(),
+        'graph_memory': graph_index.getMemoryUsage(),
+        'compression_rate': quantizer.getCompressionRate(),
+        'mse': quantizer.getMSE(),
+        'search_results': all_results
+    }
+
+    with open(output_path, 'wb') as f:
+        pickle.dump(output, f)
+
+    print(f"\nResults saved to {output_path}")
+
+
 def calculate_recall(predictions: np.ndarray, ground_truth: np.ndarray) -> float:
     """
     Calculate recall@k.
@@ -399,11 +527,13 @@ def calculate_recall_at_1(predictions: np.ndarray, ground_truth: np.ndarray) -> 
 
 def main():
     parser = argparse.ArgumentParser(description='Docker entrypoint for running algorithms')
-    parser.add_argument('--mode', required=True, choices=['quantizer', 'dimreduction'],
-                        help='Mode: quantizer or dimreduction')
+    parser.add_argument('--mode', required=True, choices=['quantizer', 'dimreduction', 'graph'],
+                        help='Mode: quantizer, dimreduction, or graph')
     parser.add_argument('--input', required=True, help='Input pickle file path')
     parser.add_argument('--output', required=True, help='Output pickle file path')
-    parser.add_argument('--module', required=True, help='Algorithm module path')
+    parser.add_argument('--module', help='Algorithm module path (for quantizer/dimreduction)')
+    parser.add_argument('--quantizer-module', help='Quantizer module path (for graph)')
+    parser.add_argument('--graph-module', help='Graph module path (for graph)')
 
     args = parser.parse_args()
 
@@ -411,13 +541,20 @@ def main():
     print(f"Mode: {args.mode}")
     print(f"Input: {args.input}")
     print(f"Output: {args.output}")
-    print(f"Module: {args.module}")
+    if args.module:
+        print(f"Module: {args.module}")
+    if args.quantizer_module:
+        print(f"Quantizer Module: {args.quantizer_module}")
+    if args.graph_module:
+        print(f"Graph Module: {args.graph_module}")
     print()
 
     if args.mode == 'dimreduction':
         run_dimreduction(args.input, args.output, args.module)
     elif args.mode == 'quantizer':
         run_quantizer(args.input, args.output, args.module)
+    elif args.mode == 'graph':
+        run_graph(args.input, args.output, args.quantizer_module, args.graph_module)
 
 
 if __name__ == '__main__':
