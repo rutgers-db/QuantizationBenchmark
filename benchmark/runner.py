@@ -169,8 +169,8 @@ def _expand_search_experiments(experiments: List[Dict[str, Any]]) -> List[Dict[s
 
     Each experiment in the list can have:
     - topk: int (required)
-    - nrerank: list or int (optional)
-    - other search params (will be included as-is)
+    - nrerank: list or int (optional) - kept as list for docker_entrypoint.py to handle
+    - other search params - if list values, will be expanded via Cartesian product
 
     Args:
         experiments: List of experiment configurations
@@ -190,16 +190,37 @@ def _expand_search_experiments(experiments: List[Dict[str, Any]]) -> List[Dict[s
         # Get other params (excluding topk and nrerank)
         other_params = {k: v for k, v in exp.items() if k not in ['topk', 'nrerank']}
 
-        if nrerank is None:
-            # No nrerank - create single search config
-            search_params = {'topk': topk}
-            search_params.update(other_params)
-            result.append(search_params)
+        # Separate list and fixed params in other_params
+        list_params = {}
+        fixed_params = {}
+        for key, value in other_params.items():
+            if isinstance(value, list):
+                list_params[key] = value
+            else:
+                fixed_params[key] = value
+
+        # Generate all combinations of list params
+        if list_params:
+            param_names = list(list_params.keys())
+            param_values = [list_params[name] for name in param_names]
+
+            for combination in product(*param_values):
+                search_params = {'topk': topk}
+                # Add nrerank (keep as list if present)
+                if nrerank is not None:
+                    search_params['nrerank'] = nrerank
+                # Add fixed params
+                search_params.update(fixed_params)
+                # Add expanded list params
+                for name, value in zip(param_names, combination):
+                    search_params[name] = value
+                result.append(search_params)
         else:
-            # nrerank specified - keep as list in single search config
-            # docker_entrypoint.py handles nrerank as list correctly
-            search_params = {'topk': topk, 'nrerank': nrerank}
-            search_params.update(other_params)
+            # No list params to expand
+            search_params = {'topk': topk}
+            if nrerank is not None:
+                search_params['nrerank'] = nrerank
+            search_params.update(fixed_params)
             result.append(search_params)
 
     return result
@@ -303,15 +324,20 @@ class BenchmarkRunner:
         4. Default: config.yaml contains parameters directly
 
         Args:
-            algo_type: 'quantizer' or 'dimreduction'
+            algo_type: 'quantizer', 'dimreduction', or 'graph'
             algo_name: Name of the algorithm
 
         Returns:
             List of configuration dicts for the current dataset
         """
-        config_path = os.path.join(
-            "benchmark/algorithms", algo_type, algo_name, "config.yaml"
-        )
+        if algo_type == 'graph':
+            config_path = os.path.join(
+                "benchmark/graphs", algo_name, "config.yaml"
+            )
+        else:
+            config_path = os.path.join(
+                "benchmark/algorithms", algo_type, algo_name, "config.yaml"
+            )
 
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
@@ -348,8 +374,10 @@ class BenchmarkRunner:
         self,
         quantizer_name: str,
         dimreduction_name: Optional[str] = None,
+        graph_name: Optional[str] = None,
         quantizer_config: Optional[Dict[str, Any]] = None,
         dimreduction_config: Optional[Dict[str, Any]] = None,
+        graph_config: Optional[Dict[str, Any]] = None,
         run_all_configs: bool = False
     ) -> Dict[str, Any]:
         """
@@ -358,8 +386,10 @@ class BenchmarkRunner:
         Args:
             quantizer_name: Name of the quantizer algorithm
             dimreduction_name: Optional name of dimensionality reduction algorithm
+            graph_name: Optional name of graph algorithm
             quantizer_config: Optional config overrides for quantizer
             dimreduction_config: Optional config overrides for dimreduction
+            graph_config: Optional config overrides for graph
             run_all_configs: If True, run all configs from YAML and return list of results
 
         Returns:
@@ -367,31 +397,55 @@ class BenchmarkRunner:
         """
         # If run_all_configs is True, load all configs and run them
         if run_all_configs:
-            quantizer_configs = self.load_config('quantizer', quantizer_name)
-            dimreduction_configs = None
-            if dimreduction_name:
-                dimreduction_configs = self.load_config('dimreduction', dimreduction_name)
+            if graph_name:
+                # Load graph config
+                graph_configs = self.load_config('graph', graph_name)
+                quantizer_configs = self.load_config('quantizer', quantizer_name)
 
-            # Group configs by build_params to avoid redundant building
-            grouped_configs = group_configs_by_build_params(quantizer_configs)
+                # Group configs by build_params to avoid redundant building
+                grouped_configs = group_configs_by_build_params(graph_configs)
 
-            all_results = []
-            for i, q_config in enumerate(grouped_configs):
-                # If dimreduction has configs, use the corresponding one (or first one)
-                dr_config = None
-                if dimreduction_configs:
-                    dr_config = dimreduction_configs[i] if i < len(dimreduction_configs) else dimreduction_configs[0]
+                all_results = []
+                for i, g_config in enumerate(grouped_configs):
+                    # Use corresponding quantizer config or first one
+                    q_config = quantizer_configs[i] if i < len(quantizer_configs) else quantizer_configs[0]
 
-                result = self._run_single_benchmark(
-                    quantizer_name, dimreduction_name, q_config, dr_config
-                )
-                # If result is a list (from build/search separation), extend all_results
-                if isinstance(result, list):
-                    all_results.extend(result)
-                else:
-                    all_results.append(result)
+                    result = self._run_graph_benchmark(
+                        graph_name, quantizer_name, g_config, q_config
+                    )
+                    # If result is a list (from build/search separation), extend all_results
+                    if isinstance(result, list):
+                        all_results.extend(result)
+                    else:
+                        all_results.append(result)
 
-            return all_results
+                return all_results
+            else:
+                quantizer_configs = self.load_config('quantizer', quantizer_name)
+                dimreduction_configs = None
+                if dimreduction_name:
+                    dimreduction_configs = self.load_config('dimreduction', dimreduction_name)
+
+                # Group configs by build_params to avoid redundant building
+                grouped_configs = group_configs_by_build_params(quantizer_configs)
+
+                all_results = []
+                for i, q_config in enumerate(grouped_configs):
+                    # If dimreduction has configs, use the corresponding one (or first one)
+                    dr_config = None
+                    if dimreduction_configs:
+                        dr_config = dimreduction_configs[i] if i < len(dimreduction_configs) else dimreduction_configs[0]
+
+                    result = self._run_single_benchmark(
+                        quantizer_name, dimreduction_name, q_config, dr_config
+                    )
+                    # If result is a list (from build/search separation), extend all_results
+                    if isinstance(result, list):
+                        all_results.extend(result)
+                    else:
+                        all_results.append(result)
+
+                return all_results
 
         # Single benchmark run
         # Load configs from YAML if not provided
@@ -540,6 +594,110 @@ class BenchmarkRunner:
 
             # Add quantizer results
             result.update(search_result)
+            all_results.append(result)
+
+        return all_results
+
+    def _run_graph_benchmark(
+        self,
+        graph_name: str,
+        quantizer_name: str,
+        graph_config: Dict[str, Any],
+        quantizer_config: Dict[str, Any]
+    ):
+        """
+        Run a benchmark with graph + quantizer.
+
+        Args:
+            graph_name: Name of the graph algorithm
+            quantizer_name: Name of the quantizer
+            graph_config: Config for graph (may contain search_params_list)
+            quantizer_config: Config for quantizer
+
+        Returns:
+            Dict containing all benchmark results, or List[Dict] if grouped config
+        """
+        # Check if this is a grouped config (build/search separation with multiple searches)
+        if 'search_params_list' in graph_config:
+            # TODO: Implement grouped graph benchmark if needed
+            pass
+
+        results = {
+            'dataset': self.dataset_name,
+            'graph': graph_name,
+            'quantizer': quantizer_name,
+            'graph_config': graph_config,
+            'quantizer_config': quantizer_config,
+        }
+
+        print(f"\n{'='*60}")
+        print(f"Graph + Quantizer Benchmark: {graph_name} + {quantizer_name}")
+        print(f"{'='*60}")
+
+        # Build combined Docker image
+        if not self.docker_runner.build_graph_image(graph_name, quantizer_name):
+            results['status'] = 'failed'
+            results['error'] = f'Failed to build graph+quantizer image: {graph_name}+{quantizer_name}'
+            return results
+
+        # Merge configs for the docker entrypoint
+        combined_config = {
+            'graph_params': graph_config,
+            'quantizer_params': quantizer_config
+        }
+
+        # Run in Docker
+        graph_results = self.docker_runner.run_graph(
+            graph_name,
+            quantizer_name,
+            self.train_data,
+            self.test_data,
+            self.ground_truth,
+            combined_config
+        )
+
+        if graph_results is None:
+            results['status'] = 'failed'
+            results['error'] = 'Graph benchmark failed'
+            return [results]
+
+        # Handle the new result structure with search_results list
+        # graph_results now has: training_time, build_time, search_results (list)
+        search_results_list = graph_results.get('search_results', [])
+
+        if not search_results_list:
+            # No search results, return error
+            results['status'] = 'failed'
+            results['error'] = 'No search results returned'
+            return [results]
+
+        # Create one result dict per search configuration
+        all_results = []
+        for search_result in search_results_list:
+            result = {
+                'dataset': self.dataset_name,
+                'graph': graph_name,
+                'quantizer': quantizer_name,
+                'graph_config': graph_config,
+                'quantizer_config': quantizer_config,
+                'status': 'success',
+                # Add common metrics
+                'training_time': graph_results.get('training_time'),
+                'build_time': graph_results.get('build_time'),
+                'quantizer_memory': graph_results.get('quantizer_memory'),
+                'graph_memory': graph_results.get('graph_memory'),
+                'compression_rate': graph_results.get('compression_rate'),
+                'mse': graph_results.get('mse'),
+                # Add search-specific metrics
+                'search_params': search_result.get('search_params', {}),
+                'query_time': search_result.get('query_time'),
+                'queries_per_second': search_result.get('queries_per_second'),
+                'recall': search_result.get('recall'),
+                'map': search_result.get('map'),
+                'recall@1': search_result.get('recall@1'),
+                'predictions': search_result.get('predictions'),
+                'distances': search_result.get('distances')
+            }
             all_results.append(result)
 
         return all_results

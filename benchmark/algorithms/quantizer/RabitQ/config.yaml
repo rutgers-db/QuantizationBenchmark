@@ -8,9 +8,13 @@ sift-128-euclidean:
     ndim: 128          # Dimensionality
     nthread: 16        # Number of threads for parallel processing
     space: "l2"        # Distance metric (l2 for Euclidean distance)
-  build: {}            # No build-specific parameters for RaBitQ
+  build:
+    nlist: [256, 512]
   search:
-    topk: 100          # Number of nearest neighbors to retrieve (default: 100)
+    - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
+      nprobe: [1,10,20]
+      nrerank: [100, 200]
+
     # Optional: Add nrerank values for search_and_rerank test
     # nrerank: [100, 200]  # If not specified, defaults to [topk, 2*topk]
 

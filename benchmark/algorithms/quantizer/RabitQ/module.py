@@ -3,7 +3,7 @@ from typing import Tuple
 import psutil
 import sys
 import os
-
+import faiss
 # Add benchmark to path for importing BaseQuantizer
 sys.path.insert(0, '/benchmark')
 from benchmark.base import BaseQuantizer
@@ -22,7 +22,7 @@ class RabitQ(BaseQuantizer):
     Uses IVF with C=1 for brute-force search with optimized distance computation.
     """
 
-    def __init__(self, ndim, data_bytes, nthread=1, space="l2"):
+    def __init__(self, ndim, nlist, data_bytes, nthread=1, space="l2"):
         """
         Initialize RaBitQ quantizer.
 
@@ -37,6 +37,9 @@ class RabitQ(BaseQuantizer):
         self.data_bytes = data_bytes
         self.nthread = nthread
         self.space = space
+        self.nlist = nlist
+        self.coarse_quantizer = None
+        self.coarse_index = None
 
         # Round B up to multiple of 64
         self.b_dim = ((ndim + 63) // 64) * 64
@@ -95,6 +98,19 @@ class RabitQ(BaseQuantizer):
             self.data = np.ascontiguousarray(data, dtype=np.float32)
             self._original_data = self.data  # For default search_and_rerank
             self.ndata = nd
+            kmeans = faiss.Kmeans(
+                d=self.ndim,
+                k=self.nlist,
+                niter=25,
+                verbose=False,
+                seed=1234
+            )
+            kmeans.train(data)
+            self.coarse_quantizer = kmeans.centroids
+            self.coarse_index = faiss.IndexFlatL2(self.ndim)
+            self.coarse_index.add(self.coarse_quantizer)
+            _, self.assignments = self.coarse_index.search(data, 1)
+            self.assignments = self.assignments.flatten()
 
             # Pad data to b_dim
             max_bd = max(self.ndim, self.b_dim)
@@ -104,41 +120,47 @@ class RabitQ(BaseQuantizer):
             np.random.seed(0)
 
             # Generate orthogonal projection matrix
-            import time
-            t0 = time.time()
             P = self._orthogonal_matrix(max_bd)
             self.projection_matrix = P
 
-            # For C=1, we use a single centroid which is the mean of the dataset
-            # This is critical: centroid MUST be the dataset mean
-            self.centroid_orig = np.mean(self.data, axis=0, keepdims=True).astype('float32')
+            # Pad centroids
+            centroids = kmeans.centroids.astype('float32')
+            centroids_pad = np.pad(centroids, ((0, 0), (0, max_bd - self.ndim)), 'constant').astype('float32')
 
-            centroid_pad = np.pad(self.centroid_orig, ((0, 0), (0, max_bd - self.ndim)), 'constant').astype('float32')
-
-            # Project data and centroid
-            t0 = time.time()
-            XP = data_pad @ P  # (nd, max_bd)
-            t_matmul = time.time() - t0
-
-            CP = centroid_pad @ P  # (1, max_bd)
+            # Project centroids
+            CP = centroids_pad @ P  # (nclusters, max_bd)
             self.randomized_centroid = CP
 
-            # All data points belong to cluster 0
-            cluster_id = np.zeros(nd, dtype=np.uint32)
+            # Store the original centroids
+            self.centroid_orig = centroids
 
-            # Compute distance to centroid (before projection)
-            dist_to_c = np.linalg.norm(self.data - self.centroid_orig, axis=1).astype('float32')
+            # Project data
+            XP = data_pad @ P  # (nd, max_bd)
+
+            # Prepare arrays for all data points
+            cluster_id = self.assignments.astype(np.uint32)
+
+            # Compute distance to assigned centroid (before projection)
+            # For each point, compute distance to its assigned centroid
+            dist_to_c = np.zeros(nd, dtype=np.float32)
+            for i in range(nd):
+                cluster = cluster_id[i]
+                dist_to_c[i] = np.linalg.norm(self.data[i] - centroids[cluster])
+
             self.dist_to_centroid = dist_to_c
 
-            # Subtract centroid from projected data
-            XP_residual = XP - CP[0]  # (nd, max_bd)
+            # Compute residuals: subtract assigned centroid from projected data
+            XP_residual = np.zeros_like(XP)
+            for i in range(nd):
+                cluster = cluster_id[i]
+                XP_residual[i] = XP[i] - CP[cluster]
 
             # Generate binary codes (first b_dim dimensions)
             bin_XP = (XP_residual[:, :self.b_dim] > 0).astype(np.bool_)
             self.bin_XP = bin_XP
 
             # Compute x0 values
-            # x0 = sum(XP * sign(bin_XP) / sqrt(B)) / ||XP||
+            # x0 = sum(XP_residual * sign(bin_XP) / sqrt(B)) / ||XP_residual||
             x0 = np.sum(
                 XP_residual[:, :self.b_dim] * (2 * bin_XP - 1) / np.sqrt(self.b_dim),
                 axis=1,
@@ -150,7 +172,6 @@ class RabitQ(BaseQuantizer):
             self.x0_values = x0.flatten().astype('float32')
 
             # Pack binary codes into uint64
-            # Flatten and pack
             bin_XP_flat = bin_XP.flatten()
             num_uint64 = self.b_dim // 64
 
@@ -159,13 +180,10 @@ class RabitQ(BaseQuantizer):
             binary_codes = binary_codes.reshape(nd, num_uint64)
             self.binary_codes = binary_codes
 
-            # Build C++ index if available
+            # Build C++ index
             if self.cpp_index is not None:
-                # Prepare data for C++ index
-                # IMPORTANT: Store all arrays as class members to prevent Python GC
-                # C++ index may hold pointers to these arrays
-
-                # centroids: (1, b_dim)
+                # Store all arrays as class members to prevent Python GC
+                # centroids: (nclusters, b_dim)
                 self._cpp_centroids = CP[:, :self.b_dim].astype('float32')
 
                 # dist_to_centroid: (nd,)
@@ -174,14 +192,13 @@ class RabitQ(BaseQuantizer):
                 # x0: (nd,)
                 self._cpp_x0 = self.x0_values.astype('float32')
 
-                # cluster_id: (nd,) all zeros
+                # cluster_id: (nd,)
                 self._cpp_cluster_id = cluster_id.astype('uint32')
 
                 # binary_codes: (nd, b_dim//64)
                 self._cpp_binary = self.binary_codes.astype('uint64')
 
                 # Build index - pass the stored member variables
-                t0 = time.time()
                 self.cpp_index.build(
                     self.data,
                     self._cpp_centroids,
@@ -190,6 +207,7 @@ class RabitQ(BaseQuantizer):
                     self._cpp_cluster_id,
                     self._cpp_binary
                 )
+
             self.trained = True
             return True
 
@@ -218,8 +236,9 @@ class RabitQ(BaseQuantizer):
             raise RuntimeError("Index not trained. Call fit() first.")
 
         queries = queries.astype(np.float32)
-        # nprobe is always 1 since we only have C=1 (single centroid)
-        nprobe = 1
+        
+        nprobe = search_params.get("nprobe", 1)
+        _, assignments = self.coarse_index.search(queries, nprobe)
 
         # C++ implementation is required
         if self.cpp_index is None:
@@ -234,7 +253,7 @@ class RabitQ(BaseQuantizer):
         rd_queries = rd_queries[:, :self.b_dim].astype('float32')
 
         # Call C++ search
-        I, D = self.cpp_index.search(queries, rd_queries, topk, nprobe)
+        I, D = self.cpp_index.search_clusters(queries, rd_queries, assignments, topk)
 
         return I, D
 
@@ -276,12 +295,14 @@ class RabitQ(BaseQuantizer):
         """
         if not self.trained or self.data is None:
             return float('inf')
-
         
-        bin_XP = (2 * self.bin_XP - 1)/np.sqrt(self.ndim)
-        o_bar = bin_XP @ self.projection_matrix + self.centroid_orig
-        mse = np.mean(np.sum((self.data - o_bar) ** 2, axis = 1))
-        return mse            
+        # Get centroid for each data point using assignments
+        assigned_centroids = self.centroid_orig[self.assignments]  # Shape: (nd, ndim)
+
+        bin_XP = (2 * self.bin_XP - 1) / np.sqrt(self.ndim)
+        o_bar = bin_XP @ self.projection_matrix[:self.b_dim, :self.ndim].T + assigned_centroids
+        mse = np.mean(np.sum((self.data - o_bar) ** 2, axis=1))
+        return mse    
 
         
 
@@ -309,8 +330,9 @@ class RabitQ(BaseQuantizer):
             raise RuntimeError("Index not trained. Call fit() first.")
 
         queries = queries.astype(np.float32)
-        # nprobe is always 1 since we only have C=1 (single centroid)
-        nprobe = 1
+        
+        nprobe = search_params.get("nprobe", 1)
+        _, assignments = self.coarse_index.search(queries, nprobe)
 
         # C++ implementation is required
         if self.cpp_index is None:
@@ -325,6 +347,6 @@ class RabitQ(BaseQuantizer):
         rd_queries = rd_queries[:, :self.b_dim].astype('float32')
 
         # Call C++ search_and_rerank
-        I, D = self.cpp_index.search_and_rerank(queries, rd_queries, topk, nprobe, nrerank)
+        I, D = self.cpp_index.search_and_rerank_clusters(queries, rd_queries, assignments, topk, nrerank)
 
         return I, D

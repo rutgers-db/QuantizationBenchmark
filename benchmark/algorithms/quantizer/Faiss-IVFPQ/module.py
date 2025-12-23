@@ -11,33 +11,35 @@ from benchmark.base import BaseQuantizer
 
 
 class ProductQuantizationFaiss(BaseQuantizer):
-    def __init__(self, ndim, nsubvec, nbit, data_bytes, nthread = 1, space = "l2"):
+    def __init__(self, ndim, nlist, nsubvec, nbit, data_bytes, nthread = 1, space = "l2"):
         super().__init__()
         self.ndim = ndim
         self.nsubvec = nsubvec
         self.nbit = nbit
-        self.index = faiss.IndexPQ(ndim, nsubvec, nbit)
+        self.coarse_quantizer = faiss.IndexFlatL2(ndim)
+        self.index = faiss.IndexIVFPQ(self.coarse_quantizer, ndim, nlist, nsubvec, nbit)
         self.space = space
         self.data_bytes = data_bytes
-        self.data = None
-        self.ndata = 0
         self.nthread = nthread
         faiss.omp_set_num_threads(nthread)
+        self.refine = faiss.IndexFlatL2(self.ndim)
         self.dc = None
-        pass
 
 
 
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
-        self.data = data
         self.ndata = nd
+        self.data = data
         try:
             # Faiss train expects just the data, not the count
             self.index.train(data)
             # Add vectors to index for querying
             self.index.add(data)
             
+            self.index.make_direct_map(True)
+            
+            self.refine.add(data)
             self.dc = self.index.get_distance_computer()
         except Exception as e:
             print(f"Training error: {e}")
@@ -69,16 +71,12 @@ class ProductQuantizationFaiss(BaseQuantizer):
         return mse
     
     def searchAndRerank(self, nq, query, topk, nrerank):
-        refine = faiss.IndexFlatL2(self.ndim)
-        refine.add(self.data)
-
-        refiner = faiss.IndexRefine(self.index, refine)
+        refiner = faiss.IndexRefine(self.index, self.refine)
         refiner.k_factor = nrerank / topk
         D, I = refiner.search(query, topk)
         return I, D
     
     def set_query(self, query, thread_id):
-        # Ensure query is a contiguous float32 array for Faiss SWIG interface
         self.dc.set_query(faiss.swig_ptr(query))
         
     def estimate_distance(self, idx, thread_id):
