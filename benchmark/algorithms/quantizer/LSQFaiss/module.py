@@ -4,7 +4,6 @@ from typing import Tuple
 import psutil
 import sys
 
-# 让 benchmark 可被导入
 sys.path.insert(0, '/benchmark')
 from benchmark.base import BaseQuantizer
 
@@ -15,15 +14,10 @@ class LSQFaiss(BaseQuantizer):
         self.ndim = ndim
         self.nsubvec = nsubvec
         self.nbit = nbit
-        # NOTE:
-        # - 在 PyPI 的 faiss-cpu 里通常没有 IndexLSQ 这个符号（会触发 AttributeError）
-        # - 但 faiss 提供了 LSQ（Local Search Quantizer）对应的 IndexLocalSearchQuantizer
         metric = faiss.METRIC_L2 if str(space).lower() == "l2" else faiss.METRIC_INNER_PRODUCT
         try:
-            # 新版/完整绑定通常支持传 metric
             self.index = faiss.IndexLocalSearchQuantizer(ndim, nsubvec, nbit, metric)
         except TypeError:
-            # 兼容部分绑定签名：不接受 metric 参数
             self.index = faiss.IndexLocalSearchQuantizer(ndim, nsubvec, nbit)
         self.space = space
         self.data_bytes = data_bytes
@@ -33,9 +27,8 @@ class LSQFaiss(BaseQuantizer):
         faiss.omp_set_num_threads(nthread)
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
-        # Faiss 通常要求 float32
         self.data = data.astype(np.float32, copy=False)
-        self._original_data = self.data  # 默认 rerank 用
+        self._original_data = self.data
         self.ndata = nd
         try:
             self.index.train(self.data)
