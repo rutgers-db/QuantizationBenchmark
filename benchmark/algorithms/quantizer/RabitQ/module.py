@@ -297,13 +297,20 @@ class RabitQ(BaseQuantizer):
             return float('inf')
         
         # Get centroid for each data point using assignments
-        assigned_centroids = self.centroid_orig[self.assignments]  # Shape: (nd, ndim)
+        # assigned_centroids = self.centroid_orig[self.assignments]  # Shape: (nd, ndim)
 
-        bin_XP = (2 * self.bin_XP - 1) / np.sqrt(self.ndim)
-        o_bar = bin_XP @ self.projection_matrix[:self.b_dim, :self.ndim].T + assigned_centroids
-        mse = np.mean(np.sum((self.data - o_bar) ** 2, axis=1))
-        return mse    
+        # bin_XP = (2 * self.bin_XP - 1) / np.sqrt(self.ndim)
+        # o_bar = bin_XP @ self.projection_matrix[:self.b_dim, :self.ndim].T + assigned_centroids
+        # mse = np.mean(np.sum((self.data - o_bar) ** 2, axis=1))
+        # return mse    
+        max_bd = max(self.ndim, self.b_dim)
+        queries_pad = np.pad(self.data, ((0, 0), (0, max_bd - self.ndim)), 'constant').astype('float32')
 
+        # Project queries (randomized queries)
+        rd_queries = queries_pad @ self.projection_matrix  # (nq, max_bd)
+        rd_queries = rd_queries[:, :self.b_dim].astype('float32')
+        
+        return self.cpp_index.getMSE(self.data, rd_queries)
         
 
     def searchAndRerank(self, nq: int, queries: np.ndarray, topk: int, nrerank: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
@@ -350,3 +357,16 @@ class RabitQ(BaseQuantizer):
         I, D = self.cpp_index.search_and_rerank_clusters(queries, rd_queries, assignments, topk, nrerank)
 
         return I, D
+
+    def set_query(self, query, thread_id):
+        query = query.astype(np.float32).reshape(1, self.ndim)
+        max_bd = max(self.ndim, self.b_dim)
+        queries_pad = np.pad(query, ((0, 0), (0, max_bd - self.ndim)), 'constant').astype('float32')
+
+        # Project queries (randomized queries)
+        rd_queries = queries_pad @ self.projection_matrix  # (1, max_bd)
+        rd_queries = rd_queries[:, :self.b_dim].astype('float32')
+        self.cpp_index.set_query(queries_pad, rd_queries)
+        
+    def estimate_distance(self, idx: int, thread_id: int) -> float:
+        return self.cpp_index.estimate_distance(idx)

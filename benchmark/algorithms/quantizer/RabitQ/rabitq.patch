@@ -1,5 +1,96 @@
+diff --git a/data/ivf.py b/data/ivf.py
+index ac2600b..35245c6 100644
+--- a/data/ivf.py
++++ b/data/ivf.py
+@@ -5,14 +5,14 @@ import struct
+ import os
+ from utils.io import *
+ 
+-source = './'
++source = '/data/local/embedding_dataset/sift1M'
+ 
+ if __name__ == '__main__':
+ 
+     dataset = 'sift'
+     print(f"Clustering - {dataset}")
+     # path
+-    path = os.path.join(source, dataset)
++    path = source
+     data_path = os.path.join(path, f'{dataset}_base.fvecs')
+     X = read_fvecs(data_path)
+     D = X.shape[1]    
+diff --git a/data/rabitq.py b/data/rabitq.py
+index cf03787..84df2a4 100644
+--- a/data/rabitq.py
++++ b/data/rabitq.py
+@@ -6,7 +6,7 @@ import os
+ from utils.io import *
+ from tqdm import tqdm
+ 
+-source = './'
++source = '/data/local/embedding_dataset/sift1M'
+ datasets = ['sift']
+ 
+ def Orthogonal(D):
+@@ -25,7 +25,7 @@ if __name__ == "__main__":
+     
+     for dataset in datasets:
+         # path
+-        path                    = os.path.join(source, dataset)
++        path                    = source
+         data_path               = os.path.join(path, f'{dataset}_base.fvecs')
+         
+         C = 4096
+diff --git a/script/index.sh b/script/index.sh
+index 8d66c37..b1b2370 100755
+--- a/script/index.sh
++++ b/script/index.sh
+@@ -1,5 +1,5 @@
+ 
+-C=4096
++C=1
+ data='sift'
+ D=128
+ B=128
+diff --git a/src/index.cpp b/src/index.cpp
+index 5fbdcf7..1c84849 100644
+--- a/src/index.cpp
++++ b/src/index.cpp
+@@ -58,25 +58,25 @@ int main(int argc, char * argv[]) {
+     char cluster_id_path[256] = "";
+     char binary_path[256] = "";
+ 
+-    sprintf(data_path, "%s%s_base.fvecs", source, dataset);
++    sprintf(data_path, "%s/sift_base.fvecs", source);
+     Matrix<float> X(data_path);
+     
+-    sprintf(centroid_path, "%sRandCentroid_C%d_B%d.fvecs", source, numC, BB);
++    sprintf(centroid_path, "%s/RandCentroid_C%d_B%d.fvecs", source, numC, BB);
+     Matrix<float> C(centroid_path);
+ 
+-    sprintf(x0_path, "%sx0_C%d_B%d.fvecs", source, numC, BB);
++    sprintf(x0_path, "%s/x0_C%d_B%d.fvecs", source, numC, BB);
+     Matrix<float> x0(x0_path);
+ 
+-    sprintf(dist_to_centroid_path, "%s%s_dist_to_centroid_%d.fvecs", source, dataset, numC);
++    sprintf(dist_to_centroid_path, "%s/sift_dist_to_centroid_%d.fvecs", source, numC);
+     Matrix<float> dist_to_centroid(dist_to_centroid_path);
+     
+-    sprintf(cluster_id_path, "%s%s_cluster_id_%d.ivecs", source, dataset, numC);
++    sprintf(cluster_id_path, "%s/sift_cluster_id_%d.ivecs", source, numC);
+     Matrix<uint32_t> cluster_id(cluster_id_path);
+     
+-    sprintf(binary_path, "%sRandNet_C%d_B%d.Ivecs", source, numC, BB);
++    sprintf(binary_path, "%s/RandNet_C%d_B%d.Ivecs", source, numC, BB);
+     Matrix<uint64_t> binary(binary_path);
+ 
+-    sprintf(index_path, "%sivfrabitq%d_B%d.index", source, numC, BB);
++    sprintf(index_path, "%s/ivfrabitq%d_B%d.index", source, numC, BB);
+     std::cerr << "Loading Succeed!" << std::endl << std::endl;
+     // ==============================================================================================================
+ 
 diff --git a/src/ivf_rabitq.h b/src/ivf_rabitq.h
-index 8b4d9ca..bbf346f 100644
+index 8b4d9ca..cc9f200 100644
 --- a/src/ivf_rabitq.h
 +++ b/src/ivf_rabitq.h
 @@ -56,7 +56,7 @@ public:
@@ -17,7 +108,7 @@ index 8b4d9ca..bbf346f 100644
  
 +    ResultHeap search_and_rerank(float* query, float* rd_query, uint32_t k, uint32_t nprobe, float distK = std::numeric_limits<float>::max()) const;
 +
-+    static void fast_scan_with_rerank(ResultHeap &KNNs, float &distK, uint32_t k, \
++    static uint32_t fast_scan_with_rerank(ResultHeap &KNNs, float &distK, uint32_t k, \
 +                        uint8_t *LUT, uint8_t *packed_code, uint32_t len, Factor *ptr_fac, \
 +                        const float  sqr_y, const float vl, const float  width, const float sumq,\
 +                        float *query, float *data, uint32_t *id);
@@ -65,12 +156,12 @@ index 8b4d9ca..bbf346f 100644
                  // cerr << *ptr_low_dist << " " << gt_dist << endl;
                  if(gt_dist < distK){
                      KNNs.emplace(gt_dist, *id);
-@@ -276,7 +284,128 @@ ResultHeap IVFRN<D, B>::search(float* query, float* rd_query, uint32_t k, uint32
+@@ -276,7 +284,132 @@ ResultHeap IVFRN<D, B>::search(float* query, float* rd_query, uint32_t k, uint32
      return KNNs;
  }
  
 +template <uint32_t D, uint32_t B>
-+void IVFRN<D, B>::fast_scan_with_rerank(ResultHeap &KNNs, float &distK, uint32_t k, \
++uint32_t IVFRN<D, B>::fast_scan_with_rerank(ResultHeap &KNNs, float &distK, uint32_t k, \
 +                        uint8_t *LUT, uint8_t *packed_code,  uint32_t len, Factor *ptr_fac, \
 +                        const float sqr_y, const float vl, const float width, const float sumq, \
 +                        float *query, float *data, uint32_t *id){
@@ -83,6 +174,7 @@ index 8b4d9ca..bbf346f 100644
 +    uint32_t it = len / SIZE;
 +    uint32_t remain = len - it * SIZE;
 +    uint32_t nblk_remain = (remain + 31) / 32;
++    uint32_t rerank_cnt = 0;
 +    
 +    while(it --){
 +        float low_dist[SIZE];
@@ -102,6 +194,7 @@ index 8b4d9ca..bbf346f 100644
 +        for(int j=0;j<SIZE;j++){
 +            if(*ptr_low_dist < distK){
 +                float gt_dist = sqr_dist<D>(query, data);
++                rerank_cnt++;
 +                if(gt_dist < distK){
 +                    KNNs.emplace(gt_dist, *id);
 +                    if(KNNs.size() > k) KNNs.pop();
@@ -131,6 +224,7 @@ index 8b4d9ca..bbf346f 100644
 +        ptr_low_dist = &low_dist[0];
 +        for(int i=0;i<remain;i++){
 +            if(*ptr_low_dist < distK){
++                rerank_cnt++;
 +                float gt_dist = sqr_dist<D>(query, data);
 +                if(gt_dist < distK){
 +                    KNNs.emplace(gt_dist, *id);
@@ -143,6 +237,7 @@ index 8b4d9ca..bbf346f 100644
 +            id++;
 +        }
 +    }
++    return rerank_cnt;
 +}
 +
 +template <uint32_t D, uint32_t B>
@@ -194,7 +289,7 @@ index 8b4d9ca..bbf346f 100644
  
  
  // ==============================================================================================================================
-@@ -435,7 +564,9 @@ IVFRN<D, B>::IVFRN(const Matrix<float> &X, const Matrix<float> &_centroids, cons
+@@ -435,7 +568,9 @@ IVFRN<D, B>::IVFRN(const Matrix<float> &X, const Matrix<float> &_centroids, cons
  
      centroid        = new float [C * B];
      data            = new float [1ull * N * D];
@@ -205,7 +300,7 @@ index 8b4d9ca..bbf346f 100644
  
      std::memcpy(centroid, _centroids.data, C * B * sizeof(float));
      float * data_ptr = data;
-@@ -448,6 +579,35 @@ IVFRN<D, B>::IVFRN(const Matrix<float> &X, const Matrix<float> &_centroids, cons
+@@ -448,6 +583,35 @@ IVFRN<D, B>::IVFRN(const Matrix<float> &X, const Matrix<float> &_centroids, cons
          data_ptr += D;
          binary_code_ptr += B / 64;
      }
@@ -241,7 +336,7 @@ index 8b4d9ca..bbf346f 100644
  }
  
  template <uint32_t D, uint32_t B>
-@@ -461,6 +621,7 @@ IVFRN<D, B>::~IVFRN(){
+@@ -461,6 +625,7 @@ IVFRN<D, B>::~IVFRN(){
      if(fac != NULL)         delete [] fac;
      if(u  != NULL)          delete [] u;
      if(binary_code != NULL) std::free(binary_code);
@@ -251,3 +346,73 @@ index 8b4d9ca..bbf346f 100644
 +    if(packed_start != NULL) delete [] packed_start;
 +    if(centroid != NULL)    delete[] centroid;
  }
+diff --git a/src/search.cpp b/src/search.cpp
+index 357b81c..b01da9c 100644
+--- a/src/search.cpp
++++ b/src/search.cpp
+@@ -34,6 +34,9 @@ void test(const Matrix<float> &Q, const Matrix<float> &RandQ, const Matrix<float
+         int correct = 0;
+ 
+         for(int i=0;i<Q.n;i++){
++            if (i % 1000 == 0){
++                cout << i << endl;
++            }
+             GetCurTime( &run_start);
+             ResultHeap KNNs = ivf.search(Q.data + i * Q.d, RandQ.data + i * RandQ.d, k, nprobe);
+             GetCurTime( &run_end);
+@@ -109,30 +112,30 @@ int main(int argc, char * argv[]) {
+     // ================================================================================================================================
+     // Data Files
+     char query_path[256] = "";
+-    sprintf(query_path, "%s%s_query.fvecs", source, dataset);
++    sprintf(query_path, "%s/sift_query.fvecs", source);
+     Matrix<float> Q(query_path);
+ 
+     char data_path[256] = "";
+-    sprintf(data_path, "%s%s_base.fvecs", source, dataset);
++    sprintf(data_path, "%s/sift_base.fvecs", source);
+     Matrix<float> X(data_path);
+ 
+     char groundtruth_path[256] = "";
+-    sprintf(groundtruth_path, "%s%s_groundtruth.ivecs", source, dataset);
++    sprintf(groundtruth_path, "%s/sift_groundtruth.ivecs", source);
+     Matrix<unsigned> G(groundtruth_path);
+     
+     char transformation_path[256] = "";
+-    sprintf(transformation_path, "%sP_C%d_B%d.fvecs", source, numC, BB);
++    sprintf(transformation_path, "%s/P_C%d_B%d.fvecs", source, numC, BB);
+     Matrix<float> P(transformation_path);
+ 
+     char index_path[256] = "";
+-    sprintf(index_path, "%sivfrabitq%d_B%d.index", source, numC, BB);
++    sprintf(index_path, "%s/ivfrabitq%d_B%d.index", source, numC, BB);
+     std::cerr << index_path << std::endl;
+ #if defined(FAST_SCAN)
+     char result_file_view[256] = "";
+-    sprintf(result_file_view, "%s%s_ivfrabitq%d_B%d_fast_scan.log", result_path, dataset, numC, BB);
++    sprintf(result_file_view, "%s/ivfrabitq%d_B%d_fast_scan.log", result_path, numC, BB);
+ #elif defined(SCAN)
+     char result_file_view[256] = "";
+-    sprintf(result_file_view, "%s%s_ivfrabitq%d_B%d_scan.log", result_path, dataset, numC, BB);
++    sprintf(result_file_view, "%s/ivfrabitq%d_B%d_scan.log", result_path, numC, BB);
+ #endif
+     std::cerr << "Loading Succeed!" << std::endl;
+     // ================================================================================================================================
+@@ -142,6 +145,8 @@ int main(int argc, char * argv[]) {
+     
+     IVFRN<DIM, BB> ivf;
+     ivf.load(index_path);
++
++    cout << "after load ivfrn"<<endl;
+     
+     float sys_t, usr_t, usr_t_sum = 0, total_time=0, search_time=0;
+     struct rusage run_start, run_end;
+@@ -149,6 +154,8 @@ int main(int argc, char * argv[]) {
+ 
+     Matrix<float> RandQ(Q.n, BB, Q);
+     RandQ = mul(RandQ, P);
++
++    cout << "after matrix multiplicatio "<<endl;
+     
+     GetCurTime( &run_end);
+     GetTime( &run_start, &run_end, &usr_t, &sys_t);
