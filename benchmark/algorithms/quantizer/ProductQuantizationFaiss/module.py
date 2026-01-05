@@ -65,6 +65,21 @@ class ProductQuantizationFaiss(BaseQuantizer):
         recons = np.zeros_like(self.data)
         self.index.reconstruct_n(0,self.ndata,recons)
         se_per_row = np.sum((recons - self.data)**2, axis=1)
+
+        # Calculate norms of original vectors
+        norms = np.linalg.norm(self.data, axis=1)
+
+        # Estimate inner product: (se_per_row - 2 * norm) / (-2)
+        estimated_ip = (se_per_row - 2 * norms) / (-2)
+
+        # Calculate difference between estimated IP and norms
+        ip_norm_diff = estimated_ip - norms
+        
+        abs_ip_diff = np.abs(ip_norm_diff)
+        
+        ip_diff = np.mean(abs_ip_diff)
+        print(ip_diff)
+
         mse = np.mean(se_per_row)
         return mse
     

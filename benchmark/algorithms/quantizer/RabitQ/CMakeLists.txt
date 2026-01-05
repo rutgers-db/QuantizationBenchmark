@@ -1,8 +1,13 @@
 cmake_minimum_required(VERSION 3.12)
 project(rabitq_cpp)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# # Disable stripping of debug symbols
+# set(CMAKE_BUILD_TYPE Debug)
+# set(CMAKE_SKIP_BUILD_RPATH FALSE)
+# set(CMAKE_SKIP_INSTALL_RPATH FALSE)
 
 # Find Python and pybind11
 find_package(Python COMPONENTS Interpreter Development REQUIRED)
@@ -26,7 +31,10 @@ include_directories(/usr/include/eigen3)
 include_directories(/usr/local/include/eigen3)
 
 # Compiler flags for AVX2 and optimizations
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -march=native -mavx2 -mfma")
+# Add -g for debug symbols, -O0 for no optimization (easier debugging)
+# Switch to -O3 for production builds
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O0 -march=native -mavx2 -mfma")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -mavx2 -mfma -O3")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DEIGEN_DONT_PARALLELIZE -DFAST_SCAN -DUSE_AVX2")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 
@@ -36,6 +44,14 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DnumC=1 -DDIM=128 -DBB=128 -DB_QUERY=4"
 
 # Create Python module
 pybind11_add_module(rabitq_cpp rabitq_binding.cpp)
+
+# # Force debug symbols and disable stripping
+# target_compile_options(rabitq_cpp PRIVATE -g -O0)
+# target_link_options(rabitq_cpp PRIVATE -g)
+# set_target_properties(rabitq_cpp PROPERTIES
+#     LINK_FLAGS "-g"
+#     STRIP FALSE
+# )
 
 # Link against required libraries
 target_link_libraries(rabitq_cpp PRIVATE OpenMP::OpenMP_CXX)

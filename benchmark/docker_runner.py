@@ -120,12 +120,21 @@ class DockerRunner:
         Returns:
             bool: True if build succeeded
         """
-        graph_dir = os.path.join(self.graph_path, graph_name)
-        dockerfile_path = os.path.join(graph_dir, "dockerfile")
+        # First check if quantizer has a custom dockerfile for this graph
+        quantizer_dir = os.path.join(self.quantizer_path, quantizer_name)
+        custom_dockerfile = os.path.join(quantizer_dir, f"{graph_name}_dockerfile")
 
-        if not os.path.exists(dockerfile_path):
-            print(f"Error: Dockerfile not found at {dockerfile_path}")
-            return False
+        if os.path.exists(custom_dockerfile):
+            dockerfile_path = custom_dockerfile
+            print(f"Using custom dockerfile for {quantizer_name} + {graph_name}: {custom_dockerfile}")
+        else:
+            # Use the graph's default dockerfile
+            graph_dir = os.path.join(self.graph_path, graph_name)
+            dockerfile_path = os.path.join(graph_dir, "dockerfile")
+
+            if not os.path.exists(dockerfile_path):
+                print(f"Error: Dockerfile not found at {dockerfile_path}")
+                return False
 
         # Image name includes both graph and quantizer
         image_name = f"quantbench-graph-{graph_name.lower()}-{quantizer_name.lower()}:latest"

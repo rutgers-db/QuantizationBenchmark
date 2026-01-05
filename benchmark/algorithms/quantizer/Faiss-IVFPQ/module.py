@@ -17,6 +17,7 @@ class ProductQuantizationFaiss(BaseQuantizer):
         self.nsubvec = nsubvec
         self.nbit = nbit
         self.coarse_quantizer = faiss.IndexFlatL2(ndim)
+        self.nlist = nlist
         self.index = faiss.IndexIVFPQ(self.coarse_quantizer, ndim, nlist, nsubvec, nbit)
         self.space = space
         self.data_bytes = data_bytes
@@ -50,6 +51,8 @@ class ProductQuantizationFaiss(BaseQuantizer):
     def query(self, nq: int, query: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
         # Faiss search expects (queries, k), not (nq, queries, k)
         # search_params are ignored for PQ (no search-time parameters)
+        nprobe = search_params.get('nprobe', self.nlist)
+        self.index.nprobe = nprobe
         D, I = self.index.search(query, topk)
         return I, D
 
@@ -70,7 +73,9 @@ class ProductQuantizationFaiss(BaseQuantizer):
         mse = np.mean(se_per_row)
         return mse
     
-    def searchAndRerank(self, nq, query, topk, nrerank):
+    def searchAndRerank(self, nq, query, topk, nrerank, **search_params):
+        nprobe = search_params.get('nprobe', self.nlist)
+        self.index.nprobe = nprobe
         refiner = faiss.IndexRefine(self.index, self.refine)
         refiner.k_factor = nrerank / topk
         D, I = refiner.search(query, topk)
