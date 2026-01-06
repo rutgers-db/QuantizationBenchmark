@@ -22,6 +22,8 @@
 #include "utils/StopW.hpp"
 #include "utils/memory.hpp"
 #include "utils/space.hpp"
+#include "utils/defines.hpp"
+
 
 class IVF {
    private:
@@ -331,28 +333,66 @@ void IVF::load(const char* filename) {
 }
 
 
-float IVF::get_mse(const float* __restrict__ data, int ndata, int nlist) const {
+float IVF::get_mse(const float* __restrict__ data, size_t ndata, int nlist) const {
     float total_num = 0;
     double total_mse = 0;
-    float* recover_vector = new float[DIM];
+    float* bin_recover_vector = new float[D];
+    FloatRowMat data_rotate(ndata, D);
+    FloatRowMat data_recover(ndata, D);
+    FloatRowMat data_pad(ndata, D);
+    for(size_t i = 0 ; i < ndata ; i++){
+        std::memcpy(&data_pad(i, 0), data + i * D, this->D * sizeof(float));
+    }
+
+    Rota.rotate(data_pad, data_rotate);
+
     for(int i = 0 ; i < nlist; i++){
         float* cur_centroid = this->initer->centroid(i);
         const Cluster& cur_cluster = ClusterLst[i];
         PID* ids = cur_cluster.ids();
+        FloatRowMat centroids_rotate(1, D);
+        std::memcpy(&centroids_rotate(0, 0), cur_centroid, this->D * sizeof(float));
+        
         for(int j = 0 ; j < cur_cluster.num() ; j++){
-            const float* query = data + ids[j] * D;
-            norm = query - cur_centroid
+            
+            data_rotate.row(ids[j]) = data_rotate.row(ids[j]) - centroids_rotate.row(0);  // residual
+        }
+    }
+
+     for(int i = 0 ; i < nlist; i++){
+        float* cur_centroid = this->initer->centroid(i);
+        const Cluster& cur_cluster = ClusterLst[i];
+        PID* ids = cur_cluster.ids();
+        FloatRowMat centroids_rotate(1, D);
+        std::memcpy(&centroids_rotate(0, 0), cur_centroid, this->D * sizeof(float));
+        
+        for(size_t j = 0 ; j < cur_cluster.num() ; j++){
             uint8_t* long_code = cur_cluster.long_code + j * DQ.long_code_length();
             uint8_t* short_code = cur_cluster.short_data + j * DQ.short_code_length();
-            recover_data(long_code, short_code, EX_BITS, dim , recover_vector)
-            // TODO: Norm and rotator
+            recover_data(long_code, short_code, EX_BITS, D , bin_recover_vector);
+            std::memcpy(&recover_vector(ids[j], 0), bin_recover_vector, this->D * sizeof(float));
             
         }
-        SHORT_DATA_CUR_CLUSTER += cur_cluster.num
 
     }
-    delete recover_vector
-    return total_mse / total_num;
+
+    double data_rotate_norm;
+    double diff_norm;
+    FloatRowMat recover_norm = recover.rowwise().normalized();
+    FloatRowMat data_rotate_norm = data_rotate.rowwise().normalized();
+    FloatRowMat diff = data_rotate_norm - data_recover; 
+
+    for(int i = 0 ; i < ndata ; i++){
+        data_rotate_norm =  data_rotate.row(i).norm();
+        diff_norm = diff.row(i).norm();
+        total_mse = total_mse * double(i) / double(i+1) + diff_norm * data_rotate_norm / double(i+1);
+    }
+    
+
+
+
+    delete bin_recover_vector;
+    return total_mse / (float) ndata;
 
 }
 

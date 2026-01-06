@@ -79,9 +79,8 @@ class Index{
                 free_when_done_dist));
         }
 
-        float getMSE(){
-            nlist =  ivf -> ClusterLst.size();
-            return 
+        double getMSE(){
+            return ivf->get_mse();
         }
 
 

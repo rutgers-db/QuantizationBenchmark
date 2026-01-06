@@ -41,7 +41,7 @@ class ExtendedRabitQNTU(BaseQuantizer):
 
 
     def getMSE(self) -> float:
-        return 0
+        return self.Index.get_mse()
 
 
 
