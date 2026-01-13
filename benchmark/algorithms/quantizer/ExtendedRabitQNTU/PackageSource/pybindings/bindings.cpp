@@ -1,5 +1,5 @@
-#define HIGH_ACC_FAST_SCAN
-#define EIGEN_DONT_PARALLELIZE
+// #define HIGH_ACC_FAST_SCAN
+// #define EIGEN_DONT_PARALLELIZE
 #include <fstream>
 #include <iostream>
 #include <unordered_set>
@@ -20,27 +20,32 @@ class Index{
     uint32_t dim;
     uint32_t Nlist = 1;
     uint32_t bit;
-
     float * data;
+    float * centroids;
+    uint32_t * ids;
     size_t ndata;
+    bool constructed = false;
 
     public:
         Index(uint32_t D, uint32_t B):dim(D),bit(B)
         {}
         ~Index(){delete ivf;}
-        py::object train(py::object input, py::object centroids, py::object cids, size_t N, int num_threads = -1){
+        void train(py::object input, py::object centroids_input, py::object cids, size_t N,  int num_threads = -1){
             py::array_t < float, py::array::c_style | py::array::forcecast > data_items(input);
-            py::array_t < float, py::array::c_style | py::array::forcecast > centroids_items(centroids);
+            py::array_t < float, py::array::c_style | py::array::forcecast > centroids_items(centroids_input);
             py::array_t < uint32_t, py::array::c_style | py::array::forcecast > cids_items(cids);
             ndata = N;
 
             float* data_ptr = static_cast<float*> (data_items.request().ptr);
             float* centroids_ptr = static_cast<float*> (centroids_items.request().ptr);
             uint32_t* cids_ptr = static_cast<uint32_t*> (cids_items.request().ptr);
-            data = data_ptr;
 
-            ivf = new IVF(N, dim, Nlist, bit);
+            data = data_ptr;
+            centroids = centroids_ptr;
+            ids = cids_ptr;
+            ivf = new IVF(N, dim, 1, bit);
             ivf->construct(data_ptr, centroids_ptr, cids_ptr);
+            constructed = true;
         }
         py::object search(py::object input, size_t NQ, size_t TOPK = 1, int num_threads = -1){
             py::array_t < float, py::array::c_style | py::array::forcecast > items(input);
@@ -79,9 +84,11 @@ class Index{
                 free_when_done_dist));
         }
 
-        float getMSE(){
-            nlist =  ivf -> ClusterLst.size();
-            return 
+        double getMSE(){
+            if(!constructed){
+                throw std::runtime_error("MSE must be used after index constructed");
+            }
+            return ivf->get_mse(data, centroids, ids); 
         }
 
 
@@ -91,6 +98,7 @@ class Index{
 
 PYBIND11_PLUGIN(ExtendedRabitQ) {
     py::module m("ExtendedRabitQ");
+    py::module m_ha("ExtendedRabitQ_HighAcc");
 
     py::class_<Index>(m, "Index")
     .def(py::init<uint32_t, uint32_t>(), py::arg("D"), py::arg("B"))
@@ -98,4 +106,13 @@ PYBIND11_PLUGIN(ExtendedRabitQ) {
     .def("search", &Index::search, py::arg("input") , py::arg("NQ"), py::arg("TOPK") = 1, py::arg("num_threads") = -1)
     .def("getMSE", &Index::getMSE);
     return m.ptr();
+
+
+    py::class_<Index>(m_ha, "Index")
+    .def(py::init<uint32_t, uint32_t>(), py::arg("D"), py::arg("B"))
+    .def("train", &Index::train, py::arg("input"), py::arg("centroids"), py::arg("cids"), py::arg("N"), py::arg("num_threads")  = -1)
+    .def("search", &Index::search, py::arg("input") , py::arg("NQ"), py::arg("TOPK") = 1, py::arg("num_threads") = -1)
+    .def("getMSE", &Index::getMSE);
+    return m.ptr();
 }
+
