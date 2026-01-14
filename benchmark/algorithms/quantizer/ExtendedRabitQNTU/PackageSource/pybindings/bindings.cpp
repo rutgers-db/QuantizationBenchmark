@@ -20,9 +20,6 @@ class Index{
     uint32_t dim;
     uint32_t Nlist = 1;
     uint32_t bit;
-    float * data;
-    float * centroids;
-    uint32_t * ids;
     size_t ndata;
     bool constructed = false;
 
@@ -40,9 +37,6 @@ class Index{
             float* centroids_ptr = static_cast<float*> (centroids_items.request().ptr);
             uint32_t* cids_ptr = static_cast<uint32_t*> (cids_items.request().ptr);
 
-            data = data_ptr;
-            centroids = centroids_ptr;
-            ids = cids_ptr;
             ivf = new IVF(N, dim, 1, bit);
             ivf->construct(data_ptr, centroids_ptr, cids_ptr);
             constructed = true;
@@ -84,11 +78,18 @@ class Index{
                 free_when_done_dist));
         }
 
-        double getMSE(){
+        double getMSE(py::object input, py::object centroids_input, py::object cids, size_t N,  int num_threads = -1){
+            py::array_t < float, py::array::c_style | py::array::forcecast > data_items(input);
+            py::array_t < float, py::array::c_style | py::array::forcecast > centroids_items(centroids_input);
+            py::array_t < uint32_t, py::array::c_style | py::array::forcecast > cids_items(cids);
+            ndata = N;
             if(!constructed){
                 throw std::runtime_error("MSE must be used after index constructed");
             }
-            return ivf->get_mse(data, centroids, ids); 
+            float* data_ptr = static_cast<float*> (data_items.request().ptr);
+            float* centroids_ptr = static_cast<float*> (centroids_items.request().ptr);
+            uint32_t* cids_ptr = static_cast<uint32_t*> (cids_items.request().ptr);
+            return ivf->get_mse(data_ptr,centroids_ptr, cids_ptr); 
         }
 
 
@@ -96,23 +97,28 @@ class Index{
 };
 
 
-PYBIND11_PLUGIN(ExtendedRabitQ) {
-    py::module m("ExtendedRabitQ");
-    py::module m_ha("ExtendedRabitQ_HighAcc");
+#ifdef HIGH_ACC_FAST_SCAN
+#define MODULE_NAME ExtendedRabitQ_HighAcc
+struct IndexHA:public Index{using Index::Index;};
+#else
+#define MODULE_NAME ExtendedRabitQ
+struct IndexNHA:public Index{using Index::Index;};
+#endif
+PYBIND11_MODULE(MODULE_NAME, m) {
 
-    py::class_<Index>(m, "Index")
+#ifdef HIGH_ACC_FAST_SCAN
+    py::class_<IndexHA>(m, "Index")
     .def(py::init<uint32_t, uint32_t>(), py::arg("D"), py::arg("B"))
     .def("train", &Index::train, py::arg("input"), py::arg("centroids"), py::arg("cids"), py::arg("N"), py::arg("num_threads")  = -1)
     .def("search", &Index::search, py::arg("input") , py::arg("NQ"), py::arg("TOPK") = 1, py::arg("num_threads") = -1)
     .def("getMSE", &Index::getMSE);
-    return m.ptr();
-
-
-    py::class_<Index>(m_ha, "Index")
+#else
+    py::class_<IndexNHA>(m, "Index")
     .def(py::init<uint32_t, uint32_t>(), py::arg("D"), py::arg("B"))
     .def("train", &Index::train, py::arg("input"), py::arg("centroids"), py::arg("cids"), py::arg("N"), py::arg("num_threads")  = -1)
     .def("search", &Index::search, py::arg("input") , py::arg("NQ"), py::arg("TOPK") = 1, py::arg("num_threads") = -1)
     .def("getMSE", &Index::getMSE);
-    return m.ptr();
+#endif
+    // return m.ptr();
 }
 
