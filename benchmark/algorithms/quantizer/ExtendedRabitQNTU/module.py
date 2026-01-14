@@ -18,16 +18,24 @@ class ExtendedRabitQNTU(BaseQuantizer):
         self.nbit = nbit
         self.nthread = nthread
         faiss.omp_set_num_threads(nthread)
-        self.data_bytes = data_bytes 
+        self.data_bytes = data_bytes
+        self.data = None
+        self.centroids = None
+        self.IDs = None
+        self.nd = None
 
 
     
 
     def fit(self, nd:int, data: np.ndarray):
         try:
+            self.data = data
             centroids = np.mean(data, axis = 1)
             cids = np.zeros(nd)
-            self.Index.train(data,centroids,nd, self.nthread)
+            self.centroids = centroids
+            self.IDs = cids
+            self.nd = nd
+            self.Index.train(self.data,self.centroids, self.IDs,nd,  self.nthread)
         except Exception as e:
             print(f"Training error: {e}")
             return False
@@ -40,6 +48,16 @@ class ExtendedRabitQNTU(BaseQuantizer):
         return I ,D
 
 
+    def searchAndRerank(self, nq, query, topk, nrerank, **search_params):
+        I,D = self.Index.search(query, nq, nrerank)
+        selected = self.data[I]
+        diff = selected - query[:, None, :]
+        D = np.linalg.norm(diff, axis=2)
+        topk_idx = np.argsort(D, axis=1)[:, :topk]   
+        I  = np.take_along_axis(I, topk_idx, axis=1)
+        D = np.take_along_axis(D, topk_idx, axis = 1)
+        return I,D
+
     def getMemoryUsage(self) -> float:
         return psutil.Process().memory_info().rss/1024
 
@@ -48,9 +66,9 @@ class ExtendedRabitQNTU(BaseQuantizer):
 
 
     def getMSE(self) -> float:
-        return self.Index.getMSE()
+        return self.Index.getMSE(self.data,self.centroids, self.IDs,self.nd,  self.nthread)
 
-    def set_query(self, query, thread_id) :
+    def set_query(self, query, thread_id):
         pass
 
     def estimate_distance(self, idx, thread_id):
