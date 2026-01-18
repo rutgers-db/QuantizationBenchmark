@@ -39,10 +39,59 @@ RUN cd /tmp && \
 RUN cd /opt && \
     git clone https://github.com/microsoft/DiskANN.git
 
-# Copy and apply the DiskANN patch
+# Copy patch file first so we can test it
 COPY benchmark/graphs/diskann/diskann_custom_quantizer.patch /tmp/diskann_custom_quantizer.patch
+
+# Find the exact commit that matches the patch and apply it
+# The patch file contains git object hashes: 
+# - include/pq_flash_index.h: ba5258e (expected original)
+# - include/boost_dynamic_bitset_fwd.h: 5aebb2b
+# - src/pq_flash_index.cpp: d9ad506
 RUN cd /opt/DiskANN && \
-    git apply /tmp/diskann_custom_quantizer.patch && \
+    echo "Searching for commit with matching file versions..." && \
+    # Find commit where pq_flash_index.h has the exact hash expected by patch
+    # We'll search through commits and check file hashes
+    EXACT_COMMIT="" && \
+    for commit in $(git log --all --format="%H" | head -200); do \
+        git checkout $commit 2>/dev/null && \
+        # Check if pq_flash_index.h matches expected hash (ba5258e)
+        if [ -f "include/pq_flash_index.h" ]; then \
+            FILE_HASH=$(git hash-object include/pq_flash_index.h 2>/dev/null) && \
+            SHORT_HASH=$(echo "$FILE_HASH" | cut -c1-7) && \
+            if [ "$SHORT_HASH" = "ba5258e" ]; then \
+                echo "Found commit with matching pq_flash_index.h: $commit"; \
+                EXACT_COMMIT=$commit; \
+                break; \
+            fi; \
+        fi; \
+    done && \
+    if [ -n "$EXACT_COMMIT" ]; then \
+        git checkout $EXACT_COMMIT && \
+        echo "Using commit: $EXACT_COMMIT"; \
+    else \
+        echo "Warning: Could not find exact match, using first commit with required files"; \
+        git checkout $(git log --all --full-history --format="%H" -- "include/boost_dynamic_bitset_fwd.h" 2>/dev/null | head -1); \
+    fi && \
+    # Verify required files exist
+    if [ ! -f "include/boost_dynamic_bitset_fwd.h" ] || \
+       [ ! -f "include/pq_flash_index.h" ] || \
+       [ ! -f "src/pq_flash_index.cpp" ]; then \
+        echo "ERROR: Required files for patch are missing!"; \
+        exit 1; \
+    fi && \
+    # Apply the patch
+    echo "Applying patch..." && \
+    if git apply /tmp/diskann_custom_quantizer.patch 2>&1; then \
+        echo "Patch applied successfully"; \
+    else \
+        echo "ERROR: Patch application failed"; \
+        echo "Trying with --ignore-whitespace..."; \
+        if ! git apply --ignore-whitespace /tmp/diskann_custom_quantizer.patch 2>&1; then \
+            echo "Patch failed even with --ignore-whitespace"; \
+            git apply --check /tmp/diskann_custom_quantizer.patch 2>&1 || true; \
+            exit 1; \
+        fi; \
+    fi && \
     rm /tmp/diskann_custom_quantizer.patch
 
 # Install Python dependencies for DiskANN and common quantizers

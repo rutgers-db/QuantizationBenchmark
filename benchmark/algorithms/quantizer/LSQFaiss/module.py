@@ -25,6 +25,7 @@ class LSQFaiss(BaseQuantizer):
         self.ndata = 0
         self.nthread = nthread
         faiss.omp_set_num_threads(nthread)
+        self.dc = None
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
         self.data = data.astype(np.float32, copy=False)
@@ -33,6 +34,7 @@ class LSQFaiss(BaseQuantizer):
         try:
             self.index.train(self.data)
             self.index.add(self.data)
+            self.dc = self.index.get_distance_computer()
         except Exception as e:
             print(f"Training error: {e}")
             return False
@@ -59,3 +61,11 @@ class LSQFaiss(BaseQuantizer):
         self.index.reconstruct_n(0, self.ndata, recons)
         se_per_row = np.sum((recons - self.data) ** 2, axis=1)
         return float(np.mean(se_per_row))
+    
+    def set_query(self, query, thread_id):
+        # Ensure query is a contiguous float32 array for Faiss SWIG interface
+        query = np.ascontiguousarray(query, dtype=np.float32)
+        self.dc.set_query(faiss.swig_ptr(query))
+        
+    def estimate_distance(self, idx, thread_id):
+        return self.dc(int(idx))
