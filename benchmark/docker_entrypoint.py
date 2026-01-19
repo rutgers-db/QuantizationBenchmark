@@ -320,6 +320,10 @@ def run_graph(input_path: str, output_path: str, quantizer_module_path: str, gra
     """
     Run graph algorithm with quantizer.
 
+    Supports two modes:
+    1. Single quantizer mode: Build graph with one quantizer, run all search params
+    2. Multi-quantizer mode: Build graph once, then test multiple quantizer params
+
     Args:
         input_path: Path to input pickle file
         output_path: Path to output pickle file
@@ -348,32 +352,43 @@ def run_graph(input_path: str, output_path: str, quantizer_module_path: str, gra
     QuantizerClass = load_module_class(quantizer_module_path, 'BaseQuantizer')
     GraphClass = load_module_class(graph_module_path, 'BaseGraphIndex')
 
-    # Instantiate quantizer
-    # Extract build_params for quantizer initialization
-    print("\n=== Initializing Quantizer ===")
-    quantizer_build_params = quantizer_params.get('build_params', {})
-    quantizer = QuantizerClass(**quantizer_build_params)
-
-    # Train quantizer
-    print("\n=== Training Quantizer ===")
-    start_time = time.time()
     nd, d = train_data.shape
+    nq = test_data.shape[0]
+
+    # Check if we have multiple quantizer build params
+    quantizer_params_list = quantizer_params.get('build_params_list', None)
+
+    if quantizer_params_list is None:
+        # Single quantizer mode (original behavior)
+        quantizer_build_params = quantizer_params.get('build_params', {})
+        quantizer_params_list = [{'build_params': quantizer_build_params}]
+
+    # Get search parameter configurations
+    search_params_list = graph_params.get('search_params_list', [{}])
+
+    # Initialize first quantizer and build graph ONCE
+    print("\n=== Initializing First Quantizer ===")
+    first_quantizer_params = quantizer_params_list[0]['build_params']
+    quantizer = QuantizerClass(**first_quantizer_params)
+
+    # Train first quantizer
+    print("\n=== Training First Quantizer ===")
+    start_time = time.time()
     success = quantizer.fit(nd, train_data)
-    training_time = time.time() - start_time
+    first_training_time = time.time() - start_time
 
     if not success:
         raise RuntimeError("Quantizer training failed")
 
-    print(f"Training time: {training_time:.4f}s")
+    print(f"Training time: {first_training_time:.4f}s")
 
     # Instantiate graph with quantizer
-    # Extract build_params for graph initialization
     print("\n=== Initializing Graph Index ===")
     graph_build_params = graph_params.get('build_params', {})
     graph_index = GraphClass(quantizer=quantizer, **graph_build_params)
 
-    # Build graph
-    print("\n=== Building Graph Index ===")
+    # Build graph ONCE (this is the slow part we want to avoid repeating)
+    print("\n=== Building Graph Index (ONE TIME ONLY) ===")
     start_time = time.time()
     success = graph_index.build(nd, train_data)
     build_time = time.time() - start_time
@@ -382,64 +397,104 @@ def run_graph(input_path: str, output_path: str, quantizer_module_path: str, gra
         raise RuntimeError("Graph index build failed")
 
     print(f"Build time: {build_time:.4f}s")
+    print("Graph structure will be reused for all quantizer configurations")
 
-    # Search with multiple parameter sets
-    print("\n=== Searching ===")
-    nq = test_data.shape[0]
+    # Now test each quantizer configuration
+    all_quantizer_results = []
 
-    # Get search parameter configurations
-    search_params_list = graph_params.get('search_params_list', [{}])
+    for quant_idx, quantizer_config in enumerate(quantizer_params_list):
+        print(f"\n{'='*60}")
+        print(f"Testing Quantizer Configuration {quant_idx + 1}/{len(quantizer_params_list)}")
+        print(f"{'='*60}")
 
-    all_results = []
-    for idx, search_params in enumerate(search_params_list):
-        # Extract topk from search_params
-        search_params_copy = search_params.copy()
-        topk = search_params_copy.pop('topk', 100)
-        print(f"\nSearch configuration {idx + 1}/{len(search_params_list)}: {search_params}")
+        quantizer_build_params = quantizer_config['build_params']
 
-        start_time = time.time()
-        I, D = graph_index.search(nq, test_data, topk, **search_params_copy)
-        query_time = time.time() - start_time
+        # For first quantizer, reuse the one we already trained
+        if quant_idx == 0:
+            current_quantizer = quantizer
+            training_time = first_training_time
+            print("Using already-trained first quantizer")
+        else:
+            # For subsequent quantizers, create and train new one
+            print(f"\n=== Creating New Quantizer with params: {quantizer_build_params} ===")
+            current_quantizer = QuantizerClass(**quantizer_build_params)
 
-        # Calculate metrics
-        recall = calculate_recall(I, ground_truth[:, :topk])
-        map_score = calculate_map(I, ground_truth[:, :topk])
-        recall_at_1 = calculate_recall_at_1(I, ground_truth[:, :topk])
+            print("\n=== Training New Quantizer ===")
+            start_time = time.time()
+            success = current_quantizer.fit(nd, train_data)
+            training_time = time.time() - start_time
 
-        print(f"  Query time: {query_time:.4f}s")
-        print(f"  Queries per second: {len(test_data) / query_time:.2f}")
-        print(f"  Recall@{topk}: {recall:.4f}")
-        print(f"  MAP@{topk}: {map_score:.4f}")
-        print(f"  Recall@1: {recall_at_1:.4f}")
+            if not success:
+                raise RuntimeError(f"Quantizer {quant_idx} training failed")
 
-        # Collect results for this configuration
-        result = {
-            'search_params': search_params,
-            'query_time': query_time,
-            'queries_per_second': len(test_data) / query_time if query_time > 0 else 0,
-            'recall': recall,
-            'map': map_score,
-            'recall@1': recall_at_1,
-            'predictions': I,
-            'distances': D
+            print(f"Training time: {training_time:.4f}s")
+
+            # Set the new quantizer on the existing graph (graph structure unchanged!)
+            print("\n=== Swapping Quantizer (keeping graph structure) ===")
+            graph_index.set_quantizer(current_quantizer)
+
+        # Search with all search parameter sets for this quantizer
+        print(f"\n=== Searching with Quantizer Config {quant_idx + 1} ===")
+
+        search_results = []
+        for search_idx, search_params in enumerate(search_params_list):
+            # Extract topk from search_params
+            search_params_copy = search_params.copy()
+            topk = search_params_copy.pop('topk', 100)
+            print(f"\nSearch configuration {search_idx + 1}/{len(search_params_list)}: {search_params}")
+
+            start_time = time.time()
+            I, D = graph_index.search(nq, test_data, topk, **search_params_copy)
+            query_time = time.time() - start_time
+
+            # Calculate metrics
+            recall = calculate_recall(I, ground_truth[:, :topk])
+            map_score = calculate_map(I, ground_truth[:, :topk])
+            recall_at_1 = calculate_recall_at_1(I, ground_truth[:, :topk])
+
+            print(f"  Query time: {query_time:.4f}s")
+            print(f"  Queries per second: {len(test_data) / query_time:.2f}")
+            print(f"  Recall@{topk}: {recall:.4f}")
+            print(f"  MAP@{topk}: {map_score:.4f}")
+            print(f"  Recall@1: {recall_at_1:.4f}")
+
+            # Collect results for this search configuration
+            result = {
+                'search_params': search_params,
+                'query_time': query_time,
+                'queries_per_second': len(test_data) / query_time if query_time > 0 else 0,
+                'recall': recall,
+                'map': map_score,
+                'recall@1': recall_at_1,
+                'predictions': I,
+                'distances': D
+            }
+            search_results.append(result)
+
+        # Collect results for this quantizer configuration
+        quantizer_result = {
+            'quantizer_build_params': quantizer_build_params,
+            'training_time': training_time,
+            'quantizer_memory': current_quantizer.getMemoryUsage(),
+            'compression_rate': current_quantizer.getCompressionRate(),
+            'mse': current_quantizer.getMSE(),
+            'search_results': search_results
         }
-        all_results.append(result)
+        all_quantizer_results.append(quantizer_result)
 
-    # Prepare final output with training/build times and all search results
+    # Prepare final output
     output = {
-        'training_time': training_time,
-        'build_time': build_time,
-        'quantizer_memory': quantizer.getMemoryUsage(),
+        'build_time': build_time,  # Graph build time (done once)
         'graph_memory': graph_index.getMemoryUsage(),
-        'compression_rate': quantizer.getCompressionRate(),
-        'mse': quantizer.getMSE(),
-        'search_results': all_results
+        'quantizer_results': all_quantizer_results  # List of results for each quantizer
     }
 
     with open(output_path, 'wb') as f:
         pickle.dump(output, f)
 
     print(f"\nResults saved to {output_path}")
+    print(f"Total quantizer configurations tested: {len(all_quantizer_results)}")
+    print(f"Graph was built only ONCE and reused for all configurations")
 
 
 def calculate_recall(predictions: np.ndarray, ground_truth: np.ndarray) -> float:

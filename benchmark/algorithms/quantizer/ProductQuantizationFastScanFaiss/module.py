@@ -73,4 +73,10 @@ class ProductQuantizationFastScanFaiss(BaseQuantizer):
         refiner.k_factor = nrerank / topk
         D, I = refiner.search(query, topk)
         return I, D
+    
+    def set_query(self, query: np.ndarray, thread_id: int):
+        pass
+    
+    def estimate_distance(self, idx: int, thread_id: int):
+        pass
         

@@ -21,6 +21,9 @@ class OptimizedProductQuantizationFaiss(BaseQuantizer):
         self.data_bytes = data_bytes
         self.data = None
         self.ndata = 0
+        self.opq = None
+        self.dc = None
+        self.transformed_query = None
         pass
 
 
@@ -32,14 +35,16 @@ class OptimizedProductQuantizationFaiss(BaseQuantizer):
         try:
             # Faiss train expects just the data, not the count
 
-            opq = faiss.OPQMatrix(self.ndim, self.nsubvec)
-            opq.niter = self.niter
-            opq.train(data)
+            self.opq = faiss.OPQMatrix(self.ndim, self.nsubvec)
+            self.opq.niter = self.niter
+            self.opq.train(data)
 
-            self.index = faiss.IndexPreTransform(opq,  self.PQIndex)
+            self.index = faiss.IndexPreTransform(self.opq,  self.PQIndex)
             self.index.train(data)
             self.index.add(data)
             # Add vectors to index for querying
+
+            self.dc = self.PQIndex.get_distance_computer()
         except Exception as e:
             print(f"Training error: {e}")
             return False
@@ -79,3 +84,14 @@ class OptimizedProductQuantizationFaiss(BaseQuantizer):
         refiner.k_factor = nrerank / topk
         D, I = refiner.search(query, topk)
         return I, D
+    
+    def set_query(self, query: np.ndarray, thread_id: int):
+        # OPQ needs to first apply the rotation matrix to the query
+        # then use the PQ distance computer
+        query_2d = query.reshape(1, -1)
+        self.transformed_query = self.opq.apply(query_2d).flatten().astype(np.float32)
+        self.transformed_query = np.ascontiguousarray(self.transformed_query)
+        self.dc.set_query(faiss.swig_ptr(self.transformed_query))
+
+    def estimate_distance(self, idx: int, thread_id: int):
+        return self.dc(int(idx))

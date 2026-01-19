@@ -72,6 +72,25 @@ public:
     }
 
     /**
+     * @brief Set a new quantizer
+     *
+     * This allows swapping the quantizer without rebuilding the graph.
+     * Useful for testing multiple quantization parameters on the same graph.
+     *
+     * @param quantizer_obj Python quantizer object
+     */
+    void set_quantizer(py::object quantizer_obj) {
+        std::cout << "Setting new quantizer..." << std::endl;
+        quantizer = std::make_unique<diskann::QuantizerAdapter>(quantizer_obj);
+
+        // Set the dimension and num_points for the new quantizer
+        // (the quantizer is already trained, we just need to inform the adapter)
+        quantizer->set_metadata(num_points, dimension);
+
+        std::cout << "Quantizer updated successfully" << std::endl;
+    }
+
+    /**
      * @brief Build the disk-based index
      *
      * This saves data to disk and builds a Vamana graph using DiskANN's
@@ -79,8 +98,9 @@ public:
      *
      * @param data Training data (num_points, dimension)
      * @param build_memory_gb Memory budget for building in GB
+     * @param train_quantizer If true, train the quantizer before building (default: true)
      */
-    void build(py::array_t<float> data, float build_memory_gb) {
+    void build(py::array_t<float> data, float build_memory_gb, bool train_quantizer = true) {
         auto buf = data.request();
         num_points = buf.shape[0];
         dimension = buf.shape[1];
@@ -88,9 +108,13 @@ public:
         std::cout << "Building DiskANN index for " << num_points
                   << " points, dim=" << dimension << std::endl;
 
-        // 1. Train quantizer
-        std::cout << "Training quantizer..." << std::endl;
-        quantizer->train(data);
+        // 1. Train quantizer (optional)
+        if (train_quantizer) {
+            std::cout << "Training quantizer..." << std::endl;
+            quantizer->train(data);
+        } else {
+            std::cout << "Skipping quantizer training (using pre-trained quantizer)" << std::endl;
+        }
 
         // 2. Save data to disk in DiskANN format
         base_file = index_prefix + "_data.bin";
@@ -249,9 +273,13 @@ PYBIND11_MODULE(diskann_cpp, m) {
              py::arg("num_threads") = 16,
              py::arg("metric") = "l2",
              "Initialize DiskANN index with quantizer")
+        .def("set_quantizer", &DiskANNWithQuantizer::set_quantizer,
+             py::arg("quantizer"),
+             "Set a new quantizer without rebuilding the graph")
         .def("build", &DiskANNWithQuantizer::build,
              py::arg("data"),
              py::arg("build_memory_gb") = 8.0f,
+             py::arg("train_quantizer") = true,
              "Build the disk-based index")
         .def("search", &DiskANNWithQuantizer::search,
              py::arg("queries"),

@@ -20,7 +20,7 @@ index ced6ef8..2858ee0 100644
    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2")
  ELSEIF (OPTIMIZATION_LEVEL STREQUAL "aggressive")
 diff --git a/bitvecengine/VAQ.cpp b/bitvecengine/VAQ.cpp
-index 509feac..ff82719 100644
+index 509feac..0f71fec 100644
 --- a/bitvecengine/VAQ.cpp
 +++ b/bitvecengine/VAQ.cpp
 @@ -528,6 +528,14 @@ void VAQ::train(RowMatrixXf &XTrain, bool verbose) {
@@ -78,173 +78,17 @@ index 509feac..ff82719 100644
          mCentroidsPerSubs[iSubs].resize(currCentroidsNum, mSubsLen);
          arma::fmat means(mCentroidsPerSubs[iSubs].data(), mSubsLen, currCentroidsNum, false, false);
  
-@@ -663,66 +675,9 @@ void VAQ::train(RowMatrixXf &XTrain, bool verbose) {
- void VAQ::encode(const RowMatrixXf &XTrain) {
-   mXTrainRows = XTrain.rows();
-   mXTrainCols = XTrain.cols();
--  if (mMethods & NNMethod::Fast) {
--    constexpr int batchSize = 32;
--    int rowPadding = (int) (std::ceil((float)mXTrainRows / batchSize) * batchSize - mXTrainRows);
--    mCodebookCMajor.resize(mXTrainRows + rowPadding, mXTrainCols);
--    mCodebookCMajor.setZero();
--  } else if (mMethods & NNMethod::Fast2) {
--    constexpr int batchSize = 8;
--    int rowPadding = (int) (std::ceil((float)mXTrainRows / batchSize) * batchSize - mXTrainRows);
--    mCodebookCMajor16.resize(mXTrainRows + rowPadding, mXTrainCols);
--    mCodebookCMajor16.setZero();
--  } else if (mMethods & NNMethod::Fast3) {
--    mStartShufIdx = mBitsAlloc.size();
--    for (size_t i=0; i<mBitsAlloc.size(); i++) {
--      if (mBitsAlloc[i] > 4) {
--        mStartShufIdx = i;
--      }
--    }
--    mStartShufIdx += 1;
--    
--    // gather batch
--    constexpr int gatherBatchSize = 8;
--    int gatherRowPadding = (int) (std::ceil((float)mXTrainRows / gatherBatchSize) * gatherBatchSize - mXTrainRows);
--    mCodebookCMajor16.resize(mXTrainRows + gatherRowPadding, mStartShufIdx);
--    mCodebookCMajor16.setZero();
--
--    // shuffle batch
--    constexpr int shufBatchSize = 32;
--    int shuffleRowPadding = (int) (std::ceil((float)mXTrainRows / shufBatchSize) * shufBatchSize - mXTrainRows);
--    mCodebookCMajor.resize(mXTrainRows + shuffleRowPadding, mXTrainCols - mStartShufIdx);
--    mCodebookCMajor.setZero();
--  } else if (mMethods & NNMethod::Fast4) {
--    mStartShufIdx = mBitsAlloc.size();
--    for (size_t i=0; i<mBitsAlloc.size(); i++) {
--      if (mBitsAlloc[i] > 4) {
--        mStartShufIdx = i;
--      }
--    }
--    mStartShufIdx += 1;
--
--    mCodebook.resize(mXTrainRows, mHighestSubs);
-+  mCodebook.resize(mXTrainRows, mHighestSubs);
-+  encodeImpl(XTrain, mCodebook);
- 
--    // shuffle batch
--    constexpr int shufBatchSize = 32;
--    int shuffleRowPadding = (int) (std::ceil((float)mXTrainRows / shufBatchSize) * shufBatchSize - mXTrainRows);
--    mCodebookCMajor.resize(mXTrainRows + shuffleRowPadding, mXTrainCols - mStartShufIdx);
--    mCodebookCMajor.setZero();
--  } else {
--    mCodebook.resize(mXTrainRows, mHighestSubs);
--  }
--
--  
--  if (mMethods & NNMethod::Fast) {
--    encodeImpl(XTrain, mCodebookCMajor);
--  } else if (mMethods & NNMethod::Fast2) {
--    encodeImpl(XTrain, mCodebookCMajor16);
--  } else if (mMethods & NNMethod::Fast3) {
--    encodeImplFast3(XTrain);
--  } else {
--    encodeImpl(XTrain, mCodebook);
--  }
- }
- 
- template<class T>
-@@ -777,71 +732,42 @@ LabelDistVecF VAQ::search(const RowMatrixXf &XTest, const int k, bool verbose) {
-   RowMatrixXf XTestPCA = this->ProjectOnEigenVectors(XTest);
- 
-   long totalPruned = 0;
--  LUTType lut(1 << mMaxBitsPerSubs, mHighestSubs);
-   LabelDistVecF ret;
-   ret.labels.resize(k * XTest.rows());
-   ret.distances.resize(k * XTest.rows());
-   f::float_maxheap_t answers = { size_t(XTest.rows()), size_t(k), ret.labels.data(), ret.distances.data() };
- 
--  for (int q_idx=0; q_idx < (int)XTestPCA.rows(); q_idx++) {
--    switch (mMaxBitsPerSubs) {
--      case 9: CreateLUT<9>(XTestPCA.row(q_idx), lut); break;
--      case 10: CreateLUT<10>(XTestPCA.row(q_idx), lut); break;
--      case 11: CreateLUT<11>(XTestPCA.row(q_idx), lut); break;
--      case 12: CreateLUT<12>(XTestPCA.row(q_idx), lut); break;
--      case 13: CreateLUT<13>(XTestPCA.row(q_idx), lut); break;
--      case 14: CreateLUT<14>(XTestPCA.row(q_idx), lut); break;
--      case 15: CreateLUT<15>(XTestPCA.row(q_idx), lut); break;
--      default:
--        CreateLUT(XTestPCA.row(q_idx), lut);
--        break;
--    }
--    if (mMethods & NNMethod::TI) {
--      std::vector<float> qToCCDist(mTIClusters.rows());
--      const float* qptr = XTestPCA.row(q_idx).data();
--      fvec_L2sqr_ny(qToCCDist.data(), qptr, mTIClusters.data(), mTISegmentNum * mSubsLen, mTIClusters.rows());
--      for (int i=0; i<(int)qToCCDist.size(); i++) {
--        qToCCDist[i] = std::sqrt(qToCCDist[i]);
--      }
-+  int thread_num = omp_get_max_threads();
-+  if (verbose) {
-+    std::cout << "[VAQ C++ Search] Number of threads: " << thread_num << std::endl;
-+  }
- 
--      // Maybe for the next project
--      #if 0
--      RowVectorXf XTestPCAUnbalanced = (XTest.row(q_idx) * mEigenVectorsBeforeBalancing.block(0, 0, mEigenVectorsBeforeBalancing.rows(), mTISegmentNum * mSubsLen)).real();
--      for (int i=0; i<(int)qToCCDist.size(); i++) {
--        qToCCDist[i] = (XTestPCAUnbalanced - mTIClusters.row(i)).norm();
-+  // Parallelize query processing
-+  #pragma omp parallel num_threads(thread_num)
-+  {
-+    // Thread-local LUT to avoid race conditions
-+    LUTType lut(1 << mMaxBitsPerSubs, mHighestSubs);
-+
-+    #pragma omp for schedule(dynamic)
-+    for (int q_idx=0; q_idx < (int)XTestPCA.rows(); q_idx++) {
-+      switch (mMaxBitsPerSubs) {
-+        case 9: CreateLUT<9>(XTestPCA.row(q_idx), lut); break;
-+        case 10: CreateLUT<10>(XTestPCA.row(q_idx), lut); break;
-+        case 11: CreateLUT<11>(XTestPCA.row(q_idx), lut); break;
-+        case 12: CreateLUT<12>(XTestPCA.row(q_idx), lut); break;
-+        case 13: CreateLUT<13>(XTestPCA.row(q_idx), lut); break;
-+        case 14: CreateLUT<14>(XTestPCA.row(q_idx), lut); break;
-+        case 15: CreateLUT<15>(XTestPCA.row(q_idx), lut); break;
-+        default:
-+          CreateLUT(XTestPCA.row(q_idx), lut);
-+          break;
-       }
--      #endif
- 
--      Eigen::VectorXi qToCCIdx = Eigen::VectorXi::LinSpaced(mTIClusters.rows(), 0, mTIClusters.rows()-1);
--      std::sort(qToCCIdx.data(), qToCCIdx.data()+qToCCIdx.size(), 
--        [&qToCCDist](int i, int j) -> bool {
--          return qToCCDist[i] < qToCCDist[j];
--        }
--      );
--      long prunedPerQuery = 0;
--      // Maybe for the next project
--      #if 0
--      = searchTriangleInequality(XTestPCAUnbalanced, lut, k, mMethods, qToCCIdx, qToCCDist, prunedPerQuery);
--      #endif
--      searchTriangleInequality(lut, k, mMethods, qToCCIdx, qToCCDist, prunedPerQuery, q_idx, answers);
--      totalPruned += prunedPerQuery;
--    } else if (mMethods & NNMethod::EA) {
--      searchEarlyAbandon(lut, k, q_idx, answers);
--    } else if (mMethods & NNMethod::Heap) {
--      searchHeap(lut, k, q_idx, answers);
--    } else if (mMethods & NNMethod::Fast) {
--      vectorIdxDistPairConverterFloatHeap<int16_t>(searchFast(lut, k), answers, q_idx * k);
--    } else if (mMethods & NNMethod::Fast2) {
--      searchFast2(lut, k, q_idx, answers);
--    } else if (mMethods & NNMethod::Fast3) {
--      searchFast3(lut, k, q_idx, answers);
--    } else {
-+      // Force SORT method for consistent behavior across queries
-+      // SORT computes exact distances using lookup tables
+@@ -834,6 +846,9 @@ LabelDistVecF VAQ::search(const RowMatrixXf &XTest, const int k, bool verbose) {
+     } else if (mMethods & NNMethod::Fast2) {
+       searchFast2(lut, k, q_idx, answers);
+     } else if (mMethods & NNMethod::Fast3) {
++      if (q_idx == 0){
++        std::cout << "FAST3 Search" << std::endl;
++      }
+       searchFast3(lut, k, q_idx, answers);
+     } else {
        searchSort(lut, k, q_idx, answers);
-     }
-   }
--  if (verbose && (mMethods & NNMethod::TI)) {
--    std::cout << "Average pruned per query: " << ((float)totalPruned / XTestPCA.rows()) << std::endl;
--  }
- 
-   return ret;
- }
-@@ -854,8 +780,11 @@ LabelDistVecF VAQ::refine(const RowMatrixXf &XTest, const LabelDistVecF &answers
+@@ -854,8 +869,11 @@ LabelDistVecF VAQ::refine(const RowMatrixXf &XTest, const LabelDistVecF &answers
    f::float_maxheap_t answers = {
      size_t(XTest.rows()), size_t(k), ret.labels.data(), ret.distances.data()
    };
@@ -258,6 +102,19 @@ index 509feac..ff82719 100644
    for (int q_idx=0; q_idx < (int)XTest.rows(); q_idx++) {
      int * __restrict heap_ids = answers.ids + q_idx * k;
      float * __restrict heap_dis = answers.val + q_idx * k;
+diff --git a/bitvecengine/VAQ.hpp b/bitvecengine/VAQ.hpp
+index 5ce608b..8035066 100644
+--- a/bitvecengine/VAQ.hpp
++++ b/bitvecengine/VAQ.hpp
+@@ -113,7 +113,7 @@ public:
+     return mMethods;
+   }
+ 
+-private:
++// private:
+   /**
+    * train Auxiliary Functions
+    */
 diff --git a/bitvecengine/utils/Experiment.hpp b/bitvecengine/utils/Experiment.hpp
 index 10229a2..a37fee9 100644
 --- a/bitvecengine/utils/Experiment.hpp

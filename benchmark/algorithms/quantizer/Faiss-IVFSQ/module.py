@@ -10,11 +10,13 @@ sys.path.insert(0, '/benchmark')
 from benchmark.base import BaseQuantizer
 
 
-class ScalarQuantizationFaiss(BaseQuantizer):
-    def __init__(self, ndim, nbit, data_bytes, nthread = 1, space = "l2"):
+class ScalarQuantizationIVFFaiss(BaseQuantizer):
+    def __init__(self, ndim, nlist, nbit, data_bytes, nthread = 1, space = "l2"):
         super().__init__()
         self.ndim = ndim
         self.nbit = nbit
+        self.nlist = nlist
+
         # Faiss Scalar Quantizer types:
         # QT_8bit: 8 bits per component
         # QT_4bit: 4 bits per component
@@ -31,27 +33,35 @@ class ScalarQuantizationFaiss(BaseQuantizer):
         else:
             raise ValueError(f"Unsupported nbit value: {nbit}. Supported values are 4, 6, 8, 16")
 
-        self.index = faiss.IndexScalarQuantizer(ndim, qtype, faiss.METRIC_L2 if space == "l2" else faiss.METRIC_INNER_PRODUCT)
+        # Create coarse quantizer (for IVF clustering)
+        self.coarse_quantizer = faiss.IndexFlatL2(ndim)
+
+        # Create IVF + Scalar Quantization index
+        metric = faiss.METRIC_L2 if space == "l2" else faiss.METRIC_INNER_PRODUCT
+        self.index = faiss.IndexIVFScalarQuantizer(self.coarse_quantizer, ndim, nlist, qtype, metric)
+
         self.space = space
         self.data_bytes = data_bytes
-        self.data = None
-        self.ndata = 0
         self.nthread = nthread
         faiss.omp_set_num_threads(nthread)
+        self.refine = faiss.IndexFlatL2(self.ndim)
         self.dc = None
 
 
 
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
-        self.data = data
         self.ndata = nd
+        self.data = data
         try:
             # Faiss train expects just the data, not the count
             self.index.train(data)
             # Add vectors to index for querying
             self.index.add(data)
 
+            self.index.make_direct_map()
+
+            self.refine.add(data)
             self.dc = self.index.get_distance_computer()
         except Exception as e:
             print(f"Training error: {e}")
@@ -61,7 +71,9 @@ class ScalarQuantizationFaiss(BaseQuantizer):
 
     def query(self, nq: int, query: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
         # Faiss search expects (queries, k), not (nq, queries, k)
-        # search_params are ignored for Scalar Quantization (no search-time parameters)
+        # nprobe: number of clusters to visit during search
+        nprobe = search_params.get('nprobe', self.nlist)
+        self.index.nprobe = nprobe
         D, I = self.index.search(query, topk)
         return I, D
 
@@ -73,9 +85,14 @@ class ScalarQuantizationFaiss(BaseQuantizer):
         return self.nbit / (self.data_bytes * 8)
 
     def getCompressionMemory(self) -> float:
-        # Scalar quantization memory: number of vectors * dimension * bits per component
-        # Plus codebook overhead (min/max values per dimension)
-        return self.ndata * self.ndim * self.nbit + self.ndim * 2 * 32
+        # IVF-SQ memory:
+        # - Centroids: nlist * ndim * 4 bytes (float32)
+        # - Quantized vectors: ndata * ndim * nbit bits
+        # - Per-dimension min/max values for each cluster: nlist * ndim * 2 * 4 bytes
+        centroid_memory = self.nlist * self.ndim * 32  # in bits
+        quantized_memory = self.ndata * self.ndim * self.nbit  # in bits
+        minmax_memory = self.nlist * self.ndim * 2 * 32  # in bits
+        return centroid_memory + quantized_memory + minmax_memory
 
     def getMSE(self) -> float:
         recons = np.zeros_like(self.data)
@@ -99,17 +116,15 @@ class ScalarQuantizationFaiss(BaseQuantizer):
         mse = np.mean(se_per_row)
         return mse
 
-    def searchAndRerank(self, nq, query, topk, nrerank):
-        refine = faiss.IndexFlatL2(self.ndim)
-        refine.add(self.data)
-
-        refiner = faiss.IndexRefine(self.index, refine)
+    def searchAndRerank(self, nq, query, topk, nrerank, **search_params):
+        nprobe = search_params.get('nprobe', self.nlist)
+        self.index.nprobe = nprobe
+        refiner = faiss.IndexRefine(self.index, self.refine)
         refiner.k_factor = nrerank / topk
         D, I = refiner.search(query, topk)
         return I, D
 
     def set_query(self, query, thread_id):
-        # Ensure query is a contiguous float32 array for Faiss SWIG interface
         self.dc.set_query(faiss.swig_ptr(query))
 
     def estimate_distance(self, idx, thread_id):

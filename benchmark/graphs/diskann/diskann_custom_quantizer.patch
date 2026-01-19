@@ -11,10 +11,10 @@ index 5aebb2b..68a45de 100644
  #endif
  } // namespace boost
 diff --git a/include/pq_flash_index.h b/include/pq_flash_index.h
-index ba5258e..74c1b9d 100644
+index ba5258e..ed8c28f 100644
 --- a/include/pq_flash_index.h
 +++ b/include/pq_flash_index.h
-@@ -16,11 +16,118 @@
+@@ -16,11 +16,122 @@
  #include "tsl/robin_map.h"
  #include "tsl/robin_set.h"
  
@@ -48,6 +48,10 @@ index ba5258e..74c1b9d 100644
 +     */
 +    QuantizerAdapter(py::object quantizer_obj)
 +        : quantizer(quantizer_obj), num_points(0), dimension(0) {
++    }
++
++    void set_metadata(int a, int b){
++        num_points = a; dimension = b;
 +    }
 +
 +    /**
@@ -133,7 +137,7 @@ index ba5258e..74c1b9d 100644
  template <typename T, typename LabelT = uint32_t> class PQFlashIndex
  {
    public:
-@@ -81,6 +188,10 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
+@@ -81,6 +192,10 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                                const uint32_t io_limit, const bool use_reorder_data = false,
                                                QueryStats *stats = nullptr);
  
@@ -144,7 +148,7 @@ index ba5258e..74c1b9d 100644
      DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
  
      DISKANN_DLLEXPORT uint32_t range_search(const T *query1, const double range, const uint64_t min_l_search,
-@@ -242,4 +353,4 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
+@@ -242,4 +357,4 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
      char *getHeaderBytes();
  #endif
  };

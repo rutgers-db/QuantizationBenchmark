@@ -1,16 +1,15 @@
+# Configuration for Scalar Quantization using Faiss
+
 sift-128-euclidean:
-  # Product Quantization with build/search separation format
-  # Automatically generates all combinations based on build parameters
+  # Scalar Quantization with build/search separation format
+  # Automatically generates all combinations based on nbit values
   common:
     data_bytes: 4
     ndim: 128
-    nthread: 4
-    space: "l2"
     nthread: 16
+    space: "l2"
   build:
-    niter : [20]
-    nsubvec: [16, 32, 64]
-    nbit: [4, 8]
+    nbit: [4, 6, 8]  # Bits per component (4-bit, 6-bit, 8-bit)
   search:
     - topk: 100
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
@@ -20,18 +19,15 @@ sift-128-euclidean:
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 gist-960-euclidean:
-  # Product Quantization with build/search separation format
-  # Automatically generates all combinations based on build parameters
+  # Scalar Quantization with build/search separation format
+  # Automatically generates all combinations based on nbit values
   common:
     data_bytes: 4
     ndim: 960
-    nthread: 4
-    space: "l2"
     nthread: 16
+    space: "l2"
   build:
-    niter : [20]
-    nsubvec: [16, 32, 64]
-    nbit: [4, 8]
+    nbit: [4, 6, 8]  # Bits per component (4-bit, 6-bit, 8-bit)
   search:
     - topk: 100
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]

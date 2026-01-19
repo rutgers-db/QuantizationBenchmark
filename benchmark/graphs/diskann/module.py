@@ -57,12 +57,29 @@ class DiskANN(BaseGraphIndex):
         self.dimension = 0
         self.trained = False
 
-    def build(self, nd: int, data: np.ndarray) -> bool:
+    def set_quantizer(self, quantizer) -> None:
+        """
+        Set a new quantizer without rebuilding the graph.
+
+        This allows testing multiple quantization parameters on the same graph structure.
+        The quantizer must be already trained before calling this method.
+
+        Args:
+            quantizer: A trained quantizer instance with set_query() and estimate_distance() methods
+        """
+        if not self.trained:
+            raise RuntimeError("Index not built yet. Call build() first before changing quantizer.")
+
+        self.quantizer = quantizer
+        self.cpp_index.set_quantizer(quantizer)
+        print("Quantizer updated successfully (graph structure unchanged)")
+
+    def build(self, nd: int, data: np.ndarray, train_quantizer: bool = True) -> bool:
         """
         Build the DiskANN index.
 
         This performs the following steps:
-        1. Train the quantizer on the data
+        1. Train the quantizer on the data (optional)
         2. Save data to disk
         3. Build Vamana graph using DiskANN's build process
         4. Save quantizer state
@@ -70,6 +87,7 @@ class DiskANN(BaseGraphIndex):
         Args:
             nd: Number of data vectors
             data: Training data of shape (nd, d)
+            train_quantizer: If True, train the quantizer before building (default: True)
 
         Returns:
             bool: True if building was successful
@@ -79,26 +97,30 @@ class DiskANN(BaseGraphIndex):
             self.dimension = data.shape[1]
             self._original_data = np.ascontiguousarray(data, dtype=np.float32)
 
-            # Create temporary directory for index files
-            temp_dir = tempfile.mkdtemp(prefix="diskann_")
-            self.index_prefix = os.path.join(temp_dir, "index")
+            # Create temporary directory for index files (only if not already created)
+            if not hasattr(self, 'index_prefix') or self.index_prefix is None:
+                temp_dir = tempfile.mkdtemp(prefix="diskann_")
+                self.index_prefix = os.path.join(temp_dir, "index")
+                print(f"Building DiskANN index in {temp_dir}")
+            else:
+                print(f"Reusing existing index directory at {self.index_prefix}")
 
-            print(f"Building DiskANN index in {temp_dir}")
             print(f"Parameters: R={self.R}, L={self.L}, threads={self.num_threads}")
 
-            # Create C++ index wrapper
-            self.cpp_index = diskann_cpp.DiskANNIndex(
-                quantizer=self.quantizer,
-                index_prefix=self.index_prefix,
-                R=self.R,
-                L=self.L,
-                num_threads=self.num_threads,
-                metric=self.metric
-            )
+            # Create C++ index wrapper (only if not already created)
+            if not hasattr(self, 'cpp_index') or self.cpp_index is None:
+                self.cpp_index = diskann_cpp.DiskANNIndex(
+                    quantizer=self.quantizer,
+                    index_prefix=self.index_prefix,
+                    R=self.R,
+                    L=self.L,
+                    num_threads=self.num_threads,
+                    metric=self.metric
+                )
 
-            # Build the index (this trains quantizer and builds graph)
+            # Build the index (optionally train quantizer, then build graph)
             build_memory_gb = 8.0  # Memory budget for building
-            self.cpp_index.build(self._original_data, build_memory_gb)
+            self.cpp_index.build(self._original_data, build_memory_gb, train_quantizer)
 
             self.trained = True
             print("DiskANN index built successfully!")

@@ -9,7 +9,7 @@ sift-128-euclidean:
     L: [50]      # Build complexity
   search:
     - topk: 10
-      search_L: [50]
+      search_L: [10, 20, 30, 40, 50, 75, 100, 200]
       beam_width: [4]  # Match test_diskann.py for fair comparison
 
 siftsmall-128-euclidean:

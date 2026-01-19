@@ -17,6 +17,7 @@ private:
     RowMatrixXf train_data;
     bool is_trained;
     bool is_encoded;
+    LUTType lut;
 
 public:
     PyVAQ() : index(nullptr), is_trained(false), is_encoded(false) {
@@ -33,6 +34,7 @@ public:
             throw std::runtime_error("Index not initialized");
         }
         index->parseMethodString(method_string);
+        // Note: lut is initialized in train() after mHighestSubs is computed
     }
 
 
@@ -66,6 +68,9 @@ public:
         is_trained = true;
         index->encode(train_data);
         is_encoded = true;
+
+        // Initialize LUT now that mHighestSubs is computed
+        lut = LUTType(1 << (index->mMaxBitsPerSubs), index->mHighestSubs);
     }
 
     // Search for k nearest neighbors
@@ -241,6 +246,46 @@ public:
         return mse;
     }
 
+    void set_query(py::array_t<float> py_query){
+        auto queries_buf = py_query.request();
+
+        if (queries_buf.ndim != 2) {
+            throw std::runtime_error("queries must be 2-dimensional");
+        }
+
+        int nq = queries_buf.shape[0];
+        int dim = queries_buf.shape[1];
+        float* queries_ptr = static_cast<float*>(queries_buf.ptr);
+        assert(nq == 1);
+
+        // Create Eigen matrix for queries (deep copy)
+        RowMatrixXf queries(nq, dim);
+        std::memcpy(queries.data(), queries_ptr, nq * dim * sizeof(float));
+        RowMatrixXf XTestPCA = index->ProjectOnEigenVectors(queries);
+        switch (index->mMaxBitsPerSubs) {
+            case 9: index->CreateLUT<9>(XTestPCA.row(0), lut); break;
+            case 10: index->CreateLUT<10>(XTestPCA.row(0), lut); break;
+            case 11: index->CreateLUT<11>(XTestPCA.row(0), lut); break;
+            case 12: index->CreateLUT<12>(XTestPCA.row(0), lut); break;
+            case 13: index->CreateLUT<13>(XTestPCA.row(0), lut); break;
+            case 14: index->CreateLUT<14>(XTestPCA.row(0), lut); break;
+            case 15: index->CreateLUT<15>(XTestPCA.row(0), lut); break;
+            default:
+                index->CreateLUT(XTestPCA.row(0), lut);
+                break;
+        }
+    }
+
+    float estimate_distance(int idx){
+        float result = 0.0f;
+        auto luts = lut.data();
+        auto code = index->mCodebook.data() + index->mCodebook.cols() * idx;
+        for (int col=0; col < index->mHighestSubs; col++) {
+            result += luts[code[col]];
+            luts += lut.rows();
+        }
+        return result;
+    }
 };
 
 PYBIND11_MODULE(vaq_cpp, m) {
@@ -248,6 +293,10 @@ PYBIND11_MODULE(vaq_cpp, m) {
 
     py::class_<PyVAQ>(m, "PyVAQ")
         .def(py::init<>())
+        .def("set_query", &PyVAQ::set_query,
+            py::arg("query"),
+            "set query")
+        .def("estimate_distance", &PyVAQ::estimate_distance, py::arg("idx"), "Estimate distance between idx and the setted query")
         .def("parse_method_string", &PyVAQ::parseMethodString,
              py::arg("method_string"),
              "Parse VAQ method string (e.g., 'VAQ256m32min7max13var1,SORT')")

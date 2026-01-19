@@ -6,18 +6,37 @@ sift-128-euclidean:
   common:
     data_bytes: 4
     ndim: 128
-    nthread: 4
+    nthread: 16
     space: "l2"
   build:
-    nsubvec: [16]
-    nbit: [8]
+    nsubvec: [16, 32, 64]
+    nbit: [4, 8]
   search:
     - topk: 100
-      nrerank: [1456]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
-      nrerank: [311]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nrerank: [913]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+
+gist-960-euclidean:
+  # Product Quantization with build/search separation format
+  # Automatically generates all combinations: 3 x 3 = 9 configurations
+  common:
+    data_bytes: 4
+    ndim: 960
+    nthread: 16
+    space: "l2"
+  build:
+    nsubvec: [16, 32, 64]
+    nbit: [4, 8]
+  search:
+    - topk: 100
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+    - topk: 10
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+    - topk: 50
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
   # nsubvec: [16, 32]  # Number of subvectors
   # nbit: [4]          # Bits per subvector
   # data_bytes: 4      # Data type size in bytes

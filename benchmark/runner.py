@@ -402,18 +402,17 @@ class BenchmarkRunner:
                 graph_configs = self.load_config('graph', graph_name)
                 quantizer_configs = self.load_config('quantizer', quantizer_name)
 
-                # Group configs by build_params to avoid redundant building
-                grouped_configs = group_configs_by_build_params(graph_configs)
+                # Group both graph and quantizer configs by build_params
+                grouped_graph_configs = group_configs_by_build_params(graph_configs)
+                grouped_quantizer_configs = group_configs_by_build_params(quantizer_configs)
 
                 all_results = []
-                for i, g_config in enumerate(grouped_configs):
-                    # Use corresponding quantizer config or first one
-                    q_config = quantizer_configs[i] if i < len(quantizer_configs) else quantizer_configs[0]
-
-                    result = self._run_graph_benchmark(
-                        graph_name, quantizer_name, g_config, q_config
+                # For each graph build config, run ALL quantizer build configs IN ONE Docker container
+                for g_config in grouped_graph_configs:
+                    result = self._run_graph_benchmark_multi_quantizer(
+                        graph_name, quantizer_name, g_config, grouped_quantizer_configs
                     )
-                    # If result is a list (from build/search separation), extend all_results
+                    # Result should be a list of results for all quantizer configs
                     if isinstance(result, list):
                         all_results.extend(result)
                     else:
@@ -596,6 +595,142 @@ class BenchmarkRunner:
             result.update(search_result)
             all_results.append(result)
 
+        return all_results
+
+    def _run_graph_benchmark_multi_quantizer(
+        self,
+        graph_name: str,
+        quantizer_name: str,
+        graph_config: Dict[str, Any],
+        quantizer_configs: List[Dict[str, Any]]
+    ):
+        """
+        Run a benchmark with graph + multiple quantizer configurations.
+
+        Build the graph ONCE, then test all quantizer configurations on the same graph.
+
+        Args:
+            graph_name: Name of the graph algorithm
+            quantizer_name: Name of the quantizer
+            graph_config: Config for graph (contains build_params and search_params_list)
+            quantizer_configs: List of quantizer configs (each contains build_params and search_params_list)
+
+        Returns:
+            List of result dicts, one per (quantizer_config, search_param) combination
+        """
+        print(f"\n{'='*60}")
+        print(f"Multi-Quantizer Graph Benchmark: {graph_name} + {quantizer_name}")
+        print(f"{'='*60}")
+        print(f"Graph config: {graph_config}")
+        print(f"Number of quantizer configs: {len(quantizer_configs)}")
+
+        # Build combined Docker image
+        if not self.docker_runner.build_graph_image(graph_name, quantizer_name):
+            error_result = {
+                'dataset': self.dataset_name,
+                'graph': graph_name,
+                'quantizer': quantizer_name,
+                'status': 'failed',
+                'error': f'Failed to build graph+quantizer image: {graph_name}+{quantizer_name}'
+            }
+            return [error_result]
+
+        # Prepare config for Docker
+        # Convert quantizer_configs list to build_params_list format
+        quantizer_build_params_list = []
+        for q_config in quantizer_configs:
+            quantizer_build_params_list.append({
+                'build_params': q_config['build_params']
+            })
+
+        combined_config = {
+            'graph_params': graph_config,
+            'quantizer_params': {
+                'build_params_list': quantizer_build_params_list
+            }
+        }
+
+        print(f"Sending {len(quantizer_build_params_list)} quantizer configs to Docker container")
+        print("Graph will be built ONCE and reused for all quantizer configurations")
+
+        # Run in Docker
+        graph_results = self.docker_runner.run_graph(
+            graph_name,
+            quantizer_name,
+            self.train_data,
+            self.test_data,
+            self.ground_truth,
+            combined_config
+        )
+
+        if graph_results is None:
+            error_result = {
+                'dataset': self.dataset_name,
+                'graph': graph_name,
+                'quantizer': quantizer_name,
+                'status': 'failed',
+                'error': 'Graph benchmark failed'
+            }
+            return [error_result]
+
+        # Parse results from new format
+        # graph_results now has: build_time, graph_memory, quantizer_results (list)
+        build_time = graph_results.get('build_time')
+        graph_memory = graph_results.get('graph_memory')
+        quantizer_results_list = graph_results.get('quantizer_results', [])
+
+        if not quantizer_results_list:
+            error_result = {
+                'dataset': self.dataset_name,
+                'graph': graph_name,
+                'quantizer': quantizer_name,
+                'status': 'failed',
+                'error': 'No quantizer results returned'
+            }
+            return [error_result]
+
+        # Flatten results: for each quantizer config, for each search config, create one result dict
+        all_results = []
+        for quant_idx, quant_result in enumerate(quantizer_results_list):
+            quantizer_build_params = quant_result.get('quantizer_build_params', {})
+            training_time = quant_result.get('training_time')
+            quantizer_memory = quant_result.get('quantizer_memory')
+            compression_rate = quant_result.get('compression_rate')
+            mse = quant_result.get('mse')
+            search_results = quant_result.get('search_results', [])
+
+            # Create one result per search configuration
+            for search_result in search_results:
+                result = {
+                    'dataset': self.dataset_name,
+                    'graph': graph_name,
+                    'quantizer': quantizer_name,
+                    'graph_config': graph_config,
+                    'quantizer_config': {
+                        'build_params': quantizer_build_params
+                    },
+                    'status': 'success',
+                    # Graph build metrics (shared across all quantizers)
+                    'build_time': build_time,
+                    'graph_memory': graph_memory,
+                    # Quantizer metrics (specific to this quantizer)
+                    'training_time': training_time,
+                    'quantizer_memory': quantizer_memory,
+                    'compression_rate': compression_rate,
+                    'mse': mse,
+                    # Search metrics (specific to this search config)
+                    'search_params': search_result.get('search_params', {}),
+                    'query_time': search_result.get('query_time'),
+                    'queries_per_second': search_result.get('queries_per_second'),
+                    'recall': search_result.get('recall'),
+                    'map': search_result.get('map'),
+                    'recall@1': search_result.get('recall@1'),
+                    'predictions': search_result.get('predictions'),
+                    'distances': search_result.get('distances')
+                }
+                all_results.append(result)
+
+        print(f"\nTotal results: {len(all_results)} (from {len(quantizer_results_list)} quantizer configs)")
         return all_results
 
     def _run_graph_benchmark(

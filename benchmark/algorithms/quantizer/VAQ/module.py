@@ -217,3 +217,10 @@ class VAQ(BaseQuantizer):
             float: Mean squared error
         """
         return self.cpp_index.get_mse()
+    
+    def set_query(self, query: np.ndarray, thread_id: int):
+        query = query.astype(np.float32).reshape(1, self.ndim)
+        self.cpp_index.set_query(query)
+        
+    def estimate_distance(self, idx, thread_id):
+        return self.cpp_index.estimate_distance(idx)
