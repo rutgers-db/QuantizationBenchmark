@@ -372,7 +372,7 @@ class BenchmarkRunner:
 
     def run_benchmark(
         self,
-        quantizer_name: str,
+        quantizer_name: Optional[str] = None,
         dimreduction_name: Optional[str] = None,
         graph_name: Optional[str] = None,
         quantizer_config: Optional[Dict[str, Any]] = None,
@@ -384,7 +384,7 @@ class BenchmarkRunner:
         Run a complete benchmark.
 
         Args:
-            quantizer_name: Name of the quantizer algorithm
+            quantizer_name: Name of the quantizer algorithm (optional for graph-only mode)
             dimreduction_name: Optional name of dimensionality reduction algorithm
             graph_name: Optional name of graph algorithm
             quantizer_config: Optional config overrides for quantizer
@@ -400,25 +400,42 @@ class BenchmarkRunner:
             if graph_name:
                 # Load graph config
                 graph_configs = self.load_config('graph', graph_name)
-                quantizer_configs = self.load_config('quantizer', quantizer_name)
 
-                # Group both graph and quantizer configs by build_params
-                grouped_graph_configs = group_configs_by_build_params(graph_configs)
-                grouped_quantizer_configs = group_configs_by_build_params(quantizer_configs)
+                # Check if this is graph-only mode (no quantizer)
+                if quantizer_name is None:
+                    # Graph-only mode (e.g., SymphonyQG)
+                    grouped_graph_configs = group_configs_by_build_params(graph_configs)
 
-                all_results = []
-                # For each graph build config, run ALL quantizer build configs IN ONE Docker container
-                for g_config in grouped_graph_configs:
-                    result = self._run_graph_benchmark_multi_quantizer(
-                        graph_name, quantizer_name, g_config, grouped_quantizer_configs
-                    )
-                    # Result should be a list of results for all quantizer configs
-                    if isinstance(result, list):
-                        all_results.extend(result)
-                    else:
-                        all_results.append(result)
+                    all_results = []
+                    for g_config in grouped_graph_configs:
+                        result = self._run_graph_only_benchmark(graph_name, g_config)
+                        if isinstance(result, list):
+                            all_results.extend(result)
+                        else:
+                            all_results.append(result)
 
-                return all_results
+                    return all_results
+                else:
+                    # Graph + quantizer mode
+                    quantizer_configs = self.load_config('quantizer', quantizer_name)
+
+                    # Group both graph and quantizer configs by build_params
+                    grouped_graph_configs = group_configs_by_build_params(graph_configs)
+                    grouped_quantizer_configs = group_configs_by_build_params(quantizer_configs)
+
+                    all_results = []
+                    # For each graph build config, run ALL quantizer build configs IN ONE Docker container
+                    for g_config in grouped_graph_configs:
+                        result = self._run_graph_benchmark_multi_quantizer(
+                            graph_name, quantizer_name, g_config, grouped_quantizer_configs
+                        )
+                        # Result should be a list of results for all quantizer configs
+                        if isinstance(result, list):
+                            all_results.extend(result)
+                        else:
+                            all_results.append(result)
+
+                    return all_results
             else:
                 quantizer_configs = self.load_config('quantizer', quantizer_name)
                 dimreduction_configs = None
@@ -731,6 +748,96 @@ class BenchmarkRunner:
                 all_results.append(result)
 
         print(f"\nTotal results: {len(all_results)} (from {len(quantizer_results_list)} quantizer configs)")
+        return all_results
+
+    def _run_graph_only_benchmark(
+        self,
+        graph_name: str,
+        graph_config: Dict[str, Any]
+    ):
+        """
+        Run a benchmark with graph-only (no external quantizer).
+
+        This is used for algorithms like SymphonyQG that have integrated quantization.
+
+        Args:
+            graph_name: Name of the graph algorithm
+            graph_config: Config for graph (contains build_params and search_params_list)
+
+        Returns:
+            List of result dicts, one per search configuration
+        """
+        print(f"\n{'='*60}")
+        print(f"Graph-Only Benchmark: {graph_name}")
+        print(f"{'='*60}")
+        print(f"Graph config: {graph_config}")
+
+        # Build graph-only Docker image
+        if not self.docker_runner.build_graph_only_image(graph_name):
+            error_result = {
+                'dataset': self.dataset_name,
+                'graph': graph_name,
+                'status': 'failed',
+                'error': f'Failed to build graph-only image: {graph_name}'
+            }
+            return [error_result]
+
+        # Run in Docker
+        graph_results = self.docker_runner.run_graph_only(
+            graph_name,
+            self.train_data,
+            self.test_data,
+            self.ground_truth,
+            graph_config
+        )
+
+        if graph_results is None:
+            error_result = {
+                'dataset': self.dataset_name,
+                'graph': graph_name,
+                'status': 'failed',
+                'error': 'Graph-only benchmark failed'
+            }
+            return [error_result]
+
+        # Parse results
+        build_time = graph_results.get('build_time')
+        graph_memory = graph_results.get('graph_memory')
+        search_results_list = graph_results.get('search_results', [])
+
+        if not search_results_list:
+            error_result = {
+                'dataset': self.dataset_name,
+                'graph': graph_name,
+                'status': 'failed',
+                'error': 'No search results returned'
+            }
+            return [error_result]
+
+        # Create one result dict per search configuration
+        all_results = []
+        for search_result in search_results_list:
+            result = {
+                'dataset': self.dataset_name,
+                'graph': graph_name,
+                'graph_config': graph_config,
+                'status': 'success',
+                # Graph build metrics
+                'build_time': build_time,
+                'graph_memory': graph_memory,
+                # Search metrics
+                'search_params': search_result.get('search_params', {}),
+                'query_time': search_result.get('query_time'),
+                'queries_per_second': search_result.get('queries_per_second'),
+                'recall': search_result.get('recall'),
+                'map': search_result.get('map'),
+                'recall@1': search_result.get('recall@1'),
+                'predictions': search_result.get('predictions'),
+                'distances': search_result.get('distances')
+            }
+            all_results.append(result)
+
+        print(f"\nTotal results: {len(all_results)}")
         return all_results
 
     def _run_graph_benchmark(

@@ -1,0 +1,62 @@
+# Configuration for SymphonyQG graph index
+# SymphonyQG has integrated quantization, so no external quantizer is needed
+
+sift-128-euclidean:
+  common:
+    num_threads: 4         # Number of threads
+    metric: "L2"            # Distance metric
+  build:
+    degree_bound: [32]      # Max out-degree (must be multiple of 32)
+    build_ef: [50]         # Build complexity
+    num_iter: [3]           # Number of iterations
+  search:
+    - topk: 10
+      search_ef: [10, 20, 30, 40, 50, 75, 100, 200]
+
+siftsmall-128-euclidean:
+  common:
+    num_threads: 8
+    metric: "L2"
+  build:
+    degree_bound: [32]
+    build_ef: [100, 200]
+    num_iter: [3]
+  search:
+    - topk: 10
+      search_ef: [20, 50, 100, 200]
+
+gist-960-euclidean:
+  common:
+    num_threads: 16
+    metric: "L2"
+  build:
+    degree_bound: [32]
+    build_ef: [200]
+    num_iter: [3]
+  search:
+    - topk: 10
+      search_ef: [50, 100, 200, 300, 500]
+
+glove-100-angular:
+  common:
+    num_threads: 16
+    metric: "L2"
+  build:
+    degree_bound: [32]
+    build_ef: [200]
+    num_iter: [3]
+  search:
+    - topk: 10
+      search_ef: [50, 100, 200, 300]
+
+deep-96-angular:
+  common:
+    num_threads: 16
+    metric: "L2"
+  build:
+    degree_bound: [32]
+    build_ef: [200]
+    num_iter: [3]
+  search:
+    - topk: 10
+      search_ef: [50, 100, 200, 300, 500]

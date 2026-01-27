@@ -81,7 +81,7 @@ def build_images(algorithm: str = None, graph: str = None, force_rebuild: bool =
     Args:
         algorithm: Optional algorithm string (e.g., "PQ" or "PCA,PQ")
                   If None, build all algorithms
-        graph: Optional graph algorithm name (e.g., "diskann")
+        graph: Optional graph algorithm name (e.g., "diskann", "symphonyqg")
         force_rebuild: Force rebuild even if image exists
     """
     print("\n" + "="*60)
@@ -108,8 +108,9 @@ def build_images(algorithm: str = None, graph: str = None, force_rebuild: bool =
                 print(f"Building image for quantizer: {quantizer_name}")
                 docker_runner.build_image('quantizer', quantizer_name, force_rebuild)
         elif graph:
-            print(f"Error: --graph requires --algorithm to specify the quantizer")
-            return
+            # Graph-only mode (e.g., SymphonyQG which doesn't need a quantizer)
+            print(f"Building graph-only image for: {graph}")
+            docker_runner.build_graph_only_image(graph, force_rebuild)
     else:
         # Build all algorithms
         docker_runner.build_all_images(force_rebuild=force_rebuild)
@@ -194,8 +195,12 @@ def save_results(results, output_dir: str = "benchmark/results"):
 
         # Generate filename based on whether this is a graph or quantizer result
         if 'graph' in first_result:
-            # Graph result: dataset_graph_quantizer.json
-            algo_str = f"{first_result['graph']}_{first_result['quantizer']}"
+            if 'quantizer' in first_result and first_result['quantizer']:
+                # Graph + quantizer result: dataset_graph_quantizer.json
+                algo_str = f"{first_result['graph']}_{first_result['quantizer']}"
+            else:
+                # Graph-only result (e.g., SymphonyQG): dataset_graph.json
+                algo_str = first_result['graph']
         else:
             # Quantizer result
             algo_str = first_result['quantizer']
@@ -275,9 +280,15 @@ def save_results(results, output_dir: str = "benchmark/results"):
                 serializable_results.append(convert_types(grouped_result))
     else:
         # Single configuration
-        algo_str = results['quantizer']
-        if results.get('dimreduction'):
-            algo_str = f"{results['dimreduction']}_{algo_str}"
+        if 'graph' in results:
+            if 'quantizer' in results and results['quantizer']:
+                algo_str = f"{results['graph']}_{results['quantizer']}"
+            else:
+                algo_str = results['graph']
+        else:
+            algo_str = results['quantizer']
+            if results.get('dimreduction'):
+                algo_str = f"{results['dimreduction']}_{algo_str}"
 
         filename = f"{results['dataset']}_{algo_str}.json"
 
@@ -359,31 +370,41 @@ Examples:
         return 0
 
     # Validate required arguments for benchmark run
-    if not args.dataset or not args.algorithm:
-        parser.error('--dataset and --algorithm are required for running benchmarks')
+    if not args.dataset:
+        parser.error('--dataset is required for running benchmarks')
 
-    # Parse algorithm string
-    try:
-        dimreduction_name, quantizer_name = parse_algorithm_string(args.algorithm)
-    except ValueError as e:
-        print(f"Error: {e}")
-        return 1
+    # Must have either --algorithm or --graph (or both for graph+quantizer mode)
+    if not args.algorithm and not args.graph:
+        parser.error('Either --algorithm or --graph (or both) is required for running benchmarks')
 
-    # Validate graph+dimreduction combination
-    if args.graph and dimreduction_name:
-        parser.error('Graph algorithms cannot be combined with dimensionality reduction. Use either --algorithm <Quantizer> --graph <Graph> or --algorithm <DimReduction>,<Quantizer>')
+    # Parse algorithm string if provided
+    dimreduction_name = None
+    quantizer_name = None
+    if args.algorithm:
+        try:
+            dimreduction_name, quantizer_name = parse_algorithm_string(args.algorithm)
+        except ValueError as e:
+            print(f"Error: {e}")
+            return 1
+
+        # Validate graph+dimreduction combination
+        if args.graph and dimreduction_name:
+            parser.error('Graph algorithms cannot be combined with dimensionality reduction. Use either --algorithm <Quantizer> --graph <Graph> or --algorithm <DimReduction>,<Quantizer>')
 
     # Run benchmark
     print("\n" + "="*60)
     print("Quantization Benchmark")
     print("="*60)
     print(f"Dataset: {args.dataset}")
-    print(f"Algorithm: {args.algorithm}")
-    if dimreduction_name:
-        print(f"  Dimensionality Reduction: {dimreduction_name}")
-    print(f"  Quantizer: {quantizer_name}")
+    if args.algorithm:
+        print(f"Algorithm: {args.algorithm}")
+        if dimreduction_name:
+            print(f"  Dimensionality Reduction: {dimreduction_name}")
+        print(f"  Quantizer: {quantizer_name}")
     if args.graph:
         print(f"  Graph: {args.graph}")
+        if not args.algorithm:
+            print(f"  Mode: Graph-only (no external quantizer)")
     print("="*60)
 
     try:

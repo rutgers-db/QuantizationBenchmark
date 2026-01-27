@@ -1,0 +1,26 @@
+cmake_minimum_required(VERSION 3.12)
+project(hvs_python)
+
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find packages
+find_package(OpenCV REQUIRED)
+find_package(pybind11 REQUIRED)
+find_package(OpenMP REQUIRED)
+
+# Include directories
+include_directories(${OpenCV_INCLUDE_DIRS})
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+
+# Compiler flags
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Ofast -DNDEBUG -march=native -fpic -fopenmp -ftree-vectorize")
+
+# Create pybind11 module
+pybind11_add_module(hvs hvs_binding.cpp)
+
+# Link libraries
+target_link_libraries(hvs PRIVATE ${OpenCV_LIBS} OpenMP::OpenMP_CXX)
+
+# Install target
+install(TARGETS hvs LIBRARY DESTINATION .)

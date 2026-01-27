@@ -1,0 +1,54 @@
+FROM python:3.10-slim
+
+# Build argument for graph name
+ARG GRAPH_NAME=symphonyqg
+
+# Avoid timezone prompt
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    g++ \
+    git \
+    wget \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+# Use pybind11 2.12.0 (2.13.x has compatibility issues with std::copy_n)
+RUN pip install --no-cache-dir \
+    numpy==1.26.4 \
+    h5py \
+    pyyaml \
+    psutil \
+    "pybind11[global]==2.12.0" \
+    scikit-learn \
+    scipy
+
+# Clone SymphonyQG repository
+RUN cd /opt && \
+    git clone https://github.com/gouyt13/SymphonyQG.git && \
+    cd SymphonyQG && \
+    git checkout main
+
+# Build SymphonyQG Python bindings
+# Skip requirements.txt to avoid pybind11 version conflicts
+RUN cd /opt/SymphonyQG/python && \
+    pip install .
+
+# Copy the benchmark framework code
+COPY benchmark/ /benchmark/
+
+# Copy the graph module
+COPY benchmark/graphs/${GRAPH_NAME}/ /algorithms/graphs/${GRAPH_NAME}/
+
+# Set Python path to include necessary directories
+ENV PYTHONPATH=/:/algorithms/graphs/${GRAPH_NAME}
+
+# Set working directory
+WORKDIR /workspace
+
+# The entrypoint will be provided by the framework at runtime

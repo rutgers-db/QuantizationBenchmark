@@ -188,6 +188,77 @@ class DockerRunner:
         print(f"Successfully built image: {image_name}")
         return True
 
+    def build_graph_only_image(self, graph_name: str, force_rebuild: bool = False) -> bool:
+        """
+        Build Docker image for a graph-only algorithm (no external quantizer).
+
+        This is used for algorithms like SymphonyQG that have integrated quantization.
+
+        Args:
+            graph_name: Name of the graph algorithm (e.g., 'symphonyqg')
+            force_rebuild: Force rebuild even if image exists
+
+        Returns:
+            bool: True if build succeeded
+        """
+        graph_dir = os.path.join(self.graph_path, graph_name)
+        dockerfile_path = os.path.join(graph_dir, "dockerfile")
+
+        if not os.path.exists(dockerfile_path):
+            print(f"Error: Dockerfile not found at {dockerfile_path}")
+            return False
+
+        # Image name for graph-only
+        image_name = f"quantbench-graph-{graph_name.lower()}:latest"
+
+        # Check if image exists
+        if not force_rebuild:
+            result = subprocess.run(
+                ["docker", "images", "-q", image_name],
+                capture_output=True,
+                text=True
+            )
+            if result.stdout.strip():
+                print(f"Image {image_name} already exists, skipping build")
+                return True
+
+        # Remove old image if force rebuild
+        if force_rebuild:
+            result = subprocess.run(
+                ["docker", "images", "-q", image_name],
+                capture_output=True,
+                text=True
+            )
+            if result.stdout.strip():
+                print(f"Removing Docker image: {image_name}")
+                result = subprocess.run(
+                    ["docker", "rmi", image_name],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode != 0:
+                    print(f"Error removing image: {result.stderr}")
+                    return False
+                print(f"Successfully removed image: {image_name}")
+
+        print(f"Building Docker image: {image_name}")
+
+        project_root = os.path.abspath(".")
+        result = subprocess.run(
+            ["docker", "build", "-t", image_name, "-f", dockerfile_path,
+             "--build-arg", f"GRAPH_NAME={graph_name}",
+             project_root],
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode != 0:
+            print(f"Error building image: {result.stderr}")
+            return False
+
+        print(f"Successfully built image: {image_name}")
+        return True
+
     def run_dimreduction(
         self,
         algo_name: str,
@@ -486,6 +557,112 @@ class DockerRunner:
         ])
 
         print(f"Running {graph_name} with {quantizer_name} in Docker container...")
+        if self.debug:
+            # Debug mode: show real-time output
+            print("\n" + "="*60)
+            print("DEBUG MODE: Real-time Docker output")
+            print("="*60 + "\n")
+            result = subprocess.run(cmd)
+        else:
+            # Normal mode: capture output
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            if not self.debug:
+                print(f"Docker returncode: {result.returncode}")
+                print(f"Error running container: {result.stderr}")
+                print(f"Stdout: {result.stdout}")
+            return None
+
+        # Read output
+        if not os.path.exists(output_file):
+            print(f"Error: Output file not found")
+            return None
+
+        with open(output_file, 'rb') as f:
+            output = pickle.load(f)
+
+        # Cleanup
+        os.remove(input_file)
+        os.remove(output_file)
+        os.rmdir(input_dir)
+
+        return output
+
+    def run_graph_only(
+        self,
+        graph_name: str,
+        train_data: np.ndarray,
+        test_data: np.ndarray,
+        ground_truth: np.ndarray,
+        config: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Run graph-only algorithm in Docker container (no external quantizer).
+
+        This is used for algorithms like SymphonyQG that have integrated quantization.
+
+        Args:
+            graph_name: Name of the graph algorithm
+            train_data: Training data array
+            test_data: Test data array
+            ground_truth: Ground truth neighbor indices
+            config: Configuration parameters
+
+        Returns:
+            Dict containing all benchmark results
+        """
+        # Prepare input data
+        input_dir = os.path.join(self.temp_dir, f"graph_only_{graph_name}_{int(time.time())}")
+        os.makedirs(input_dir, exist_ok=True)
+
+        input_file = os.path.join(input_dir, "input.pkl")
+        output_file = os.path.join(input_dir, "output.pkl")
+
+        with open(input_file, 'wb') as f:
+            pickle.dump({
+                'train_data': train_data,
+                'test_data': test_data,
+                'ground_truth': ground_truth,
+                'config': config
+            }, f)
+
+        # Run container
+        image_name = f"quantbench-graph-{graph_name.lower()}:latest"
+
+        # Extract nthread from config to set environment variables
+        nthread = None
+        if 'build_params' in config:
+            nthread = config['build_params'].get('num_threads')
+        else:
+            nthread = config.get('num_threads')
+
+        cmd = [
+            "docker", "run", "--rm",
+            "-v", f"{os.path.abspath(input_dir)}:/workspace",
+            "-v", f"{os.path.abspath('benchmark')}:/benchmark",
+            "-v", "/tmp:/tmp",  # Mount host /tmp for fast disk I/O (SSD)
+        ]
+
+        # Add thread environment variables if nthread is specified
+        if nthread is not None:
+            cmd.extend([
+                "-e", f"OMP_NUM_THREADS={nthread}",
+                "-e", f"MKL_NUM_THREADS={nthread}",
+                "-e", f"OPENBLAS_NUM_THREADS={nthread}",
+                "-e", f"NUMEXPR_NUM_THREADS={nthread}",
+            ])
+
+        cmd.extend([
+            image_name,
+            "python", "-u", "/benchmark/docker_entrypoint.py",
+            "--mode", "graph-only",
+            "--input", "/workspace/input.pkl",
+            "--output", "/workspace/output.pkl",
+            "--graph-module", f"/algorithms/graphs/{graph_name}/module.py"
+        ])
+
+        print(f"Running {graph_name} (graph-only) in Docker container...")
         if self.debug:
             # Debug mode: show real-time output
             print("\n" + "="*60)

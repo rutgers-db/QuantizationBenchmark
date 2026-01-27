@@ -580,15 +580,124 @@ def calculate_recall_at_1(predictions: np.ndarray, ground_truth: np.ndarray) -> 
     return num_correct / nq if nq > 0 else 0.0
 
 
+def run_graph_only(input_path: str, output_path: str, graph_module_path: str):
+    """
+    Run graph-only algorithm (no external quantizer).
+
+    This is used for algorithms like SymphonyQG that have integrated quantization.
+
+    Args:
+        input_path: Path to input pickle file
+        output_path: Path to output pickle file
+        graph_module_path: Path to graph module
+    """
+    # Load input data
+    with open(input_path, 'rb') as f:
+        input_data = pickle.load(f)
+
+    train_data = input_data['train_data']
+    test_data = input_data['test_data']
+    ground_truth = input_data['ground_truth']
+    config = input_data['config']
+
+    print(f"Train data shape: {train_data.shape}")
+    print(f"Test data shape: {test_data.shape}")
+    print(f"Ground truth shape: {ground_truth.shape}")
+    print(f"Config: {config}")
+
+    # Load graph class
+    GraphClass = load_module_class(graph_module_path, 'BaseGraphIndex')
+
+    nd, d = train_data.shape
+    nq = test_data.shape[0]
+
+    # Get build and search parameters
+    build_params = config.get('build_params', {})
+    search_params_list = config.get('search_params_list', [{}])
+
+    print(f"\n=== Graph-Only Mode ===")
+    print(f"Build params: {build_params}")
+    print(f"Number of search configs: {len(search_params_list)}")
+
+    # Instantiate graph with quantizer=None
+    print("\n=== Initializing Graph Index ===")
+    graph_index = GraphClass(quantizer=None, **build_params)
+
+    # Build graph
+    print("\n=== Building Graph Index ===")
+    start_time = time.time()
+    success = graph_index.build(nd, train_data)
+    build_time = time.time() - start_time
+
+    if not success:
+        raise RuntimeError("Graph index build failed")
+
+    print(f"Build time: {build_time:.4f}s")
+
+    # Get graph memory
+    graph_memory = graph_index.getMemoryUsage()
+    print(f"Graph memory: {graph_memory / 1024:.2f} MB")
+
+    # Search with all search parameter sets
+    print("\n=== Searching ===")
+
+    search_results = []
+    for search_idx, search_params in enumerate(search_params_list):
+        # Extract topk from search_params
+        search_params_copy = search_params.copy()
+        topk = search_params_copy.pop('topk', 100)
+        print(f"\nSearch configuration {search_idx + 1}/{len(search_params_list)}: {search_params}")
+
+        start_time = time.time()
+        I, D = graph_index.search(nq, test_data, topk, **search_params_copy)
+        query_time = time.time() - start_time
+
+        # Calculate metrics
+        recall = calculate_recall(I, ground_truth[:, :topk])
+        map_score = calculate_map(I, ground_truth[:, :topk])
+        recall_at_1 = calculate_recall_at_1(I, ground_truth[:, :topk])
+
+        print(f"  Query time: {query_time:.4f}s")
+        print(f"  Queries per second: {len(test_data) / query_time:.2f}")
+        print(f"  Recall@{topk}: {recall:.4f}")
+        print(f"  MAP@{topk}: {map_score:.4f}")
+        print(f"  Recall@1: {recall_at_1:.4f}")
+
+        # Collect results for this search configuration
+        result = {
+            'search_params': search_params,
+            'query_time': query_time,
+            'queries_per_second': len(test_data) / query_time if query_time > 0 else 0,
+            'recall': recall,
+            'map': map_score,
+            'recall@1': recall_at_1,
+            'predictions': I,
+            'distances': D
+        }
+        search_results.append(result)
+
+    # Prepare final output
+    output = {
+        'build_time': build_time,
+        'graph_memory': graph_memory,
+        'search_results': search_results
+    }
+
+    with open(output_path, 'wb') as f:
+        pickle.dump(output, f)
+
+    print(f"\nResults saved to {output_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Docker entrypoint for running algorithms')
-    parser.add_argument('--mode', required=True, choices=['quantizer', 'dimreduction', 'graph'],
-                        help='Mode: quantizer, dimreduction, or graph')
+    parser.add_argument('--mode', required=True, choices=['quantizer', 'dimreduction', 'graph', 'graph-only'],
+                        help='Mode: quantizer, dimreduction, graph, or graph-only')
     parser.add_argument('--input', required=True, help='Input pickle file path')
     parser.add_argument('--output', required=True, help='Output pickle file path')
     parser.add_argument('--module', help='Algorithm module path (for quantizer/dimreduction)')
     parser.add_argument('--quantizer-module', help='Quantizer module path (for graph)')
-    parser.add_argument('--graph-module', help='Graph module path (for graph)')
+    parser.add_argument('--graph-module', help='Graph module path (for graph and graph-only)')
 
     args = parser.parse_args()
 
@@ -610,6 +719,8 @@ def main():
         run_quantizer(args.input, args.output, args.module)
     elif args.mode == 'graph':
         run_graph(args.input, args.output, args.quantizer_module, args.graph_module)
+    elif args.mode == 'graph-only':
+        run_graph_only(args.input, args.output, args.graph_module)
 
 
 if __name__ == '__main__':

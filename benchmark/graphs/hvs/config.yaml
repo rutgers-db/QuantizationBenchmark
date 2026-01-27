@@ -1,0 +1,62 @@
+# Configuration for HVS graph index
+# HVS has integrated hierarchical quantization, no external quantizer needed
+
+sift-128-euclidean:
+  common:
+    num_threads: 16
+  build:
+    max_level: [1]
+    delta: [0.5]
+    efConstruction: [500]
+    M: [16]
+  search:
+    - topk: 10
+      efsearch: [100, 200, 500, 1000, 2000]
+
+siftsmall-128-euclidean:
+  common:
+    num_threads: 8
+  build:
+    max_level: [1]
+    delta: [0.5]
+    efConstruction: [500]
+    M: [16]
+  search:
+    - topk: 10
+      efsearch: [100, 500, 1000]
+
+gist-960-euclidean:
+  common:
+    num_threads: 16
+  build:
+    max_level: [1]
+    delta: [0.5]
+    efConstruction: [500]
+    M: [16]
+  search:
+    - topk: 10
+      efsearch: [100, 200, 500, 1000, 2000]
+
+glove-100-angular:
+  common:
+    num_threads: 16
+  build:
+    max_level: [1]
+    delta: [0.5]
+    efConstruction: [500]
+    M: [16]
+  search:
+    - topk: 10
+      efsearch: [100, 200, 500, 1000]
+
+deep-96-angular:
+  common:
+    num_threads: 16
+  build:
+    max_level: [1]
+    delta: [0.5]
+    efConstruction: [500]
+    M: [16]
+  search:
+    - topk: 10
+      efsearch: [100, 200, 500, 1000, 2000]

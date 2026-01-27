@@ -1,0 +1,45 @@
+FROM python:3.10-slim
+
+# Build argument for graph name
+ARG GRAPH_NAME=hvs
+
+# Avoid timezone prompt
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Install system dependencies (including OpenCV for PCA/SVD)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    g++ \
+    git \
+    wget \
+    libgomp1 \
+    libopencv-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    numpy==1.26.4 \
+    h5py \
+    pyyaml \
+    psutil \
+    "pybind11[global]==2.12.0" \
+    scikit-learn \
+    scipy
+
+# Copy HVS source and build Python bindings
+COPY benchmark/graphs/hvs/hvs_src/ /opt/hvs/
+RUN cd /opt/hvs && pip install .
+
+# Copy the benchmark framework code
+COPY benchmark/ /benchmark/
+
+# Copy the graph module
+COPY benchmark/graphs/${GRAPH_NAME}/ /algorithms/graphs/${GRAPH_NAME}/
+
+# Set Python path to include necessary directories
+ENV PYTHONPATH=/:/algorithms/graphs/${GRAPH_NAME}
+
+# Set working directory
+WORKDIR /workspace
