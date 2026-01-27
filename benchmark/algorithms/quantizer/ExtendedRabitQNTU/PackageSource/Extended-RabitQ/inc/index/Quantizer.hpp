@@ -54,6 +54,16 @@ class DataQuantizer {
     data_transformation(const float*, const float*, const std::vector<PID>&, const Rotator&, float*, FloatRowMat&, IntRowMat&)
         const;
 
+    void
+    data_transformation_mse(const float*, const float*, const std::vector<PID>&, const Rotator&, FloatRowMat&, IntRowMat&)
+        const;
+    float
+    exrabitq_codes_mse(const IntRowMat&, const FloatRowMat&, const float*)
+        const;
+    
+    float fast_quantize_mse(const float*, float) const;
+    
+
     void store_compacted_code(uint8_t*, uint8_t*) const;
 
    public:
@@ -91,6 +101,11 @@ class DataQuantizer {
     size_t num_blocks(size_t num) const { return div_rd_up(num, FAST_SIZE); };
 
     static constexpr size_t num_short_factors() { return NUM_SHORT_FACTORS; }
+
+
+    float 
+    get_data_mse(const float*, const float*, const std::vector<PID>&, const Rotator&)
+        const;
 
     void
     quantize(const float*, const float*, const std::vector<PID>&, const Rotator&, uint8_t*, uint8_t*, ExFactor*, float*)
@@ -205,6 +220,7 @@ void DataQuantizer::fast_quantize(const float* o_prime, uint8_t* code, float& ip
         sqr_denominator += (int)o_bar[i] * o_bar[i] + o_bar[i];
         numerator += (o_bar[i] + 0.5) * o_prime[i];
     }
+
     // double norm = std::sqrt(sqr_denominator);
     // double ip = numerator / norm;
     ip_norm = 1 / numerator;  // 1/(ip*norm)
@@ -217,6 +233,117 @@ void DataQuantizer::fast_quantize(const float* o_prime, uint8_t* code, float& ip
         code[i] = static_cast<uint8_t>(o_bar[i]);
     }
 }
+
+
+float DataQuantizer::fast_quantize_mse(const float* o_prime, float fac_x2)
+    const {
+    constexpr double eps = 1e-5;
+    constexpr int n_enum = 10;
+    double max_o = -1;
+
+    for (size_t i = 0; i < D; i++)
+        if (o_prime[i] > max_o)
+            max_o = o_prime[i];
+    double t_start = (double)(((1 << EX_BITS) - 1) / 3) / max_o;
+    double t_end = (double)(((1 << EX_BITS) - 1) + n_enum) / max_o;
+
+    int cur_o_bar[D];
+    double sqr_denominator = D * 0.25;
+    double numerator = 0;
+
+    for (size_t i = 0; i < D; ++i) {
+        cur_o_bar[i] = int((double)t_start * o_prime[i] + eps);
+        sqr_denominator += cur_o_bar[i] * cur_o_bar[i] + cur_o_bar[i];
+        numerator += (cur_o_bar[i] + 0.5) * o_prime[i];
+    }
+
+    std::priority_queue<
+        std::pair<double, size_t>,
+        std::vector<std::pair<double, size_t>>,
+        std::greater<std::pair<double, size_t>>>
+        next_t;
+
+    for (size_t i = 0; i < D; ++i) {
+        next_t.emplace(std::make_pair((double)(cur_o_bar[i] + 1) / o_prime[i], i));
+    }
+
+    double max_ip = 0;
+    double t = 0;
+
+    size_t cnt = 0;
+    while (next_t.empty() == false) {
+        double cur_t = next_t.top().first;
+        size_t update_id = next_t.top().second;
+        ++cnt;
+        next_t.pop();
+
+        cur_o_bar[update_id]++;
+        int update_o_bar = cur_o_bar[update_id];
+        sqr_denominator += 2 * update_o_bar;
+        numerator += o_prime[update_id];
+
+        double cur_ip = numerator / std::sqrt(sqr_denominator);
+        if (cur_ip > max_ip) {
+            max_ip = cur_ip;
+            t = cur_t;
+        }
+
+        if (update_o_bar < (1 << EX_BITS) - 1) {
+            double t_next = (double)(update_o_bar + 1) / o_prime[update_id];
+            if (t_next < t_end)
+                next_t.emplace(std::make_pair(t_next, update_id));
+        }
+    }
+
+    sqr_denominator = D * 0.25;
+    numerator = 0;
+    int32_t o_bar[D];
+    for (size_t i = 0; i < D; i++) {
+        o_bar[i] = int((double)t * o_prime[i] + eps);
+        if (o_bar[i] >= (1 << EX_BITS))
+            o_bar[i] = (1 << EX_BITS) - 1;
+        sqr_denominator += (int)o_bar[i] * o_bar[i] + o_bar[i];
+        numerator += (o_bar[i] + 0.5) * o_prime[i];
+    }
+
+    // double norm = std::sqrt(sqr_denominator);
+    // double ip = numerator / norm;
+
+
+    return fac_x2 * fac_x2 + sqr_denominator - 2 * numerator * fac_x2;
+}
+
+float DataQuantizer::get_data_mse(
+    const float* data,
+    const float* centroid,
+    const std::vector<PID>& IDs,
+    const Rotator& rotator
+)  const {
+    size_t num_points = IDs.size();  // Num of point in this cluster
+
+    FloatRowMat XP_norm;
+    IntRowMat bin_XP;
+
+    data_transformation_mse(data, centroid, IDs, rotator, XP_norm, bin_XP);
+
+    float* fac_x2 = new float[num_points];
+
+     for (size_t i = 0; i < num_points; ++i) {
+        // distance 2 centroid
+        const float* cur_data = data + this->DIM * IDs[i];
+        fac_x2[i] = L2Sqr(cur_data, centroid, this->DIM);
+     }
+    /* pre-computed factor */
+
+    /* quantization code of ExRaBitQ */
+    float mse = exrabitq_codes_mse(bin_XP, XP_norm, fac_x2);
+
+    /* Save short codes and factor block by block */
+    delete[] fac_x2;
+
+    return mse;
+}
+
 
 /**
  * @brief Quantize data vectors of IDs and store related data
@@ -313,6 +440,56 @@ void DataQuantizer::quantize(
 /**
  * @brief Normalize & rotate data for quantization
  */
+
+
+ void DataQuantizer::data_transformation_mse(
+    const float* data,
+    const float* centroid,
+    const std::vector<PID>& IDs,
+    const Rotator& rotator,
+    FloatRowMat& XP_norm,
+    IntRowMat& bin_XP
+) const {
+    /* Assesrt correct size */
+    assert(rotator.size() == D);
+
+    size_t num_points = IDs.size();  // Num of point in this cluster
+
+    FloatRowMat X_pad(num_points, this->D);  // padded data points mat
+    FloatRowMat C_pad(1, this->D);           // padded centroid mat
+    X_pad.setZero();
+    C_pad.setZero();
+
+    /* Copy data */
+    size_t copy_size = this->DIM * sizeof(float);  // Num of bytes for each data vector
+    for (size_t i = 0; i < num_points; ++i) {
+        const float* cur_data = data + this->DIM * IDs[i];
+        std::memcpy(&X_pad(i, 0), cur_data, copy_size);
+    }
+    std::memcpy(C_pad.data(), centroid, copy_size);
+
+    /* Rotate Data */
+    FloatRowMat XP(num_points, this->D);
+    FloatRowMat CP(1, this->D);
+    rotator.rotate(X_pad, XP);
+    rotator.rotate(C_pad, CP);
+    for (int i = 0; i < XP.rows(); i++) {
+        XP.row(i) = XP.row(i) - CP;  // residual
+    }
+    
+    XP_norm = XP.rowwise().normalized();  // normalized rotated data
+
+    /* Binary representation */
+    bin_XP = IntRowMat(num_points, this->D);
+    for (uint32_t i = 0; i < num_points; ++i) {
+        for (uint32_t j = 0; j < this->D; ++j) {
+            bin_XP(i, j) = (XP(i, j) > 0);
+        }
+    }
+}
+
+
+
 void DataQuantizer::data_transformation(
     const float* data,
     const float* centroid,
@@ -486,6 +663,26 @@ void DataQuantizer::exrabitq_codes(
 
         store_compacted_code(tmp_code, long_code + i * long_code_length());
     }
+}
+
+
+float DataQuantizer::exrabitq_codes_mse(
+    const IntRowMat& bin_XP,
+    const FloatRowMat& XP_norm,
+    const float* fac_x2
+) const {
+    size_t num_points = bin_XP.rows();
+    int32_t mask = (1 << EX_BITS) - 1;
+    FloatRowMat abs_mat = XP_norm.array().abs();
+    uint8_t PORTABLE_ALIGN64 tmp_code[D];
+
+    // get long codes
+    float mse = 0;
+    for (size_t i = 0; i < num_points; ++i) {
+        float ipnorm;
+        mse = mse * float(i)/float(i+1) + fast_quantize_mse(&abs_mat(i, 0), fac_x2[i]) / float(i+1);
+    }
+    return mse;
 }
 
 void DataQuantizer::store_compacted_code(uint8_t* o_raw, uint8_t* o_compact) const {

@@ -8,7 +8,7 @@ import setuptools
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 
 include_dirs = [
@@ -33,6 +33,15 @@ ext_modules = [
         libraries=libraries,
         language='c++',
         extra_objects=extra_objects,
+    ),
+    Extension(
+        'ExtendedRabitQ_HighAcc',
+        source_files,
+        include_dirs=include_dirs,
+        libraries=libraries,
+        language='c++',
+        extra_objects=extra_objects,
+        define_macros=[("HIGH_ACC_FAST_SCAN", None)]
     ),
 ]
 
