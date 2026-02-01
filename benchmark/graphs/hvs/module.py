@@ -66,7 +66,11 @@ class HVS(BaseGraphIndex):
             print(f"  delta: {self.delta}")
             print(f"  efConstruction: {self.efConstruction}")
             print(f"  M: {self.M}")
+            print(f"  num_threads: {self.num_threads}")
             print(f"  index dir: {self._tmpdir}")
+
+            # Set OpenMP thread count
+            os.environ["OMP_NUM_THREADS"] = str(self.num_threads)
 
             # Build index (module-level function, writes files to disk)
             hvs.build(
@@ -102,7 +106,25 @@ class HVS(BaseGraphIndex):
             traceback.print_exc()
             return False
 
-    def search(self, nq: int, queries: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
+    def search(self, nq: int, queries: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Search for nearest neighbors.
+
+        Args:
+            nq: Number of query vectors
+            queries: Query vectors of shape (nq, d)
+            topk: Number of nearest neighbors to return
+            **search_params: Search parameters
+                - efsearch: Search list size (default: 1000)
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+                - I: Indices of nearest neighbors, shape (nq, topk)
+                - D: Distances to nearest neighbors, shape (nq, topk)
+                - hops: None (not supported yet)
+                - comps: None (not supported yet)
+                - nrerank: None (not supported yet)
+        """
         if not self.trained:
             raise RuntimeError("Index not trained. Call build() first.")
 
@@ -121,7 +143,7 @@ class HVS(BaseGraphIndex):
         for i in range(nq):
             D[i] = np.sum((self._original_data[I[i]] - queries[i]) ** 2, axis=1)
 
-        return I, D
+        return I, D, None, None, None
 
     def getMemoryUsage(self) -> float:
         if not self.trained or self._tmpdir is None:

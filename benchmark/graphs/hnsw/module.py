@@ -1,8 +1,6 @@
 import numpy as np
 from typing import Tuple
 import sys
-import os
-import tempfile
 
 # Add benchmark to path for importing BaseGraphIndex
 sys.path.insert(0, '/benchmark')
@@ -10,48 +8,47 @@ from benchmark.base import BaseGraphIndex, BaseQuantizer
 
 # Import the C++ module (will be built in Docker)
 try:
-    import diskann_cpp
+    import hnswlib
 except ImportError as e:
-    print(f"Warning: Could not import diskann_cpp: {e}")
-    diskann_cpp = None
+    print(f"Warning: Could not import hnswlib: {e}")
+    hnswlib = None
 
 
-class DiskANN(BaseGraphIndex):
+class HNSW(BaseGraphIndex):
     """
-    DiskANN graph index with pluggable quantizer.
+    HNSW graph index with pluggable quantizer.
 
-    This implementation uses DiskANN's disk-based index construction
-    and search, but replaces the built-in Product Quantization with
+    This implementation uses hnswlib's HNSW graph construction
+    and search, but replaces the built-in distance computation with
     any quantizer that implements set_query() and estimate_distance().
     """
 
-    def __init__(self, quantizer: BaseQuantizer, R: int = 64, L: int = 100,
+    def __init__(self, quantizer: BaseQuantizer, M: int = 16, ef_construction: int = 200,
                  num_threads: int = 16, metric: str = "l2", **kwargs):
         """
-        Initialize DiskANN with a quantizer.
+        Initialize HNSW with a quantizer.
 
         Args:
             quantizer: Quantizer instance implementing set_query() and estimate_distance()
-            R: Max out-degree for graph (default: 64)
-            L: Build complexity/search list size (default: 100)
+            M: Max connections per node (default: 16)
+            ef_construction: Construction time search width (default: 200)
             num_threads: Number of threads for parallel operations
-            metric: Distance metric ("l2" or "mips")
+            metric: Distance metric ("l2" only for now)
             **kwargs: Additional parameters
         """
         super().__init__(quantizer, **kwargs)
 
-        if diskann_cpp is None:
+        if hnswlib is None:
             raise RuntimeError(
-                "C++ module 'diskann_cpp' is not available. "
-                "DiskANN requires the C++ implementation. "
+                "C++ module 'hnswlib' is not available. "
+                "HNSW requires the C++ implementation. "
                 "Make sure the C++ module was built correctly in the Docker image."
             )
 
-        self.R = R
-        self.L = L
+        self.M = M
+        self.ef_construction = ef_construction
         self.num_threads = num_threads
         self.metric = metric
-        self.index_prefix = None
         self.cpp_index = None
         self.num_points = 0
         self.dimension = 0
@@ -71,18 +68,28 @@ class DiskANN(BaseGraphIndex):
             raise RuntimeError("Index not built yet. Call build() first before changing quantizer.")
 
         self.quantizer = quantizer
-        self.cpp_index.set_quantizer(quantizer)
-        print("Quantizer updated successfully (graph structure unchanged)")
+        # Re-initialize index with new quantizer
+        old_index = self.cpp_index
+        self.cpp_index = hnswlib.QuantizationIndex(self.metric, self.dimension)
+        self.cpp_index.init_index(
+            max_elements=self.num_points,
+            M=self.M,
+            ef_construction=self.ef_construction,
+            random_seed=42,
+            quantizer=quantizer,
+            allow_replace_deleted=False
+        )
+        self.cpp_index.add_items(self._original_data, num_threads=self.num_threads)
+        print("Quantizer updated successfully (graph rebuilt)")
 
     def build(self, nd: int, data: np.ndarray, train_quantizer: bool = True) -> bool:
         """
-        Build the DiskANN index.
+        Build the HNSW index.
 
         This performs the following steps:
         1. Train the quantizer on the data (optional)
-        2. Save data to disk
-        3. Build Vamana graph using DiskANN's build process
-        4. Save quantizer state
+        2. Build HNSW graph
+        3. Add all data points to the graph
 
         Args:
             nd: Number of data vectors
@@ -97,37 +104,35 @@ class DiskANN(BaseGraphIndex):
             self.dimension = data.shape[1]
             self._original_data = np.ascontiguousarray(data, dtype=np.float32)
 
-            # Create temporary directory for index files (only if not already created)
-            if not hasattr(self, 'index_prefix') or self.index_prefix is None:
-                temp_dir = tempfile.mkdtemp(prefix="diskann_")
-                self.index_prefix = os.path.join(temp_dir, "index")
-                print(f"Building DiskANN index in {temp_dir}")
-            else:
-                print(f"Reusing existing index directory at {self.index_prefix}")
+            print(f"Building HNSW index: M={self.M}, ef_construction={self.ef_construction}, threads={self.num_threads}")
 
-            print(f"Parameters: R={self.R}, L={self.L}, threads={self.num_threads}")
+            # Train quantizer if requested
+            if train_quantizer and self.quantizer:
+                print("Training quantizer...")
+                self.quantizer.fit(nd, self._original_data)
 
-            # Create C++ index wrapper (only if not already created)
-            if not hasattr(self, 'cpp_index') or self.cpp_index is None:
-                self.cpp_index = diskann_cpp.DiskANNIndex(
-                    quantizer=self.quantizer,
-                    index_prefix=self.index_prefix,
-                    R=self.R,
-                    L=self.L,
-                    num_threads=self.num_threads,
-                    metric=self.metric
-                )
+            # Create C++ index
+            self.cpp_index = hnswlib.QuantizationIndex(self.metric, self.dimension)
+            self.cpp_index.init_index(
+                max_elements=nd,
+                M=self.M,
+                ef_construction=self.ef_construction,
+                random_seed=42,
+                quantizer=self.quantizer,
+                allow_replace_deleted=False
+            )
+            self.cpp_index.set_num_threads(self.num_threads)
 
-            # Build the index (optionally train quantizer, then build graph)
-            build_memory_gb = 8.0  # Memory budget for building
-            self.cpp_index.build(self._original_data, build_memory_gb, train_quantizer)
+            # Add items to index
+            print("Adding items to HNSW index...")
+            self.cpp_index.add_items(self._original_data, num_threads=self.num_threads)
 
             self.trained = True
-            print("DiskANN index built successfully!")
+            print("HNSW index built successfully!")
             return True
 
         except Exception as e:
-            print(f"Error building DiskANN index: {e}")
+            print(f"Error building HNSW index: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -137,24 +142,22 @@ class DiskANN(BaseGraphIndex):
         Search for nearest neighbors using the quantizer.
 
         During search, the quantizer's estimate_distance() is used to
-        compute approximate distances for candidate filtering, then
-        exact distances are computed for reranking.
+        compute approximate distances for candidate filtering.
 
         Args:
             nq: Number of query vectors
             queries: Query vectors of shape (nq, d)
             topk: Number of nearest neighbors to return
             **search_params: Search parameters
-                - search_L: Search list size (default: max(L, 2*topk))
-                - beam_width: Beam width (default: 4)
+                - ef: Search time search width (default: max(ef_construction, 2*topk))
 
         Returns:
             Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
                 - I: Indices of nearest neighbors, shape (nq, topk)
                 - D: Distances to nearest neighbors, shape (nq, topk)
-                - hops: None (not supported yet)
-                - comps: None (not supported yet)
-                - nrerank: None (not supported yet)
+                - hops: Number of graph hops per query, shape (nq,)
+                - comps: Number of distance computations per query, shape (nq,)
+                - nrerank: Number of rerank operations per query, shape (nq,) (equals ef for each query)
         """
         if not self.trained:
             raise RuntimeError("Index not trained. Call build() first.")
@@ -162,13 +165,16 @@ class DiskANN(BaseGraphIndex):
         queries = np.ascontiguousarray(queries, dtype=np.float32)
 
         # Get search parameters
-        search_L = search_params.get("search_L", max(self.L, 2 * topk))
-        beam_width = search_params.get("beam_width", 4)
+        ef = search_params.get("ef", max(self.ef_construction, 2 * topk))
 
         # Use C++ search with quantizer callbacks
-        I, D = self.cpp_index.search(queries, topk, search_L, beam_width)
+        # Returns (indices, distances, hops, computations)
+        I, D, hops, comps = self.cpp_index.knn_query(queries, topk, ef)
 
-        return I, D, None, None, None
+        # nrerank is ef for each query (number of candidates reranked with exact distances)
+        nrerank = np.full(nq, ef, dtype=np.int64)
+
+        return I.astype(np.int64), D, hops, comps, nrerank
 
     def getMemoryUsage(self) -> float:
         """
@@ -177,7 +183,6 @@ class DiskANN(BaseGraphIndex):
         This includes:
         - Graph structure
         - Quantizer memory
-        - Cached data
 
         Returns:
             float: Memory usage in KB
@@ -188,21 +193,23 @@ class DiskANN(BaseGraphIndex):
         # Get quantizer memory
         quantizer_mem = self.quantizer.getMemoryUsage()
 
-        # Get index memory (graph + cached nodes)
-        # For now, estimate based on graph structure
-        # Each node has at most R neighbors (4 bytes each)
-        graph_mem = (self.num_points * self.R * 4) / 1024  # KB
+        # Estimate graph memory: each node has M neighbors at level 0 and M/2 at higher levels
+        # Approximate: M * 2 * num_points * 4 bytes
+        graph_mem = (self.num_points * self.M * 2 * 4) / 1024  # KB
 
         return quantizer_mem + graph_mem
 
     def get_index_stats(self) -> dict:
         """Get detailed index statistics."""
-        if self.cpp_index is None:
-            return {}
-
-        return self.cpp_index.get_stats()
+        return {
+            "num_points": self.num_points,
+            "dimension": self.dimension,
+            "M": self.M,
+            "ef_construction": self.ef_construction,
+            "quantizer": self.quantizer.__class__.__name__ if self.quantizer else None
+        }
 
     def __repr__(self):
-        return (f"DiskANN(R={self.R}, L={self.L}, "
+        return (f"HNSW(M={self.M}, ef_construction={self.ef_construction}, "
                 f"points={self.num_points}, dim={self.dimension}, "
                 f"quantizer={self.quantizer.__class__.__name__})")

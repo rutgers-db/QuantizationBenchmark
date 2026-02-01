@@ -92,13 +92,16 @@ class DockerRunner:
         print(f"Building Docker image: {image_name}")
 
         project_root = os.path.abspath(".")
+        env = os.environ.copy()
+        env["DOCKER_BUILDKIT"] = "0"
         result = subprocess.run(
             ["docker", "build", "-t", image_name, "-f", dockerfile_path,
              "--build-arg", f"ALGO_TYPE={algo_type}",
              "--build-arg", f"ALGO_NAME={algo_name}",
              project_root],
             capture_output=True,
-            text=True
+            text=True,
+            env=env
         )
 
         if result.returncode != 0:
@@ -172,13 +175,16 @@ class DockerRunner:
         print(f"Building Docker image: {image_name}")
 
         project_root = os.path.abspath(".")
+        env = os.environ.copy()
+        env["DOCKER_BUILDKIT"] = "0"
         result = subprocess.run(
             ["docker", "build", "-t", image_name, "-f", dockerfile_path,
              "--build-arg", f"QUANTIZER_NAME={quantizer_name}",
              "--build-arg", f"GRAPH_NAME={graph_name}",
              project_root],
             capture_output=True,
-            text=True
+            text=True,
+            env=env
         )
 
         if result.returncode != 0:
@@ -244,12 +250,15 @@ class DockerRunner:
         print(f"Building Docker image: {image_name}")
 
         project_root = os.path.abspath(".")
+        env = os.environ.copy()
+        env["DOCKER_BUILDKIT"] = "0"
         result = subprocess.run(
             ["docker", "build", "-t", image_name, "-f", dockerfile_path,
              "--build-arg", f"GRAPH_NAME={graph_name}",
              project_root],
             capture_output=True,
-            text=True
+            text=True,
+            env=env
         )
 
         if result.returncode != 0:

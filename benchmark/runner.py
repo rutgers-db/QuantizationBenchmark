@@ -743,7 +743,11 @@ class BenchmarkRunner:
                     'map': search_result.get('map'),
                     'recall@1': search_result.get('recall@1'),
                     'predictions': search_result.get('predictions'),
-                    'distances': search_result.get('distances')
+                    'distances': search_result.get('distances'),
+                    # Graph search metrics (hops, comps, nrerank stats)
+                    'hops_stats': search_result.get('hops_stats'),
+                    'comps_stats': search_result.get('comps_stats'),
+                    'nrerank_stats': search_result.get('nrerank_stats')
                 }
                 all_results.append(result)
 
@@ -814,31 +818,34 @@ class BenchmarkRunner:
             }
             return [error_result]
 
-        # Create one result dict per search configuration
-        all_results = []
+        # Create one result object per build config with all search results as a list
+        search_results_formatted = []
         for search_result in search_results_list:
-            result = {
-                'dataset': self.dataset_name,
-                'graph': graph_name,
-                'graph_config': graph_config,
-                'status': 'success',
-                # Graph build metrics
-                'build_time': build_time,
-                'graph_memory': graph_memory,
-                # Search metrics
+            search_results_formatted.append({
                 'search_params': search_result.get('search_params', {}),
                 'query_time': search_result.get('query_time'),
                 'queries_per_second': search_result.get('queries_per_second'),
                 'recall': search_result.get('recall'),
                 'map': search_result.get('map'),
                 'recall@1': search_result.get('recall@1'),
-                'predictions': search_result.get('predictions'),
-                'distances': search_result.get('distances')
-            }
-            all_results.append(result)
+                # Graph search metrics (hops, comps, nrerank stats)
+                'hops_stats': search_result.get('hops_stats'),
+                'comps_stats': search_result.get('comps_stats'),
+                'nrerank_stats': search_result.get('nrerank_stats'),
+            })
 
-        print(f"\nTotal results: {len(all_results)}")
-        return all_results
+        result = {
+            'dataset': self.dataset_name,
+            'graph': graph_name,
+            'build_params': graph_config.get('build_params', {}),
+            'status': 'success',
+            'build_time': build_time,
+            'graph_memory': graph_memory,
+            'search_results': search_results_formatted
+        }
+
+        print(f"\nTotal search configs: {len(search_results_formatted)}")
+        return [result]
 
     def _run_graph_benchmark(
         self,
@@ -938,7 +945,11 @@ class BenchmarkRunner:
                 'map': search_result.get('map'),
                 'recall@1': search_result.get('recall@1'),
                 'predictions': search_result.get('predictions'),
-                'distances': search_result.get('distances')
+                'distances': search_result.get('distances'),
+                # Graph search metrics (hops, comps, nrerank stats)
+                'hops_stats': search_result.get('hops_stats'),
+                'comps_stats': search_result.get('comps_stats'),
+                'nrerank_stats': search_result.get('nrerank_stats')
             }
             all_results.append(result)
 

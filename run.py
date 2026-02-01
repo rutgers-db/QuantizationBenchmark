@@ -272,7 +272,11 @@ def save_results(results, output_dir: str = "benchmark/results"):
                             'recall': result['recall'],
                             'map': result['map'],
                             'recall@1': result['recall@1'],
-                            'rerank_results': result.get('rerank_results', [])
+                            'rerank_results': result.get('rerank_results', []),
+                            # Graph search metrics (hops, comps, nrerank stats)
+                            'hops_stats': result.get('hops_stats'),
+                            'comps_stats': result.get('comps_stats'),
+                            'nrerank_stats': result.get('nrerank_stats')
                         }
                     }
                     grouped_result['search_results'].append(search_result)

@@ -1,0 +1,105 @@
+# Dockerfile for HNSW + VAQ
+# VAQ requires its C++ source code at /opt/VAQ
+
+FROM python:3.9-slim
+
+# Build arguments for quantizer and graph
+ARG QUANTIZER_NAME=VAQ
+ARG GRAPH_NAME=hnsw
+
+# Avoid timezone prompt
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Install system dependencies for HNSW and VAQ
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    g++ \
+    git \
+    wget \
+    libgomp1 \
+    liblapacke-dev \
+    libarmadillo-dev \
+    libglpk-dev \
+    glpk-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Eigen 3.4.0 (required by hnswlib patch)
+RUN cd /tmp && \
+    wget https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz && \
+    tar -xzf eigen-3.4.0.tar.gz && \
+    cd eigen-3.4.0 && \
+    mkdir build && cd build && \
+    cmake .. && \
+    make install && \
+    cd / && rm -rf /tmp/eigen-3.4.0*
+
+# Clone hnswlib
+RUN cd /opt && \
+    git clone https://github.com/nmslib/hnswlib.git && \
+    cd hnswlib && \
+    git checkout v0.8.0
+
+# Copy and apply the hnswlib patch
+COPY benchmark/graphs/hnsw/hnswlib_custom_quantizer.patch /tmp/hnswlib_custom_quantizer.patch
+RUN cd /opt/hnswlib && \
+    git apply /tmp/hnswlib_custom_quantizer.patch && \
+    rm /tmp/hnswlib_custom_quantizer.patch
+
+# Clone VAQ repository
+RUN cd /opt && \
+    git clone https://github.com/TheDatumOrg/VAQ.git VAQ
+
+# Copy and apply the VAQ patch for parallelization
+COPY benchmark/algorithms/quantizer/VAQ/VAQ_parallelization.patch /tmp/VAQ_parallelization.patch
+RUN cd /opt/VAQ && \
+    git apply /tmp/VAQ_parallelization.patch && \
+    rm /tmp/VAQ_parallelization.patch
+
+# Build VAQ library
+RUN cd /opt/VAQ && \
+    mkdir -p build && \
+    cd build && \
+    cmake .. && \
+    make -j$(nproc)
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    numpy \
+    h5py \
+    pyyaml \
+    psutil \
+    "pybind11[global]" \
+    faiss-cpu
+
+# Copy the benchmark framework code
+COPY benchmark/ /benchmark/
+
+# Copy the quantizer module
+COPY benchmark/algorithms/quantizer/${QUANTIZER_NAME}/ /algorithms/quantizer/${QUANTIZER_NAME}/
+
+# Copy the graph module
+COPY benchmark/graphs/${GRAPH_NAME}/ /algorithms/graphs/${GRAPH_NAME}/
+
+# Build VAQ Python bindings
+RUN cd /algorithms/quantizer/${QUANTIZER_NAME}/ && \
+    mkdir -p build && \
+    cd build && \
+    cmake .. && \
+    make -j$(nproc) && \
+    cp vaq_cpp*.so .. && \
+    cd .. && \
+    rm -rf build
+
+# Build hnswlib Python bindings
+RUN cd /opt/hnswlib && \
+    pip install .
+
+# Set Python path to include all necessary directories
+ENV PYTHONPATH=/:/opt/hnswlib:/opt/VAQ:/algorithms/quantizer/${QUANTIZER_NAME}:/algorithms/graphs/${GRAPH_NAME}
+ENV HNSWLIB_PATH=/opt/hnswlib
+ENV VAQ_PATH=/opt/VAQ
+
+# Set working directory
+WORKDIR /workspace

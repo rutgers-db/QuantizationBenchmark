@@ -444,7 +444,7 @@ def run_graph(input_path: str, output_path: str, quantizer_module_path: str, gra
             print(f"\nSearch configuration {search_idx + 1}/{len(search_params_list)}: {search_params}")
 
             start_time = time.time()
-            I, D = graph_index.search(nq, test_data, topk, **search_params_copy)
+            I, D, hops, comps, nrerank = graph_index.search(nq, test_data, topk, **search_params_copy)
             query_time = time.time() - start_time
 
             # Calculate metrics
@@ -458,6 +458,17 @@ def run_graph(input_path: str, output_path: str, quantizer_module_path: str, gra
             print(f"  MAP@{topk}: {map_score:.4f}")
             print(f"  Recall@1: {recall_at_1:.4f}")
 
+            # Compute percentile statistics for graph search metrics
+            hops_stats = compute_percentile_stats(hops)
+            comps_stats = compute_percentile_stats(comps)
+            nrerank_stats = compute_percentile_stats(nrerank)
+
+            # Print stats
+            print(f"  Graph search metrics:")
+            print_percentile_stats("hops", hops_stats)
+            print_percentile_stats("comps", comps_stats)
+            print_percentile_stats("nrerank", nrerank_stats)
+
             # Collect results for this search configuration
             result = {
                 'search_params': search_params,
@@ -467,7 +478,10 @@ def run_graph(input_path: str, output_path: str, quantizer_module_path: str, gra
                 'map': map_score,
                 'recall@1': recall_at_1,
                 'predictions': I,
-                'distances': D
+                'distances': D,
+                'hops_stats': hops_stats,
+                'comps_stats': comps_stats,
+                'nrerank_stats': nrerank_stats
             }
             search_results.append(result)
 
@@ -580,6 +594,47 @@ def calculate_recall_at_1(predictions: np.ndarray, ground_truth: np.ndarray) -> 
     return num_correct / nq if nq > 0 else 0.0
 
 
+def compute_percentile_stats(data: np.ndarray) -> Dict[str, float]:
+    """
+    Compute percentile statistics for a 1D array.
+
+    Args:
+        data: 1D numpy array of values
+
+    Returns:
+        Dict with percentile statistics:
+        - min, p5, p10, p25, mean, p75, p90, p95, max, variance
+        Returns None if data is None
+    """
+    if data is None or len(data) == 0:
+        return None
+
+    return {
+        'min': float(np.min(data)),
+        'p5': float(np.percentile(data, 5)),
+        'p10': float(np.percentile(data, 10)),
+        'p25': float(np.percentile(data, 25)),
+        'mean': float(np.mean(data)),
+        'p75': float(np.percentile(data, 75)),
+        'p90': float(np.percentile(data, 90)),
+        'p95': float(np.percentile(data, 95)),
+        'max': float(np.max(data)),
+        'variance': float(np.var(data))
+    }
+
+
+def print_percentile_stats(name: str, stats: Dict[str, float]) -> None:
+    """Print percentile statistics in a formatted way."""
+    if stats is None:
+        print(f"  {name}: N/A (not supported)")
+        return
+
+    print(f"  {name}:")
+    print(f"    min={stats['min']:.2f}, p5={stats['p5']:.2f}, p10={stats['p10']:.2f}, p25={stats['p25']:.2f}")
+    print(f"    mean={stats['mean']:.2f}, p75={stats['p75']:.2f}, p90={stats['p90']:.2f}, p95={stats['p95']:.2f}")
+    print(f"    max={stats['max']:.2f}, variance={stats['variance']:.2f}")
+
+
 def run_graph_only(input_path: str, output_path: str, graph_module_path: str):
     """
     Run graph-only algorithm (no external quantizer).
@@ -649,7 +704,7 @@ def run_graph_only(input_path: str, output_path: str, graph_module_path: str):
         print(f"\nSearch configuration {search_idx + 1}/{len(search_params_list)}: {search_params}")
 
         start_time = time.time()
-        I, D = graph_index.search(nq, test_data, topk, **search_params_copy)
+        I, D, hops, comps, nrerank = graph_index.search(nq, test_data, topk, **search_params_copy)
         query_time = time.time() - start_time
 
         # Calculate metrics
@@ -663,6 +718,17 @@ def run_graph_only(input_path: str, output_path: str, graph_module_path: str):
         print(f"  MAP@{topk}: {map_score:.4f}")
         print(f"  Recall@1: {recall_at_1:.4f}")
 
+        # Compute percentile statistics for graph search metrics
+        hops_stats = compute_percentile_stats(hops)
+        comps_stats = compute_percentile_stats(comps)
+        nrerank_stats = compute_percentile_stats(nrerank)
+
+        # Print stats
+        print(f"  Graph search metrics:")
+        print_percentile_stats("hops", hops_stats)
+        print_percentile_stats("comps", comps_stats)
+        print_percentile_stats("nrerank", nrerank_stats)
+
         # Collect results for this search configuration
         result = {
             'search_params': search_params,
@@ -672,7 +738,10 @@ def run_graph_only(input_path: str, output_path: str, graph_module_path: str):
             'map': map_score,
             'recall@1': recall_at_1,
             'predictions': I,
-            'distances': D
+            'distances': D,
+            'hops_stats': hops_stats,
+            'comps_stats': comps_stats,
+            'nrerank_stats': nrerank_stats
         }
         search_results.append(result)
 

@@ -34,6 +34,10 @@ RUN cd /opt && \
     cd SymphonyQG && \
     git checkout main
 
+COPY benchmark/graphs/symphonyqg/symphonyqg.patch /opt/SymphonyQG/symphonyqg.patch
+RUN cd /opt/SymphonyQG && \
+    git apply symphonyqg.patch
+
 # Build SymphonyQG Python bindings
 # Skip requirements.txt to avoid pybind11 version conflicts
 RUN cd /opt/SymphonyQG/python && \

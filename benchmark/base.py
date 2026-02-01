@@ -281,7 +281,7 @@ class BaseGraphIndex(ABC):
         pass
 
     @abstractmethod
-    def search(self, nq: int, queries: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
+    def search(self, nq: int, queries: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Search for the top-k nearest neighbors for each query.
 
@@ -292,9 +292,12 @@ class BaseGraphIndex(ABC):
             **search_params: Optional search-time parameters (e.g., search_list_size, beam_width)
 
         Returns:
-            Tuple[np.ndarray, np.ndarray]:
+            Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
                 - I: Indices of nearest neighbors, shape (nq, topk)
                 - D: Distances to nearest neighbors, shape (nq, topk)
+                - hops: Number of graph hops per query, shape (nq,), or None if not supported
+                - comps: Number of distance computations per query, shape (nq,), or None if not supported
+                - nrerank: Number of rerank operations per query, shape (nq,), or None if not supported
         """
         pass
 

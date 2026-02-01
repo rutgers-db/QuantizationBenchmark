@@ -35,10 +35,10 @@ sift-128-euclidean:
 
   build:
     # VAQ training parameters
-    bit_budget: 256        # Total bits per encoded vector (e.g., 256 bits = 32 bytes)
-    subspace_num: 32       # Number of subvectors to split the vector into
-    min_bits: 7            # Minimum bits per segment
-    max_bits: 13           # Maximum bits per segment
+    bit_budget: 256      # Total bits per encoded vector (e.g., 256 bits = 32 bytes)
+    subspace_num: 64       # Number of subvectors to split the vector into
+    min_bits: 1           # Minimum bits per segment
+    max_bits: 6           # Maximum bits per segment
     var_explained: 1.0     # Variance threshold (1.0 = no variance-based compression)
     search_method: "SORT"  # Search algorithm: SORT, EA (Early Abandon), Heap, TI, etc.
 
