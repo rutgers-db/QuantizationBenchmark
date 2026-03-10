@@ -1,0 +1,188 @@
+[
+  {
+    "build_params": {
+      "bit_budget": 256,
+      "data_bytes": 4,
+      "max_bits": 13,
+      "min_bits": 7,
+      "ndim": 128,
+      "nthread": 16,
+      "search_method": "SORT",
+      "space": "l2",
+      "subspace_num": 32,
+      "var_explained": 1.0
+    },
+    "build_metrics": {
+      "training_time": 3013.705113887787,
+      "build_time": 435.1780092716217,
+      "mse": 19357.74609375,
+      "quantizer_memory": 1229392.0,
+      "graph_memory": 1354392.0,
+      "compression_rate": 0.0625
+    },
+    "search_results": [
+      {
+        "search_params": {
+          "topk": 10,
+          "search_L": 10,
+          "beam_width": 4
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 10,
+            "search_L": 10,
+            "beam_width": 4
+          },
+          "query_time": 44.70218276977539,
+          "queries_per_second": 223.70272278429607,
+          "recall": 0.48478,
+          "map": 0.48474926190476036,
+          "recall@1": 0.6937,
+          "rerank_results": []
+        }
+      },
+      {
+        "search_params": {
+          "topk": 10,
+          "search_L": 20,
+          "beam_width": 4
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 10,
+            "search_L": 20,
+            "beam_width": 4
+          },
+          "query_time": 29.16187620162964,
+          "queries_per_second": 342.91346451299916,
+          "recall": 0.63511,
+          "map": 0.6350662896825373,
+          "recall@1": 0.8095,
+          "rerank_results": []
+        }
+      },
+      {
+        "search_params": {
+          "topk": 10,
+          "search_L": 30,
+          "beam_width": 4
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 10,
+            "search_L": 30,
+            "beam_width": 4
+          },
+          "query_time": 35.28943705558777,
+          "queries_per_second": 283.37091306523376,
+          "recall": 0.71675,
+          "map": 0.7167022023809427,
+          "recall@1": 0.8596,
+          "rerank_results": []
+        }
+      },
+      {
+        "search_params": {
+          "topk": 10,
+          "search_L": 40,
+          "beam_width": 4
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 10,
+            "search_L": 40,
+            "beam_width": 4
+          },
+          "query_time": 41.793457984924316,
+          "queries_per_second": 239.2718976163013,
+          "recall": 0.77256,
+          "map": 0.7725193253968096,
+          "recall@1": 0.8935,
+          "rerank_results": []
+        }
+      },
+      {
+        "search_params": {
+          "topk": 10,
+          "search_L": 50,
+          "beam_width": 4
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 10,
+            "search_L": 50,
+            "beam_width": 4
+          },
+          "query_time": 48.02285385131836,
+          "queries_per_second": 208.23418847535802,
+          "recall": 0.81293,
+          "map": 0.812889507936489,
+          "recall@1": 0.9139,
+          "rerank_results": []
+        }
+      },
+      {
+        "search_params": {
+          "topk": 10,
+          "search_L": 75,
+          "beam_width": 4
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 10,
+            "search_L": 75,
+            "beam_width": 4
+          },
+          "query_time": 64.22832202911377,
+          "queries_per_second": 155.69455473968546,
+          "recall": 0.87415,
+          "map": 0.8741098214285408,
+          "recall@1": 0.9442,
+          "rerank_results": []
+        }
+      },
+      {
+        "search_params": {
+          "topk": 10,
+          "search_L": 100,
+          "beam_width": 4
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 10,
+            "search_L": 100,
+            "beam_width": 4
+          },
+          "query_time": 81.25269818305969,
+          "queries_per_second": 123.07283602410746,
+          "recall": 0.9102,
+          "map": 0.9101664365079015,
+          "recall@1": 0.9625,
+          "rerank_results": []
+        }
+      },
+      {
+        "search_params": {
+          "topk": 10,
+          "search_L": 200,
+          "beam_width": 4
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 10,
+            "search_L": 200,
+            "beam_width": 4
+          },
+          "query_time": 148.80539059638977,
+          "queries_per_second": 67.20186654476356,
+          "recall": 0.96589,
+          "map": 0.9658722777777479,
+          "recall@1": 0.9851,
+          "rerank_results": []
+        }
+      }
+    ],
+    "graph": "diskann",
+    "quantizer": "VAQ"
+  }
+]

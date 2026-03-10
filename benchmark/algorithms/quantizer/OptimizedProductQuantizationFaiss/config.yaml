@@ -79,3 +79,43 @@ video-1024-euclidean:
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+
+text2image-200-euclidean:
+  # Product Quantization with build/search separation format
+  # Automatically generates all combinations: 3 x 3 = 9 configurations
+  common:
+    data_bytes: 4
+    ndim: 200
+    nthread: 16
+    space: "l2"
+  build:
+    niter : [20]
+    nsubvec: [25, 50, 100]
+    nbit: [4, 8]
+  search:
+    - topk: 100
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+    - topk: 10
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+    - topk: 50
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+
+paper-200-euclidean:
+  # Product Quantization with build/search separation format
+  # Automatically generates all combinations: 3 x 3 = 9 configurations
+  common:
+    data_bytes: 4
+    ndim: 200
+    nthread: 16
+    space: "l2"
+  build:
+    niter : [20]
+    nsubvec: [25, 50, 100]
+    nbit: [4, 8]
+  search:
+    - topk: 100
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+    - topk: 10
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+    - topk: 50
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
