@@ -28,9 +28,32 @@ from benchmark.runner import BenchmarkRunner
 from benchmark.docker_runner import DockerRunner
 
 
+IVF_ALGORITHMS = {"Faiss-IVFPQ", "Faiss-IVFSQ"}
+
+
+def _iter_algorithm_dirs(root_dir: str):
+    """Yield algorithm directory names that contain a module.py file."""
+    if not os.path.exists(root_dir):
+        return
+
+    for current_root, dirnames, _ in os.walk(root_dir):
+        if os.path.exists(os.path.join(current_root, "module.py")):
+            yield os.path.basename(current_root)
+            dirnames[:] = []
+
+
+def _resolve_output_dir(output_dir: str, results) -> str:
+    """Route results into IVF or non-IVF subdirectories."""
+    first_result = results[0] if isinstance(results, list) else results
+    quantizer_name = first_result.get('quantizer')
+    output_group = 'ivf' if quantizer_name in IVF_ALGORITHMS else 'quantizer'
+    return os.path.join(output_dir, output_group)
+
+
 def list_algorithms():
     """List all available algorithms."""
     quantizer_path = "benchmark/algorithms/quantizer"
+    ivf_path = "benchmark/algorithms/ivf"
     dimreduction_path = "benchmark/algorithms/dimreduction"
 
     print("\n" + "="*60)
@@ -39,14 +62,18 @@ def list_algorithms():
 
     # List quantizers
     print("\nQuantizers:")
-    if os.path.exists(quantizer_path):
-        quantizers = [d for d in os.listdir(quantizer_path)
-                     if os.path.isdir(os.path.join(quantizer_path, d))]
-        if quantizers:
-            for q in sorted(quantizers):
-                print(f"  - {q}")
-        else:
-            print("  (none)")
+    quantizers = sorted(set(_iter_algorithm_dirs(quantizer_path) or []))
+    if quantizers:
+        for q in quantizers:
+            print(f"  - {q}")
+    else:
+        print("  (none)")
+
+    print("\nIVF:")
+    ivf_algorithms = sorted(set(_iter_algorithm_dirs(ivf_path) or []))
+    if ivf_algorithms:
+        for algo in ivf_algorithms:
+            print(f"  - {algo}")
     else:
         print("  (none)")
 
@@ -423,7 +450,7 @@ Examples:
 
             # Save all results to a single file
             if not args.no_save and success_count > 0:
-                save_results(results, args.output_dir)
+                save_results(results, _resolve_output_dir(args.output_dir, results))
 
             # Print summary
             print("\n" + "="*60)
@@ -434,7 +461,7 @@ Examples:
         else:
             # Single configuration
             if not args.no_save and results.get('status') == 'success':
-                save_results(results, args.output_dir)
+                save_results(results, _resolve_output_dir(args.output_dir, results))
 
             # Print final status
             print("\n" + "="*60)

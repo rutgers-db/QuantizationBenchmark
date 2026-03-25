@@ -24,6 +24,7 @@ class DockerRunner:
         """
         self.base_path = base_path
         self.quantizer_path = os.path.join(base_path, "quantizer")
+        self.ivf_path = os.path.join(base_path, "ivf")
         self.dimreduction_path = os.path.join(base_path, "dimreduction")
         self.graph_path = "benchmark/graphs"
         self.debug = debug
@@ -31,6 +32,33 @@ class DockerRunner:
         # Create temp directory for data exchange with containers
         self.temp_dir = os.path.abspath("temp")
         os.makedirs(self.temp_dir, exist_ok=True)
+
+    def _resolve_quantizer_dir(self, algo_name: str) -> Tuple[str, str]:
+        """Return (family, directory) for a quantizer-like algorithm."""
+        candidates = [
+            ("quantizer", os.path.join(self.quantizer_path, algo_name)),
+            ("ivf", os.path.join(self.ivf_path, algo_name)),
+        ]
+
+        for family, algo_dir in candidates:
+            if os.path.exists(os.path.join(algo_dir, "module.py")):
+                return family, algo_dir
+
+        raise FileNotFoundError(f"Quantizer '{algo_name}' not found under quantizer/ or ivf/")
+
+    def _iter_quantizer_names(self):
+        """Yield all quantizer-like algorithm names from both quantizer and ivf roots."""
+        seen = set()
+        for root_dir in [self.quantizer_path, self.ivf_path]:
+            if not os.path.exists(root_dir):
+                continue
+            for current_root, dirnames, _ in os.walk(root_dir):
+                if os.path.exists(os.path.join(current_root, "module.py")):
+                    algo_name = os.path.basename(current_root)
+                    if algo_name not in seen:
+                        seen.add(algo_name)
+                        yield algo_name
+                    dirnames[:] = []
 
     def build_image(self, algo_type: str, algo_name: str, force_rebuild: bool = False) -> bool:
         """
@@ -44,7 +72,11 @@ class DockerRunner:
         Returns:
             bool: True if build succeeded
         """
-        algo_dir = os.path.join(self.base_path, algo_type, algo_name)
+        actual_algo_type = algo_type
+        if algo_type == 'quantizer':
+            actual_algo_type, algo_dir = self._resolve_quantizer_dir(algo_name)
+        else:
+            algo_dir = os.path.join(self.base_path, algo_type, algo_name)
         dockerfile_path = os.path.join(algo_dir, "dockerfile")
 
         if not os.path.exists(dockerfile_path):
@@ -94,7 +126,7 @@ class DockerRunner:
         project_root = os.path.abspath(".")
         result = subprocess.run(
             ["docker", "build", "-t", image_name, "-f", dockerfile_path,
-             "--build-arg", f"ALGO_TYPE={algo_type}",
+             "--build-arg", f"ALGO_TYPE={actual_algo_type}",
              "--build-arg", f"ALGO_NAME={algo_name}",
              project_root],
             capture_output=True,
@@ -121,7 +153,7 @@ class DockerRunner:
             bool: True if build succeeded
         """
         # First check if quantizer has a custom dockerfile for this graph
-        quantizer_dir = os.path.join(self.quantizer_path, quantizer_name)
+        quantizer_family, quantizer_dir = self._resolve_quantizer_dir(quantizer_name)
         custom_dockerfile = os.path.join(quantizer_dir, f"{graph_name}_dockerfile")
 
         if os.path.exists(custom_dockerfile):
@@ -174,6 +206,7 @@ class DockerRunner:
         project_root = os.path.abspath(".")
         result = subprocess.run(
             ["docker", "build", "-t", image_name, "-f", dockerfile_path,
+             "--build-arg", f"QUANTIZER_TYPE={quantizer_family}",
              "--build-arg", f"QUANTIZER_NAME={quantizer_name}",
              "--build-arg", f"GRAPH_NAME={graph_name}",
              project_root],
@@ -397,6 +430,7 @@ class DockerRunner:
             }, f)
 
         # Run container
+        algo_family, _ = self._resolve_quantizer_dir(algo_name)
         image_name = f"quantbench-quantizer-{algo_name.lower()}:latest"
 
         # Extract nthread from config to set environment variables
@@ -438,7 +472,7 @@ class DockerRunner:
             "--mode", "quantizer",
             "--input", "/workspace/input.pkl",
             "--output", "/workspace/output.pkl",
-            "--module", f"/algorithms/quantizer/{algo_name}/module.py"
+            "--module", f"/algorithms/{algo_family}/{algo_name}/module.py"
         ])
 
         print(f"Running {algo_name} in Docker container...")
@@ -513,6 +547,7 @@ class DockerRunner:
             }, f)
 
         # Run container
+        quantizer_family, _ = self._resolve_quantizer_dir(quantizer_name)
         image_name = f"quantbench-graph-{graph_name.lower()}-{quantizer_name.lower()}:latest"
 
         # Extract nthread from config to set environment variables
@@ -552,7 +587,7 @@ class DockerRunner:
             "--mode", "graph",
             "--input", "/workspace/input.pkl",
             "--output", "/workspace/output.pkl",
-            "--quantizer-module", f"/algorithms/quantizer/{quantizer_name}/module.py",
+            "--quantizer-module", f"/algorithms/{quantizer_family}/{quantizer_name}/module.py",
             "--graph-module", f"/algorithms/graphs/{graph_name}/module.py"
         ])
 
@@ -702,12 +737,9 @@ class DockerRunner:
         Args:
             force_rebuild: Force rebuild even if images exist
         """
-        # Build quantizer images
-        if os.path.exists(self.quantizer_path):
-            for algo_name in os.listdir(self.quantizer_path):
-                algo_dir = os.path.join(self.quantizer_path, algo_name)
-                if os.path.isdir(algo_dir):
-                    self.build_image('quantizer', algo_name, force_rebuild)
+        # Build quantizer and IVF images
+        for algo_name in self._iter_quantizer_names():
+            self.build_image('quantizer', algo_name, force_rebuild)
 
         # Build dimreduction images
         if os.path.exists(self.dimreduction_path):

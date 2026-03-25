@@ -334,6 +334,12 @@ class BenchmarkRunner:
             config_path = os.path.join(
                 "benchmark/graphs", algo_name, "config.yaml"
             )
+        elif algo_type == 'quantizer':
+            quantizer_config_paths = [
+                os.path.join("benchmark/algorithms", "quantizer", algo_name, "config.yaml"),
+                os.path.join("benchmark/algorithms", "ivf", algo_name, "config.yaml"),
+            ]
+            config_path = next((path for path in quantizer_config_paths if os.path.exists(path)), quantizer_config_paths[0])
         else:
             config_path = os.path.join(
                 "benchmark/algorithms", algo_type, algo_name, "config.yaml"
