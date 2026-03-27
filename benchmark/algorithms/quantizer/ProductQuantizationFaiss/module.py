@@ -83,15 +83,6 @@ class ProductQuantizationFaiss(BaseQuantizer):
         mse = np.mean(se_per_row)
         return mse
     
-    def searchAndRerank(self, nq, query, topk, nrerank):
-        refine = faiss.IndexFlatL2(self.ndim)
-        refine.add(self.data)
-
-        refiner = faiss.IndexRefine(self.index, refine)
-        refiner.k_factor = nrerank / topk
-        D, I = refiner.search(query, topk)
-        return I, D
-    
     def set_query(self, query, thread_id):
         # Ensure query is a contiguous float32 array for Faiss SWIG interface
         self.dc.set_query(faiss.swig_ptr(query))

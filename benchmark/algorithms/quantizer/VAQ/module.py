@@ -150,37 +150,6 @@ class VAQ(BaseQuantizer):
 
         return I, D
 
-    def searchAndRerank(self, nq: int, queries: np.ndarray, topk: int, nrerank: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Search for the top-k nearest neighbors with reranking.
-
-        Args:
-            nq: Number of query vectors
-            queries: Query vectors of shape (nq, d) where d is the dimensionality
-            topk: Number of nearest neighbors to return
-            nrerank: Number of neighbors to rerank using exact distance
-            **search_params: Optional search-time parameters
-
-        Returns:
-            Tuple[np.ndarray, np.ndarray]:
-                - I: Indices of nearest neighbors, shape (nq, topk)
-                - D: Distances to nearest neighbors, shape (nq, topk)
-        """
-        if not self.trained or not self.encoded:
-            raise RuntimeError("Index not trained or encoded. Call fit() first.")
-
-        queries = queries.astype(np.float32)
-
-        # Pad queries if needed
-        dim_padding = self.data.shape[1] - self.ndim
-        if dim_padding > 0:
-            queries = np.pad(queries, ((0, 0), (0, dim_padding)), 'constant').astype('float32')
-
-        # Call C++ search_and_rerank
-        I, D = self.cpp_index.search_and_rerank(queries, self.data, topk, nrerank, verbose=False)
-
-        return I, D
-
     def getMemoryUsage(self) -> float:
         """
         Get the memory usage of the quantizer in KB.

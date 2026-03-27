@@ -116,14 +116,6 @@ class ScalarQuantizationIVFFaiss(BaseQuantizer):
         mse = np.mean(se_per_row)
         return mse
 
-    def searchAndRerank(self, nq, query, topk, nrerank, **search_params):
-        nprobe = search_params.get('nprobe', self.nlist)
-        self.index.nprobe = nprobe
-        refiner = faiss.IndexRefine(self.index, self.refine)
-        refiner.k_factor = nrerank / topk
-        D, I = refiner.search(query, topk)
-        return I, D
-
     def set_query(self, query, thread_id):
         self.dc.set_query(faiss.swig_ptr(query))
 

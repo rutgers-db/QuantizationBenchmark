@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 import numpy as np
-from typing import Tuple
+from typing import List, Tuple
 import os
 
 
@@ -157,22 +157,73 @@ class BaseQuantizer(ABC):
         I_candidates, _ = self.query(nq, queries, nrerank, **search_params)
 
         # Step 2: Rerank using exact L2 distance
-        I_reranked = np.zeros((nq, topk), dtype=np.int64)
-        D_reranked = np.zeros((nq, topk), dtype=np.float32)
+        prepared_candidates = self.prepareRerankCandidates(queries, I_candidates)
+        return self.rerankPreparedCandidates(queries, prepared_candidates, nrerank, topk)
+
+    def prepareRerankCandidates(
+        self,
+        queries: np.ndarray,
+        candidate_indices: np.ndarray,
+    ) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """
+        Materialize candidate IDs and vectors once so multiple rerank passes can
+        reuse them without repeating setup work.
+        """
+        original_data = getattr(self, "_original_data", None)
+        if original_data is None:
+            original_data = getattr(self, "data", None)
+
+        if original_data is None:
+            raise RuntimeError(
+                "Original data not available for reranking. "
+                "Quantizer must expose self._original_data or self.data."
+            )
+
+        prepared_candidates = []
+
+        for i in range(candidate_indices.shape[0]):
+            valid_mask = candidate_indices[i] >= 0
+            valid_indices = candidate_indices[i][valid_mask]
+            candidate_vectors = np.ascontiguousarray(original_data[valid_indices].astype(np.float32))
+            prepared_candidates.append((valid_indices, candidate_vectors))
+
+        return prepared_candidates
+
+    def rerankPreparedCandidates(
+        self,
+        queries: np.ndarray,
+        prepared_candidates: List[Tuple[np.ndarray, np.ndarray]],
+        nrerank: int,
+        topk: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Rerank from previously prepared candidates using Faiss exact KNN.
+        """
+        import faiss
+
+        nq = queries.shape[0]
+        I_reranked = np.full((nq, topk), -1, dtype=np.int64)
+        D_reranked = np.full((nq, topk), np.inf, dtype=np.float32)
 
         for i in range(nq):
-            # Get candidate vectors
-            candidate_indices = I_candidates[i]
-            candidate_vectors = self._original_data[candidate_indices]
+            valid_indices, candidate_vectors = prepared_candidates[i]
+            if valid_indices.size == 0:
+                continue
 
-            # Compute exact L2 distances
-            query_vector = queries[i]
-            distances = np.linalg.norm(candidate_vectors - query_vector, axis=1)
+            query_vector = np.ascontiguousarray(queries[i:i + 1].astype(np.float32))
+            active_count = min(nrerank, valid_indices.size)
+            active_indices = valid_indices[:active_count]
+            active_vectors = candidate_vectors[:active_count]
+            distances_sq, local_indices = faiss.knn(query_vector, active_vectors, min(topk, active_count))
 
-            # Sort by distance and take top-k
-            sorted_idx = np.argsort(distances)[:topk]
-            I_reranked[i] = candidate_indices[sorted_idx]
-            D_reranked[i] = distances[sorted_idx]
+            local_indices = local_indices[0]
+            valid_local_mask = local_indices >= 0
+            selected_indices = active_indices[local_indices[valid_local_mask]]
+            selected_distances = np.sqrt(np.maximum(distances_sq[0][valid_local_mask], 0.0)).astype(np.float32)
+            result_count = selected_indices.shape[0]
+
+            I_reranked[i, :result_count] = selected_indices
+            D_reranked[i, :result_count] = selected_distances
 
         return I_reranked, D_reranked
 
