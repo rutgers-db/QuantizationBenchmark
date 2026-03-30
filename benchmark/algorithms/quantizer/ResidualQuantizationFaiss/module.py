@@ -44,15 +44,27 @@ class ResidualQuantizationFaiss(BaseQuantizer):
         self.dc = None
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
-        self.data = data.astype(np.float32, copy=False)
-        self._original_data = self.data
+        return self.train(nd, data) and self.add(nd, data)
+
+    def train(self, nd: int, data: np.ndarray) -> bool:
+        self.data = np.ascontiguousarray(data.astype(np.float32, copy=False))
         self.ndata = nd
         try:
             self.index.train(self.data)
+        except Exception as e:
+            print(f"Training error: {e}")
+            return False
+        return True
+
+    def add(self, nd: int, data: np.ndarray) -> bool:
+        self.data = np.ascontiguousarray(data.astype(np.float32, copy=False))
+        self._original_data = self.data
+        self.ndata = nd
+        try:
             self.index.add(self.data)
             self.dc = self.index.get_distance_computer()
         except Exception as e:
-            print(f"Training error: {e}")
+            print(f"Add error: {e}")
             return False
         return True
 

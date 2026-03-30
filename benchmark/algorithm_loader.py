@@ -29,10 +29,12 @@ class AlgorithmLoader:
         """
         self.base_path = base_path
         self.quantizer_path = os.path.join(base_path, "quantizer")
+        self.ivf_path = os.path.join(base_path, "ivf")
         self.dimreduction_path = os.path.join(base_path, "dimreduction")
 
         # Cache for loaded algorithms
         self._quantizer_registry: Dict[str, Type[BaseQuantizer]] = {}
+        self._quantizer_dirs: Dict[str, str] = {}
         self._dimreduction_registry: Dict[str, Type[BaseDimReduction]] = {}
 
         # Scan and register algorithms
@@ -40,15 +42,12 @@ class AlgorithmLoader:
 
     def _scan_algorithms(self):
         """Scan the algorithms directories and register all available algorithms."""
-        # Scan quantizers
-        if os.path.exists(self.quantizer_path):
-            for algo_name in os.listdir(self.quantizer_path):
-                algo_dir = os.path.join(self.quantizer_path, algo_name)
-                if os.path.isdir(algo_dir) and os.path.exists(os.path.join(algo_dir, "module.py")):
-                    try:
-                        self._register_quantizer(algo_name, algo_dir)
-                    except Exception as e:
-                        print(f"Warning: Failed to load quantizer '{algo_name}': {e}")
+        # Scan quantizers, including IVF algorithms stored alongside quantizers.
+        for algo_name, algo_dir in self._iter_quantizer_dirs():
+            try:
+                self._register_quantizer(algo_name, algo_dir)
+            except Exception as e:
+                print(f"Warning: Failed to load quantizer '{algo_name}': {e}")
 
         # Scan dimensionality reduction algorithms
         if os.path.exists(self.dimreduction_path):
@@ -59,6 +58,23 @@ class AlgorithmLoader:
                         self._register_dimreduction(algo_name, algo_dir)
                     except Exception as e:
                         print(f"Warning: Failed to load dimreduction '{algo_name}': {e}")
+
+    def _iter_quantizer_dirs(self):
+        """Yield all quantizer-like algorithm directories keyed by algorithm name."""
+        seen = set()
+
+        for root_dir in [self.quantizer_path, self.ivf_path]:
+            if not os.path.exists(root_dir):
+                continue
+
+            for current_root, dirnames, _ in os.walk(root_dir):
+                module_path = os.path.join(current_root, "module.py")
+                if os.path.exists(module_path):
+                    algo_name = os.path.basename(current_root)
+                    if algo_name not in seen:
+                        seen.add(algo_name)
+                        yield algo_name, current_root
+                    dirnames[:] = []
 
     def _register_quantizer(self, algo_name: str, algo_dir: str):
         """
@@ -89,6 +105,7 @@ class AlgorithmLoader:
             raise ValueError(f"No BaseQuantizer subclass found in {module_path}")
 
         self._quantizer_registry[algo_name] = quantizer_class
+        self._quantizer_dirs[algo_name] = algo_dir
         print(f"Registered quantizer: {algo_name} ({quantizer_class.__name__})")
 
     def _register_dimreduction(self, algo_name: str, algo_dir: str):
@@ -157,7 +174,7 @@ class AlgorithmLoader:
             raise ValueError(f"Quantizer '{algo_name}' not found. Available: {available}")
 
         # Load config
-        algo_dir = os.path.join(self.quantizer_path, algo_name)
+        algo_dir = self._quantizer_dirs[algo_name]
         config = self._load_config(algo_dir)
 
         # Override with provided parameters

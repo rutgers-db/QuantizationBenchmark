@@ -51,20 +51,29 @@ class ScalarQuantizationIVFFaiss(BaseQuantizer):
 
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
+        return self.train(nd, data) and self.add(nd, data)
+
+    def train(self, nd: int, data: np.ndarray) -> bool:
         self.ndata = nd
-        self.data = data
+        self.data = np.ascontiguousarray(data.astype(np.float32, copy=False))
         try:
-            # Faiss train expects just the data, not the count
-            self.index.train(data)
-            # Add vectors to index for querying
-            self.index.add(data)
-
-            self.index.make_direct_map()
-
-            self.refine.add(data)
-            self.dc = self.index.get_distance_computer()
+            self.index.train(self.data)
         except Exception as e:
             print(f"Training error: {e}")
+            return False
+        return True
+
+    def add(self, nd: int, data: np.ndarray) -> bool:
+        self.ndata = nd
+        self.data = np.ascontiguousarray(data.astype(np.float32, copy=False))
+        self._original_data = self.data
+        try:
+            self.index.add(self.data)
+            self.index.make_direct_map()
+            self.refine.add(self.data)
+            self.dc = self.index.get_distance_computer()
+        except Exception as e:
+            print(f"Add error: {e}")
             return False
         return True
 
@@ -115,14 +124,6 @@ class ScalarQuantizationIVFFaiss(BaseQuantizer):
 
         mse = np.mean(se_per_row)
         return mse
-
-    def searchAndRerank(self, nq, query, topk, nrerank, **search_params):
-        nprobe = search_params.get('nprobe', self.nlist)
-        self.index.nprobe = nprobe
-        refiner = faiss.IndexRefine(self.index, self.refine)
-        refiner.k_factor = nrerank / topk
-        D, I = refiner.search(query, topk)
-        return I, D
 
     def set_query(self, query, thread_id):
         self.dc.set_query(faiss.swig_ptr(query))

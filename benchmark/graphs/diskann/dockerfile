@@ -1,6 +1,7 @@
 FROM python:3.9-slim
 
 # Build arguments for quantizer and graph
+ARG QUANTIZER_TYPE=quantizer
 ARG QUANTIZER_NAME
 ARG GRAPH_NAME=diskann
 
@@ -60,14 +61,14 @@ RUN pip install --no-cache-dir \
 COPY benchmark/ /benchmark/
 
 # Copy the quantizer module
-COPY benchmark/algorithms/quantizer/${QUANTIZER_NAME}/ /algorithms/quantizer/${QUANTIZER_NAME}/
+COPY benchmark/algorithms/${QUANTIZER_TYPE}/${QUANTIZER_NAME}/ /algorithms/${QUANTIZER_TYPE}/${QUANTIZER_NAME}/
 
 # Copy the graph module
 COPY benchmark/graphs/${GRAPH_NAME}/ /algorithms/graphs/${GRAPH_NAME}/
 
 # Build quantizer C++ bindings if they exist
-RUN if [ -f /algorithms/quantizer/${QUANTIZER_NAME}/CMakeLists.txt ]; then \
-        cd /algorithms/quantizer/${QUANTIZER_NAME}/ && \
+RUN if [ -f /algorithms/${QUANTIZER_TYPE}/${QUANTIZER_NAME}/CMakeLists.txt ]; then \
+        cd /algorithms/${QUANTIZER_TYPE}/${QUANTIZER_NAME}/ && \
         mkdir -p build && \
         cd build && \
         cmake .. && \
@@ -88,7 +89,7 @@ RUN cd /algorithms/graphs/${GRAPH_NAME}/ && \
     rm -rf build
 
 # Set Python path to include all necessary directories
-ENV PYTHONPATH=/:/opt/DiskANN:/algorithms/quantizer/${QUANTIZER_NAME}:/algorithms/graphs/${GRAPH_NAME}
+ENV PYTHONPATH=/:/opt/DiskANN:/algorithms/${QUANTIZER_TYPE}/${QUANTIZER_NAME}:/algorithms/graphs/${GRAPH_NAME}
 ENV DISKANN_PATH=/opt/DiskANN
 
 # Set working directory

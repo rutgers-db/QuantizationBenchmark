@@ -1,7 +1,7 @@
 import numpy as np
 import yaml
 from typing import Optional, Dict, Any, List
-from .datasets import get_dataset
+from .datasets import get_dataset, get_distribution_shift_data
 from .docker_runner import DockerRunner
 import os
 from itertools import product
@@ -277,7 +277,14 @@ class BenchmarkRunner:
     Uses Docker containers to run algorithms in isolated environments.
     """
 
-    def __init__(self, dataset_name: str, data_dir: str = "data", debug: bool = False):
+    def __init__(
+        self,
+        dataset_name: str,
+        data_dir: str = "data",
+        debug: bool = False,
+        distribution_shift_test: bool = False,
+        distribution_shift_group: str = "distribution_shift",
+    ):
         """
         Initialize the benchmark runner.
 
@@ -292,12 +299,32 @@ class BenchmarkRunner:
         self.dataset_name = dataset_name
         self.data_dir = data_dir
         self.debug = debug
+        self.distribution_shift_test = distribution_shift_test
+        self.distribution_shift_group = distribution_shift_group
 
         # Load dataset
         self.hdf5_file, self.dimension = get_dataset(dataset_name, data_dir)
         self.train_data = np.array(self.hdf5_file['train'])
         self.test_data = np.array(self.hdf5_file['test'])
         self.ground_truth = np.array(self.hdf5_file['neighbors'])
+        self.distribution_shift_info = None
+        if self.distribution_shift_test:
+            self.distribution_shift_info = get_distribution_shift_data(
+                self.hdf5_file,
+                self.distribution_shift_group,
+            )
+            if self.distribution_shift_info is None:
+                raise ValueError(
+                    f"Dataset '{dataset_name}' does not contain the "
+                    f"'{self.distribution_shift_group}' group required for "
+                    "distribution-shift experiments."
+                )
+            shift_indices = self.distribution_shift_info['shift_train_indices']
+            if shift_indices.size == 0:
+                raise ValueError(
+                    f"Distribution-shift group '{self.distribution_shift_group}' "
+                    "contains an empty shift sample."
+                )
 
         print(f"\n{'='*60}")
         print(f"Dataset: {dataset_name}")
@@ -306,11 +333,46 @@ class BenchmarkRunner:
         print(f"  Train size: {self.train_data.shape}")
         print(f"  Test size: {self.test_data.shape}")
         print(f"  Ground truth size: {self.ground_truth.shape}")
+        if self.distribution_shift_test:
+            print("  Experiment: Distribution shift")
+            print(f"  Shift group: {self.distribution_shift_group}")
+            print(f"  Shift-train size: {self.distribution_shift_info['shift_train_indices'].shape[0]}")
+            print(f"  Selected cluster: {self.distribution_shift_info.get('selected_cluster_id')}")
+            print(f"  JS divergence: {self.distribution_shift_info.get('js_divergence'):.6f}")
         if debug:
             print(f"  Debug mode: ENABLED (real-time Docker output)")
 
         # Initialize Docker runner
         self.docker_runner = DockerRunner(debug=debug)
+
+    def _prepare_quantizer_data(self, train_data: np.ndarray):
+        """
+        Return (train_data_for_codebook, add_data_for_index) for the current experiment.
+        """
+        if not self.distribution_shift_test:
+            return train_data, None
+
+        shift_indices = self.distribution_shift_info['shift_train_indices']
+        shift_train_data = np.ascontiguousarray(train_data[shift_indices].astype(np.float32, copy=False))
+        add_data = np.ascontiguousarray(train_data.astype(np.float32, copy=False))
+        return shift_train_data, add_data
+
+    def _distribution_shift_result_fields(self) -> Dict[str, Any]:
+        if not self.distribution_shift_test:
+            return {}
+
+        return {
+            'experiment': 'distribution_shift',
+            'distribution_shift': {
+                'group_name': self.distribution_shift_group,
+                'k': self.distribution_shift_info.get('k'),
+                'seed': self.distribution_shift_info.get('seed'),
+                'selected_cluster_id': self.distribution_shift_info.get('selected_cluster_id'),
+                'selected_cluster_size': self.distribution_shift_info.get('selected_cluster_size'),
+                'selected_cluster_fraction': self.distribution_shift_info.get('selected_cluster_fraction'),
+                'js_divergence': self.distribution_shift_info.get('js_divergence'),
+            },
+        }
 
     def load_config(self, algo_type: str, algo_name: str) -> List[Dict[str, Any]]:
         """
@@ -334,6 +396,12 @@ class BenchmarkRunner:
             config_path = os.path.join(
                 "benchmark/graphs", algo_name, "config.yaml"
             )
+        elif algo_type == 'quantizer':
+            quantizer_config_paths = [
+                os.path.join("benchmark/algorithms", "quantizer", algo_name, "config.yaml"),
+                os.path.join("benchmark/algorithms", "ivf", algo_name, "config.yaml"),
+            ]
+            config_path = next((path for path in quantizer_config_paths if os.path.exists(path)), quantizer_config_paths[0])
         else:
             config_path = os.path.join(
                 "benchmark/algorithms", algo_type, algo_name, "config.yaml"
@@ -551,6 +619,7 @@ class BenchmarkRunner:
         print(f"\n{'='*60}")
         print(f"Phase 2: Quantization - {quantizer_name}")
         print(f"{'='*60}")
+        quantizer_train_data, quantizer_add_data = self._prepare_quantizer_data(train_data)
 
         # Build Docker image
         if not self.docker_runner.build_image('quantizer', quantizer_name):
@@ -568,10 +637,11 @@ class BenchmarkRunner:
 
         quant_results = self.docker_runner.run_quantizer(
             quantizer_name,
-            train_data,
+            quantizer_train_data,
             test_data,
             self.ground_truth,
-            config_for_docker
+            config_for_docker,
+            add_data=quantizer_add_data,
         )
 
         if quant_results is None or quant_results.get('status') == 'failed':
@@ -610,6 +680,7 @@ class BenchmarkRunner:
 
             # Add quantizer results
             result.update(search_result)
+            result.update(self._distribution_shift_result_fields())
             all_results.append(result)
 
         return all_results
@@ -1040,6 +1111,7 @@ class BenchmarkRunner:
         print(f"\n{'='*60}")
         print(f"Phase 2: Quantization - {quantizer_name}")
         print(f"{'='*60}")
+        quantizer_train_data, quantizer_add_data = self._prepare_quantizer_data(train_data)
 
         # Build Docker image
         if not self.docker_runner.build_image('quantizer', quantizer_name):
@@ -1050,10 +1122,11 @@ class BenchmarkRunner:
         # Run in Docker
         quant_results = self.docker_runner.run_quantizer(
             quantizer_name,
-            train_data,
+            quantizer_train_data,
             test_data,
             self.ground_truth,
-            quantizer_config
+            quantizer_config,
+            add_data=quantizer_add_data,
         )
 
         if quant_results is None or quant_results.get('status') == 'failed':
@@ -1064,6 +1137,7 @@ class BenchmarkRunner:
         # Merge quantizer results
         results.update({
             'training_time (s)': quant_results['training_time'],
+            'add_time (s)': quant_results.get('add_time', 0.0),
             'quantizer_memory (KB)': quant_results['quantizer_memory'],
             'quantizer_compression_rate': quant_results['compression_rate'],
             'mse': quant_results['mse'],
@@ -1084,6 +1158,8 @@ class BenchmarkRunner:
             )
         else:
             results['total_compression_rate'] = results['quantizer_compression_rate']
+
+        results.update(self._distribution_shift_result_fields())
 
         # Print summary
         # print(f"\n{'='*60}")

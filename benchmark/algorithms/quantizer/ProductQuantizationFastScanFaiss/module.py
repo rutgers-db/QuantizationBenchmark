@@ -26,16 +26,27 @@ class ProductQuantizationFastScanFaiss(BaseQuantizer):
 
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
-        self.data = data
+        return self.train(nd, data) and self.add(nd, data)
+
+    def train(self, nd: int, data: np.ndarray) -> bool:
+        self.data = np.ascontiguousarray(data.astype(np.float32, copy=False))
         self.ndata = nd
         try:
-            self.PQIndex.train(data)
-            self.PQIndex.add(data)
-
-            self.index = faiss.IndexPQFastScan(self.PQIndex)
-            # Add vectors to index for querying
+            self.PQIndex.train(self.data)
         except Exception as e:
             print(f"Training error: {e}")
+            return False
+        return True
+
+    def add(self, nd: int, data: np.ndarray) -> bool:
+        self.data = np.ascontiguousarray(data.astype(np.float32, copy=False))
+        self._original_data = self.data
+        self.ndata = nd
+        try:
+            self.PQIndex.add(self.data)
+            self.index = faiss.IndexPQFastScan(self.PQIndex)
+        except Exception as e:
+            print(f"Add error: {e}")
             return False
         return True
 
@@ -64,15 +75,6 @@ class ProductQuantizationFastScanFaiss(BaseQuantizer):
         se_per_row = np.sum((recons - self.data)**2, axis=1)
         mse = np.mean(se_per_row)
         return mse
-    
-    def searchAndRerank(self, nq, query, topk, nrerank):
-        refine = faiss.IndexFlatL2(self.ndim)
-        refine.add(self.data)
-
-        refiner = faiss.IndexRefine(self.index, refine)
-        refiner.k_factor = nrerank / topk
-        D, I = refiner.search(query, topk)
-        return I, D
     
     def set_query(self, query: np.ndarray, thread_id: int):
         pass
