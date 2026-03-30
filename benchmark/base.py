@@ -38,6 +38,27 @@ class BaseQuantizer(ABC):
         """
         pass
 
+    def train(self, nd: int, data: np.ndarray) -> bool:
+        """
+        Optional train-only hook used by distribution-shift experiments.
+
+        Quantizers that support training codebooks on one sample and adding a
+        different database later should override this together with add().
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support separate train/add."
+        )
+
+    def add(self, nd: int, data: np.ndarray) -> bool:
+        """
+        Optional add-only hook used by distribution-shift experiments.
+
+        Quantizers that override train() should also override add().
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support separate train/add."
+        )
+
     @abstractmethod
     def query(self, nq: int, queries: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
         """

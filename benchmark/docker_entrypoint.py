@@ -138,10 +138,13 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
     test_data = input_data['test_data']
     ground_truth = input_data['ground_truth']
     config = input_data['config']
+    add_data = input_data.get('add_data')
 
     print(f"Train data shape: {train_data.shape}")
     print(f"Test data shape: {test_data.shape}")
     print(f"Ground truth shape: {ground_truth.shape}")
+    if add_data is not None:
+        print(f"Add data shape: {add_data.shape}")
     print(f"Config: {config}")
 
     # Check if config has build/search separation
@@ -177,7 +180,26 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
     start_time = time.time()
 
     nd = train_data.shape[0]
-    success = quantizer.fit(nd, train_data)
+    add_time = 0.0
+    if add_data is not None:
+        if (
+            type(quantizer).train is BaseQuantizer.train or
+            type(quantizer).add is BaseQuantizer.add
+        ):
+            output = {
+                'status': 'failed',
+                'error': (
+                    f"{QuantizerClass.__name__} does not support separate train/add "
+                    "required by the distribution-shift benchmark."
+                ),
+            }
+            with open(output_path, 'wb') as f:
+                pickle.dump(output, f)
+            return
+
+        success = quantizer.train(nd, train_data)
+    else:
+        success = quantizer.fit(nd, train_data)
     training_time = time.time() - start_time
 
     if not success:
@@ -188,6 +210,21 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
         return
 
     print(f"Training time: {training_time:.4f}s")
+
+    if add_data is not None:
+        print("\n=== Add Phase ===")
+        add_start_time = time.time()
+        add_success = quantizer.add(add_data.shape[0], add_data)
+        add_time = time.time() - add_start_time
+
+        if not add_success:
+            print("ERROR: Add phase failed!")
+            output = {'status': 'failed', 'error': 'Add phase failed'}
+            with open(output_path, 'wb') as f:
+                pickle.dump(output, f)
+            return
+
+        print(f"Add time: {add_time:.4f}s")
 
     # Get quantizer metrics (shared across all search configs)
     quantizer_memory = quantizer.getMemoryUsage()
@@ -365,6 +402,7 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
                 'status': 'success',
                 'search_params': search_params,
                 'training_time': training_time,
+                'add_time': add_time,
                 'quantizer_memory': quantizer_memory,
                 'compression_rate': compression_rate,
                 'mse': mse,

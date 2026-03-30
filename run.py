@@ -42,12 +42,15 @@ def _iter_algorithm_dirs(root_dir: str):
             dirnames[:] = []
 
 
-def _resolve_output_dir(output_dir: str, results) -> str:
+def _resolve_output_dir(output_dir: str, results, distribution_shift_test: bool = False) -> str:
     """Route results into IVF or non-IVF subdirectories."""
     first_result = results[0] if isinstance(results, list) else results
     quantizer_name = first_result.get('quantizer')
     output_group = 'ivf' if quantizer_name in IVF_ALGORITHMS else 'quantizer'
-    return os.path.join(output_dir, output_group)
+    resolved_output_dir = output_dir
+    if distribution_shift_test:
+        resolved_output_dir = os.path.join(resolved_output_dir, 'distribution_shift')
+    return os.path.join(resolved_output_dir, output_group)
 
 
 def list_algorithms():
@@ -274,6 +277,7 @@ def save_results(results, output_dir: str = "benchmark/results"):
                     'build_params': build_params,
                     'build_metrics': {
                         'training_time': first.get('training_time'),
+                        'add_time': first.get('add_time'),
                         'build_time': first.get('build_time') if is_graph else None,
                         'mse': first.get('mse'),
                         'quantizer_memory': first.get('quantizer_memory'),
@@ -354,6 +358,9 @@ Examples:
 
   # List available algorithms
   python run.py --list-algorithms
+
+  # Run distribution-shift benchmark
+  python run.py --dataset sift-128 --algorithm Faiss-IVFPQ --distribution-shift-test
         """
     )
 
@@ -366,6 +373,10 @@ Examples:
                        help='Graph algorithm to use with the quantizer (e.g., "diskann")')
     parser.add_argument('--data-dir', type=str, default='data',
                        help='Directory where datasets are stored (default: data)')
+    parser.add_argument('--distribution-shift-test', action='store_true',
+                       help='Run the distribution-shift benchmark using precomputed shift data stored in the HDF5 dataset')
+    parser.add_argument('--distribution-shift-group', type=str, default='distribution_shift',
+                       help='HDF5 group name containing distribution-shift artifacts (default: distribution_shift)')
 
     # Utility actions
     parser.add_argument('--list-algorithms', action='store_true',
@@ -418,6 +429,9 @@ Examples:
         if args.graph and dimreduction_name:
             parser.error('Graph algorithms cannot be combined with dimensionality reduction. Use either --algorithm <Quantizer> --graph <Graph> or --algorithm <DimReduction>,<Quantizer>')
 
+    if args.distribution_shift_test and args.graph:
+        parser.error('Distribution-shift benchmark currently supports quantizer runs only and cannot be combined with --graph')
+
     # Run benchmark
     print("\n" + "="*60)
     print("Quantization Benchmark")
@@ -432,10 +446,19 @@ Examples:
         print(f"  Graph: {args.graph}")
         if not args.algorithm:
             print(f"  Mode: Graph-only (no external quantizer)")
+    if args.distribution_shift_test:
+        print("  Experiment: Distribution shift")
+        print(f"  Shift group: {args.distribution_shift_group}")
     print("="*60)
 
     try:
-        with BenchmarkRunner(args.dataset, data_dir=args.data_dir, debug=args.debug) as runner:
+        with BenchmarkRunner(
+            args.dataset,
+            data_dir=args.data_dir,
+            debug=args.debug,
+            distribution_shift_test=args.distribution_shift_test,
+            distribution_shift_group=args.distribution_shift_group,
+        ) as runner:
             results = runner.run_benchmark(
                 quantizer_name=quantizer_name,
                 dimreduction_name=dimreduction_name,
@@ -450,7 +473,10 @@ Examples:
 
             # Save all results to a single file
             if not args.no_save and success_count > 0:
-                save_results(results, _resolve_output_dir(args.output_dir, results))
+                save_results(
+                    results,
+                    _resolve_output_dir(args.output_dir, results, args.distribution_shift_test),
+                )
 
             # Print summary
             print("\n" + "="*60)
@@ -461,7 +487,10 @@ Examples:
         else:
             # Single configuration
             if not args.no_save and results.get('status') == 'success':
-                save_results(results, _resolve_output_dir(args.output_dir, results))
+                save_results(
+                    results,
+                    _resolve_output_dir(args.output_dir, results, args.distribution_shift_test),
+                )
 
             # Print final status
             print("\n" + "="*60)

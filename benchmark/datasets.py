@@ -2,7 +2,7 @@ import os
 import random
 import h5py
 import numpy
-from typing import Any, Callable, Dict, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 
 def get_dataset_fn(dataset_name: str, data_dir: str = "data") -> str:
@@ -41,6 +41,41 @@ def get_dataset(dataset_name: str, data_dir: str = "data") -> Tuple[h5py.File, i
     # cast to integer because the json parser (later on) cannot interpret numpy integers
     dimension = int(hdf5_file.attrs["dimension"]) if "dimension" in hdf5_file.attrs else len(hdf5_file["train"][0])
     return hdf5_file, dimension
+
+
+def get_distribution_shift_data(
+    hdf5_file: h5py.File,
+    group_name: str = "distribution_shift",
+) -> Optional[Dict[str, Any]]:
+    """
+    Load precomputed distribution-shift metadata from an HDF5 file.
+
+    Args:
+        hdf5_file: Opened HDF5 file handle.
+        group_name: Group name that stores the shift experiment artifacts.
+
+    Returns:
+        Dict with shift metadata and indices, or None if the group is absent.
+    """
+    if group_name not in hdf5_file:
+        return None
+
+    shift_group = hdf5_file[group_name]
+    metadata = {key: shift_group.attrs[key] for key in shift_group.attrs.keys()}
+    metadata["group_name"] = group_name
+    metadata["shift_train_indices"] = numpy.asarray(
+        shift_group["shift_train_indices"], dtype=numpy.int64
+    )
+
+    if "cluster_histogram" in shift_group:
+        metadata["cluster_histogram"] = numpy.asarray(
+            shift_group["cluster_histogram"], dtype=numpy.int64
+        )
+
+    if "cluster_centroids" in shift_group:
+        metadata["cluster_centroids_shape"] = tuple(shift_group["cluster_centroids"].shape)
+
+    return metadata
 
 def write_output(train: numpy.ndarray, test: numpy.ndarray, fn: str, distance: str, point_type: str = "float", count: int = 100) -> None:
     """

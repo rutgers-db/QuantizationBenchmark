@@ -30,23 +30,32 @@ class OptimizedProductQuantizationFaiss(BaseQuantizer):
 
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
-        self.data = data
+        return self.train(nd, data) and self.add(nd, data)
+
+    def train(self, nd: int, data: np.ndarray) -> bool:
+        self.data = np.ascontiguousarray(data.astype(np.float32, copy=False))
         self.ndata = nd
         try:
-            # Faiss train expects just the data, not the count
-
             self.opq = faiss.OPQMatrix(self.ndim, self.nsubvec)
             self.opq.niter = self.niter
-            self.opq.train(data)
+            self.opq.train(self.data)
 
             self.index = faiss.IndexPreTransform(self.opq,  self.PQIndex)
-            self.index.train(data)
-            self.index.add(data)
-            # Add vectors to index for querying
-
-            self.dc = self.PQIndex.get_distance_computer()
+            self.index.train(self.data)
         except Exception as e:
             print(f"Training error: {e}")
+            return False
+        return True
+
+    def add(self, nd: int, data: np.ndarray) -> bool:
+        self.data = np.ascontiguousarray(data.astype(np.float32, copy=False))
+        self._original_data = self.data
+        self.ndata = nd
+        try:
+            self.index.add(self.data)
+            self.dc = self.PQIndex.get_distance_computer()
+        except Exception as e:
+            print(f"Add error: {e}")
             return False
         return True
 

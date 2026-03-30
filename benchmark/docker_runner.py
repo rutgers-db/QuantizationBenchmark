@@ -396,7 +396,8 @@ class DockerRunner:
         train_data: np.ndarray,
         test_data: np.ndarray,
         ground_truth: np.ndarray,
-        config: Dict[str, Any]
+        config: Dict[str, Any],
+        add_data: Optional[np.ndarray] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Run quantizer algorithm in Docker container.
@@ -422,12 +423,15 @@ class DockerRunner:
         output_file = os.path.join(input_dir, "output.pkl")
 
         with open(input_file, 'wb') as f:
-            pickle.dump({
+            payload = {
                 'train_data': train_data,
                 'test_data': test_data,
                 'ground_truth': ground_truth,
                 'config': config
-            }, f)
+            }
+            if add_data is not None:
+                payload['add_data'] = add_data
+            pickle.dump(payload, f)
 
         # Run container
         algo_family, _ = self._resolve_quantizer_dir(algo_name)
