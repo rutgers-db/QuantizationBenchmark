@@ -280,7 +280,7 @@ class BenchmarkRunner:
     def __init__(
         self,
         dataset_name: str,
-        data_dir: str = "data",
+        data_dir: str = "/data/local/embedding_dataset/hdf5/",
         debug: bool = False,
         distribution_shift_test: bool = False,
         distribution_shift_group: str = "distribution_shift",
@@ -290,7 +290,7 @@ class BenchmarkRunner:
 
         Args:
             dataset_name: Name of the HDF5 dataset in the data/ directory
-            data_dir: Directory where datasets are stored (default: "data")
+            data_dir: Directory where datasets are stored (default: "/data/local/embedding_dataset/hdf5/")
             debug: Enable debug mode with real-time Docker output (default: False)
 
         Note:
@@ -337,7 +337,11 @@ class BenchmarkRunner:
             print("  Experiment: Distribution shift")
             print(f"  Shift group: {self.distribution_shift_group}")
             print(f"  Shift-train size: {self.distribution_shift_info['shift_train_indices'].shape[0]}")
-            print(f"  Selected cluster: {self.distribution_shift_info.get('selected_cluster_id')}")
+            if self.distribution_shift_info.get('selected_cluster_count', 1) == 1:
+                print(f"  Selected cluster: {self.distribution_shift_info.get('selected_cluster_id')}")
+            else:
+                print(f"  Selected clusters: {self.distribution_shift_info.get('selected_cluster_ids')}")
+                print(f"  Candidate pool size: {self.distribution_shift_info.get('candidate_pool_size')}")
             print(f"  JS divergence: {self.distribution_shift_info.get('js_divergence'):.6f}")
         if debug:
             print(f"  Debug mode: ENABLED (real-time Docker output)")
@@ -367,9 +371,15 @@ class BenchmarkRunner:
                 'group_name': self.distribution_shift_group,
                 'k': self.distribution_shift_info.get('k'),
                 'seed': self.distribution_shift_info.get('seed'),
+                'selected_cluster_count': self.distribution_shift_info.get('selected_cluster_count'),
+                'selected_cluster_ids': self.distribution_shift_info.get('selected_cluster_ids'),
                 'selected_cluster_id': self.distribution_shift_info.get('selected_cluster_id'),
                 'selected_cluster_size': self.distribution_shift_info.get('selected_cluster_size'),
                 'selected_cluster_fraction': self.distribution_shift_info.get('selected_cluster_fraction'),
+                'candidate_pool_size': self.distribution_shift_info.get('candidate_pool_size'),
+                'candidate_pool_fraction': self.distribution_shift_info.get('candidate_pool_fraction'),
+                'shift_sample_size': self.distribution_shift_info.get('shift_sample_size'),
+                'shift_sample_fraction': self.distribution_shift_info.get('shift_sample_fraction'),
                 'js_divergence': self.distribution_shift_info.get('js_divergence'),
             },
         }

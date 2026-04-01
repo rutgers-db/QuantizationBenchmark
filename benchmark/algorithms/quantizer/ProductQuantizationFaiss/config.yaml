@@ -9,8 +9,10 @@ sift-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsubvec: [16, 32, 64]
-    nbit: [4, 8]
+    # nsubvec: [16, 32, 64]
+    # nbit: [4, 8]
+    nsubvec: [32]
+    nbit: [8]
   search:
     - topk: 100
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]

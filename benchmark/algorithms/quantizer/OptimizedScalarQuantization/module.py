@@ -32,17 +32,36 @@ class OptimizedScalarQuantization(BaseQuantizer):
         self.data = None
         self._original_data = None
         self.ndata = 0
+        self.index = None
+        self._create_index()
+
+    def _create_index(self):
         self.index = osq_cpp.PyOSQIndex(self.ndim, self.space, self.nbit, self.query_nbit)
         self.index.set_num_threads(self.nthread)
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
+        self._create_index()
+        return self.train(nd, data) and self.add(nd, data)
+
+    def train(self, nd: int, data: np.ndarray) -> bool:
+        self.data = np.ascontiguousarray(data.astype(np.float32, copy=False))
+        self.ndata = int(nd)
+        self._create_index()
+        try:
+            self.index.train(self.data)
+        except Exception as exc:
+            print(f"Training error: {exc}")
+            return False
+        return True
+
+    def add(self, nd: int, data: np.ndarray) -> bool:
         self.data = np.ascontiguousarray(data.astype(np.float32, copy=False))
         self._original_data = self.data
         self.ndata = int(nd)
         try:
-            self.index.build(self.data)
+            self.index.add(self.data)
         except Exception as exc:
-            print(f"Training error: {exc}")
+            print(f"Add error: {exc}")
             return False
         return True
 
