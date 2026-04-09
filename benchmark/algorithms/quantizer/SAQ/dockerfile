@@ -1,0 +1,51 @@
+FROM python:3.9-slim
+
+# Build arguments
+ARG ALGO_TYPE
+ARG ALGO_NAME
+
+# Install system dependencies including AVX-512 build tools
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    libgomp1 \
+    libfmt-dev \
+    libgoogle-glog-dev \
+    libgflags-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone SAQ repository
+RUN cd /opt && git clone https://github.com/howarlii/SAQ.git
+
+# Install Python dependencies including pybind11
+RUN pip install --no-cache-dir \
+    numpy \
+    h5py \
+    pyyaml \
+    psutil \
+    pybind11 \
+    faiss-cpu
+
+# Copy the benchmark framework code
+COPY benchmark/ /benchmark/
+
+# Copy the algorithm module
+COPY benchmark/algorithms/${ALGO_TYPE}/${ALGO_NAME}/ /algorithms/${ALGO_TYPE}/${ALGO_NAME}/
+
+# Build the pybind11 module
+RUN cd /algorithms/${ALGO_TYPE}/${ALGO_NAME}/ && \
+    mkdir -p build && \
+    cd build && \
+    cmake .. && \
+    make && \
+    cp saq_cpp*.so .. && \
+    cd .. && \
+    rm -rf build
+
+# Set Python path
+ENV PYTHONPATH=/:/algorithms/quantizer/SAQ
+
+# Set working directory
+WORKDIR /workspace
