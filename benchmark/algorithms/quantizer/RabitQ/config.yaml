@@ -29,16 +29,16 @@ gist-960-euclidean:
     nthread: 16        # Number of threads for parallel processing
     space: "l2"        # Distance metric (l2 for Euclidean distance)
   build:
-    nlist: [4096]
+    nlist: [256]
   search:
     - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100]
     - topk: 10
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [10]
     - topk: 50
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [50]
     # Optional: Add nrerank values for search_and_rerank test
     # nrerank: [100, 200]  # If not specified, defaults to [topk, 2*topk]
@@ -54,13 +54,13 @@ audio-128-euclidean:
     nlist: [4096]
   search:
     - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100]
     - topk: 10
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [10]
     - topk: 50
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [50]
 
 video-1024-euclidean:
@@ -74,13 +74,13 @@ video-1024-euclidean:
     nlist: [4096]
   search:
     - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100]
     - topk: 10
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [10]
     - topk: 50
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [50]
 
 siftsmall-128-euclidean:

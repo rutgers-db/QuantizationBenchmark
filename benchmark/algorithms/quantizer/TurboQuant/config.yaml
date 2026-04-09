@@ -4,14 +4,20 @@ sift-128-euclidean:
     ndim: 128
     nthread: 16
     space: "l2"
+    mode: "mse"
+    use_data_centroid: true
   build:
-    nbit: [1, 4, 7]
+    bitwidth: [1,4,8]
+    nlist: 1
   search:
+    - topk: 100
+      nprobe: 1
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
+      nprobe: 1
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 100
+      nprobe: 1
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 gist-960-euclidean:
@@ -20,14 +26,20 @@ gist-960-euclidean:
     ndim: 960
     nthread: 16
     space: "l2"
+    mode: "mse"
+    use_data_centroid: true
   build:
-    nbit: [1, 2, 4, 7]
+    bitwidth: [4]
+    nlist: 1
   search:
+    - topk: 100
+      nprobe: 1
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
+      nprobe: 1
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 100
+      nprobe: 1
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 audio-128-euclidean:
@@ -36,14 +48,20 @@ audio-128-euclidean:
     ndim: 128
     nthread: 16
     space: "l2"
+    mode: "mse"
+    use_data_centroid: true
   build:
-    nbit: [1, 2, 4, 7, 8]
+    bitwidth: [1,4,8]
+    nlist: 1
   search:
+    - topk: 100
+      nprobe: 1
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
+      nprobe: 1
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 100
+      nprobe: 1
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 video-1024-euclidean:
@@ -52,14 +70,20 @@ video-1024-euclidean:
     ndim: 1024
     nthread: 16
     space: "l2"
+    mode: "mse"
+    use_data_centroid: true
   build:
-    nbit: [1, 2, 4, 7, 8]
+    bitwidth: [1,4,8]
+    nlist: 1
   search:
+    - topk: 100
+      nprobe: 1
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
+      nprobe: 1
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 100
+      nprobe: 1
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 text2image-200-euclidean:
@@ -68,14 +92,20 @@ text2image-200-euclidean:
     ndim: 200
     nthread: 16
     space: "l2"
+    mode: "mse"
+    use_data_centroid: true
   build:
-    nbit: [1, 2, 4, 7, 8]
+    bitwidth: [1,4,8]
+    nlist: 1
   search:
+    - topk: 100
+      nprobe: 1
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
+      nprobe: 1
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 100
+      nprobe: 1
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 paper-200-euclidean:
@@ -84,12 +114,40 @@ paper-200-euclidean:
     ndim: 200
     nthread: 16
     space: "l2"
+    mode: "mse"
+    use_data_centroid: true
   build:
-    nbit: [1, 2, 4, 7, 8]
+    bitwidth: [1,4,8]
+    nlist: 1
   search:
+    - topk: 100
+      nprobe: 1
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
+      nprobe: 1
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
+      nprobe: 1
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+
+siftsmall-128-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 128
+    nthread: 16
+    space: "l2"
+    mode: "mse"
+    use_data_centroid: true
+  build:
+    bitwidth: [1,4,8]
+    nlist: 1
+  search:
     - topk: 100
+      nprobe: 1
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+    - topk: 10
+      nprobe: 1
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+    - topk: 50
+      nprobe: 1
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]

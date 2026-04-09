@@ -125,7 +125,7 @@ class DockerRunner:
 
         project_root = os.path.abspath(".")
         env = os.environ.copy()
-        env["DOCKER_BUILDKIT"] = "0"
+        # env["DOCKER_BUILDKIT"] = "0"
         result = subprocess.run(
             ["docker", "build", "-t", image_name, "-f", dockerfile_path,
              "--build-arg", f"ALGO_TYPE={actual_algo_type}",
@@ -208,7 +208,7 @@ class DockerRunner:
 
         project_root = os.path.abspath(".")
         env = os.environ.copy()
-        env["DOCKER_BUILDKIT"] = "0"
+        # env["DOCKER_BUILDKIT"] = "0"
         result = subprocess.run(
             ["docker", "build", "-t", image_name, "-f", dockerfile_path,
              "--build-arg", f"QUANTIZER_TYPE={quantizer_family}",
@@ -284,7 +284,7 @@ class DockerRunner:
 
         project_root = os.path.abspath(".")
         env = os.environ.copy()
-        env["DOCKER_BUILDKIT"] = "0"
+        # env["DOCKER_BUILDKIT"] = "0"
         result = subprocess.run(
             ["docker", "build", "-t", image_name, "-f", dockerfile_path,
              "--build-arg", f"GRAPH_NAME={graph_name}",

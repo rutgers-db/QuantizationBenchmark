@@ -15,3 +15,21 @@ sift-128-euclidean:
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+
+gist-960-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 960
+    nthread: 16
+    space: "l2"
+  build:
+    nsubvec: [480]
+    nbit: [8]
+    max_beam_size: [40]
+  search:
+    - topk: 100
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+    - topk: 10
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+    - topk: 50
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
