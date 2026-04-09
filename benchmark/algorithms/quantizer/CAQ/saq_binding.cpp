@@ -217,10 +217,9 @@ public:
     }
 
     // Compute per-element MSE via reconstruction.
-    // Uses stored cluster_ids to directly access each vector's own cluster —
-    // no centroid search needed (O(N * cluster_size) vs O(N * num_cen) with nprobe=1).
-    // compAccurateDist gives ||x_i - x̂_i||^2, the true reconstruction error.
-    float getMSE(int num_threads) {
+    // NOTE: SaqCluEstimator mutates *saq_data and *pcluster (neither is thread-safe),
+    // and SaqData has a deleted copy constructor. Runs single-threaded.
+    float getMSE(int /* num_threads */) {
         if (!ivf_)
             throw std::runtime_error("Index not built. Call build() first.");
         if (cluster_ids_.empty())
@@ -240,7 +239,6 @@ public:
 
         double total_error = 0.0;
 
-        #pragma omp parallel for num_threads(num_threads) reduction(+:total_error)
         for (size_t i = 0; i < nd; i++) {
             Eigen::Map<const Eigen::RowVectorXf> query(data_ptr + i * dim, dim);
             Eigen::RowVectorXf query_copy = query;
@@ -251,7 +249,6 @@ public:
             SaqCluEstimator<DistType::L2Sqr> estimator(*saq_data, scfg, query_copy);
             estimator.prepare(&pcluster);
 
-            // Find position of vector i within its cluster and compute reconstruction error
             const PID* ids = pcluster.ids();
             for (size_t j = 0; j < pcluster.num_vec_; j++) {
                 if (ids[j] == static_cast<PID>(i)) {
