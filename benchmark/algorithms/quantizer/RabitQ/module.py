@@ -287,30 +287,29 @@ class RabitQ(BaseQuantizer):
         """
         Get the mean squared error of the quantization.
 
-        This measures the reconstruction error of the quantized vectors.
-        For RaBitQ, we approximate reconstruction from binary codes.
+        Reconstructs each vector from its binary code and computes the mean
+        squared Euclidean distance to the original data.
 
         Returns:
             float: Mean squared error
         """
         if not self.trained or self.data is None:
             return float('inf')
-        
-        # Get centroid for each data point using assignments
-        # assigned_centroids = self.centroid_orig[self.assignments]  # Shape: (nd, ndim)
 
-        # bin_XP = (2 * self.bin_XP - 1) / np.sqrt(self.ndim)
-        # o_bar = bin_XP @ self.projection_matrix[:self.b_dim, :self.ndim].T + assigned_centroids
-        # mse = np.mean(np.sum((self.data - o_bar) ** 2, axis=1))
-        # return mse    
-        max_bd = max(self.ndim, self.b_dim)
-        queries_pad = np.pad(self.data, ((0, 0), (0, max_bd - self.ndim)), 'constant').astype('float32')
+        # Assigned centroids for each data point, shape (nd, ndim)
+        assigned_centroids = self.centroid_orig[self.assignments]
 
-        # Project queries (randomized queries)
-        rd_queries = queries_pad @ self.projection_matrix  # (nq, max_bd)
-        rd_queries = rd_queries[:, :self.b_dim].astype('float32')
-        
-        return self.cpp_index.getMSE(self.data, rd_queries)
+        # Binary code (±1/sqrt(b_dim)) approximates the unit-norm projected residual
+        bin_codes = (2 * self.bin_XP.astype(np.float32) - 1) / np.sqrt(self.b_dim)  # (nd, b_dim)
+
+        # Inverse project back to original space:
+        # forward: XP_residual = (data_pad - centroid_pad) @ P
+        # inverse: residual_orig ≈ bin_codes @ P.T[:b_dim, :ndim]
+        residual_orig = bin_codes @ self.projection_matrix.T[:self.b_dim, :self.ndim]  # (nd, ndim)
+
+        x_hat = assigned_centroids + residual_orig
+        mse = np.mean(np.sum((self.data - x_hat) ** 2, axis=1))
+        return float(mse)
         
 
     def searchAndRerank(self, nq: int, queries: np.ndarray, topk: int, nrerank: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:

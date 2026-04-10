@@ -77,8 +77,8 @@ text2image-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsplits: [2, 4]
-    nsubvec: [8, 16]
+    nsplits: [1, 2, 4]
+    nsubvec: [25]
     nbit: [4, 8]
   search:
     - topk: 10
@@ -95,8 +95,8 @@ paper-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsplits: [2, 4]
-    nsubvec: [8, 16]
+    nsplits: [1, 2, 4]
+    nsubvec: [25]
     nbit: [4, 8]
   search:
     - topk: 10

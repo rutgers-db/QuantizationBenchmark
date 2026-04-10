@@ -43,13 +43,13 @@ class ExtendedRabitQNTU(BaseQuantizer):
 
 
     def query(self, nq: int, queries: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
-        I,D = self.Index.search(queries, nq, topk)
+        I,D = self.Index.search(queries, nq, topk, self.nthread)
         D = np.abs(D)
         return I ,D
 
 
     def searchAndRerank(self, nq, query, topk, nrerank, **search_params):
-        I,D = self.Index.search(query, nq, nrerank)
+        I,D = self.Index.search(query, nq, nrerank, self.nthread)
         selected = self.data[I]
         diff = selected - query[:, None, :]
         D = np.linalg.norm(diff, axis=2)

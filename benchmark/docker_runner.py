@@ -84,7 +84,6 @@ class DockerRunner:
             return False
 
         image_name = f"quantbench-{algo_type}-{algo_name.lower()}:latest"
-
         # Check if image exists
         if not force_rebuild:
             result = subprocess.run(

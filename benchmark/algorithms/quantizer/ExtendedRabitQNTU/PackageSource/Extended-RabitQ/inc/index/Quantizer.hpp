@@ -329,9 +329,10 @@ float DataQuantizer::get_data_mse(
     float* fac_x2 = new float[num_points];
 
      for (size_t i = 0; i < num_points; ++i) {
-        // distance 2 centroid
+        // distance 2 centroid (L2 norm, not squared)
+        // fast_quantize_mse expects ||x-c||, not ||x-c||^2
         const float* cur_data = data + this->DIM * IDs[i];
-        fac_x2[i] = L2Sqr(cur_data, centroid, this->DIM);
+        fac_x2[i] = std::sqrt(L2Sqr(cur_data, centroid, this->DIM));
      }
     /* pre-computed factor */
 

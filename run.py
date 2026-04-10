@@ -28,9 +28,6 @@ from benchmark.runner import BenchmarkRunner
 from benchmark.docker_runner import DockerRunner
 
 
-IVF_ALGORITHMS = {"Faiss-IVFPQ", "Faiss-IVFSQ"}
-
-
 def _iter_algorithm_dirs(root_dir: str):
     """Yield algorithm directory names that contain a module.py file."""
     if not os.path.exists(root_dir):
@@ -42,11 +39,27 @@ def _iter_algorithm_dirs(root_dir: str):
             dirnames[:] = []
 
 
+def _resolve_quantizer_output_group(quantizer_name: str) -> str:
+    """Route results based on the algorithm's actual directory."""
+    if not quantizer_name:
+        return 'quantizer'
+
+    ivf_dir = os.path.join("benchmark", "algorithms", "ivf", quantizer_name)
+    if os.path.exists(os.path.join(ivf_dir, "module.py")):
+        return 'ivf'
+
+    quantizer_dir = os.path.join("benchmark", "algorithms", "quantizer", quantizer_name)
+    if os.path.exists(os.path.join(quantizer_dir, "module.py")):
+        return 'quantizer'
+
+    return 'quantizer'
+
+
 def _resolve_output_dir(output_dir: str, results, distribution_shift_test: bool = False) -> str:
     """Route results into IVF or non-IVF subdirectories."""
     first_result = results[0] if isinstance(results, list) else results
     quantizer_name = first_result.get('quantizer')
-    output_group = 'ivf' if quantizer_name in IVF_ALGORITHMS else 'quantizer'
+    output_group = _resolve_quantizer_output_group(quantizer_name)
     resolved_output_dir = output_dir
     if distribution_shift_test:
         resolved_output_dir = os.path.join(resolved_output_dir, 'distribution_shift')
@@ -371,8 +384,8 @@ Examples:
                        help='Algorithm(s) to run. Format: "Quantizer" or "DimReduction,Quantizer"')
     parser.add_argument('--graph', type=str,
                        help='Graph algorithm to use with the quantizer (e.g., "diskann")')
-    parser.add_argument('--data-dir', type=str, default='data',
-                       help='Directory where datasets are stored (default: data)')
+    parser.add_argument('--data-dir', type=str, default='/data/local/embedding_dataset/hdf5',
+                       help='Directory where datasets are stored (default: /data/local/embedding_dataset/hdf5)')
     parser.add_argument('--distribution-shift-test', action='store_true',
                        help='Run the distribution-shift benchmark using precomputed shift data stored in the HDF5 dataset')
     parser.add_argument('--distribution-shift-group', type=str, default='distribution_shift',

@@ -5,15 +5,18 @@ sift-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsplits: [2, 4]
-    nsubvec: [8, 16]
-    nbit: [4, 8]
+    nsubvec: [16,32,64]
+    nbit: [4,8]
+    nlist: [1024, 2048, 4096, 8192]
   search:
     - topk: 10
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 gist-960-euclidean:
@@ -23,15 +26,18 @@ gist-960-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsplits: [2, 4]
-    nsubvec: [8, 16]
-    nbit: [4, 8]
+    nsubvec: [16,32,64]
+    nbit: [4,8]
+    nlist: [1024, 2048, 4096, 8192]
   search:
     - topk: 10
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 audio-128-euclidean:
@@ -41,15 +47,18 @@ audio-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsplits: [2, 4]
-    nsubvec: [8, 16]
-    nbit: [4, 8]
+    nsubvec: [16,32,64]
+    nbit: [4,8]
+    nlist: [1024, 2048, 4096, 8192]
   search:
     - topk: 10
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 video-1024-euclidean:
@@ -59,15 +68,18 @@ video-1024-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsplits: [2, 4]
-    nsubvec: [8, 16]
-    nbit: [4, 8]
+    nsubvec: [128,256,512]
+    nbit: [4,8]
+    nlist: [1024, 2048, 4096, 8192]
   search:
     - topk: 10
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 text2image-200-euclidean:
@@ -77,15 +89,18 @@ text2image-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsplits: [1, 2, 4]
-    nsubvec: [25]
-    nbit: [4, 8]
+    nsubvec: [25,50,100]
+    nbit: [4,8]
+    nlist: [1024, 2048, 4096, 8192]
   search:
     - topk: 10
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 paper-200-euclidean:
@@ -95,13 +110,16 @@ paper-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsplits: [1, 2, 4]
-    nsubvec: [25]
-    nbit: [4, 8]
+    nsubvec: [25,50,100]
+    nbit: [4,8]
+    nlist: [1024, 2048, 4096, 8192]
   search:
     - topk: 10
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
