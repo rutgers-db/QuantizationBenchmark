@@ -3,15 +3,15 @@
 
 sift-128-euclidean:
   common:
-    num_threads: 16
+    num_threads: 4
   build:
     max_level: [1]
     delta: [0.5]
-    efConstruction: [500]
-    M: [16]
+    efConstruction: [50]
+    M: [32]
   search:
     - topk: 10
-      efsearch: [100, 200, 500, 1000, 2000]
+      efsearch: [10, 20, 30, 40, 50, 75, 100, 200, 300, 400, 500, 750, 1000]
 
 siftsmall-128-euclidean:
   common:

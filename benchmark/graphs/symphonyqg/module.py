@@ -115,7 +115,7 @@ class SymphonyQG(BaseGraphIndex):
             traceback.print_exc()
             return False
 
-    def search(self, nq: int, queries: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
+    def search(self, nq: int, queries: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Search for nearest neighbors.
 
@@ -127,9 +127,12 @@ class SymphonyQG(BaseGraphIndex):
                 - search_ef: Beam size for search (default: 100)
 
         Returns:
-            Tuple[np.ndarray, np.ndarray]:
+            Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
                 - I: Indices of nearest neighbors, shape (nq, topk)
                 - D: Distances to nearest neighbors, shape (nq, topk)
+                - hops:
+                - comps:
+                - nrerank:
         """
         if not self.trained:
             raise RuntimeError("Index not trained. Call build() first.")
@@ -144,18 +147,25 @@ class SymphonyQG(BaseGraphIndex):
 
         # Allocate result arrays
         I = np.zeros((nq, topk), dtype=np.int64)
-        D = np.zeros((nq, topk), dtype=np.float32)
+        # D = np.zeros((nq, topk), dtype=np.float32)
+        hops = np.zeros(nq, dtype=np.int32)
+        approx_comps = np.zeros(nq, dtype = np.int32)
+        exact_comps = np.zeros(nq, dtype=np.int32)
 
         # Search each query
         # SymphonyQG's search returns only indices, we compute distances separately
         for i in range(nq):
             query = queries[i]
-            result = self.index.search(query, topk)
+            result, hop, approx_comp, exact_comp = self.index.search(query, topk)
             I[i] = result[:topk]
             # Compute L2 squared distances since SymphonyQG only returns indices
-            D[i] = np.sum((self._original_data[I[i]] - query) ** 2, axis=1)
+            # D[i] = np.sum((self._original_data[I[i]] - query) ** 2, axis=1)
+            hops[i] = hop
+            approx_comps[i] = approx_comp
+            exact_comps[i] = exact_comp
 
-        return I, D
+        # Return: I, D (None), hops, comps (approx_comps), nrerank (exact_comps)
+        return I, None, hops, approx_comps, exact_comps
 
     def getMemoryUsage(self) -> float:
         """

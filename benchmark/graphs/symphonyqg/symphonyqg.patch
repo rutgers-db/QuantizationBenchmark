@@ -1,0 +1,87 @@
+diff --git a/python/bindings.cpp b/python/bindings.cpp
+index fea41fd..ccf0d9f 100644
+--- a/python/bindings.cpp
++++ b/python/bindings.cpp
+@@ -94,7 +94,7 @@ struct Index {
+         auto* result_ptr = static_cast<uint32_t*>(result.request().ptr);
+         index->search(query.data(0), knn, result_ptr);
+ 
+-        return result;
++        return std::make_tuple(result, index->hops, index->approx_comps, index->exact_comps);
+     }
+ };
+ 
+diff --git a/symqglib/qg/qg.hpp b/symqglib/qg/qg.hpp
+index 7065b4d..7a3def7 100644
+--- a/symqglib/qg/qg.hpp
++++ b/symqglib/qg/qg.hpp
+@@ -114,8 +114,7 @@ class QuantizedGraph {
+     }
+ 
+     void
+-    find_candidates(PID, size_t, std::vector<Candidate<float>>&, HashBasedBooleanSet&, const std::vector<uint32_t>&)
+-        const;
++    find_candidates(PID, size_t, std::vector<Candidate<float>>&, HashBasedBooleanSet&, const std::vector<uint32_t>&);
+ 
+     void update_qg(PID, const std::vector<Candidate<float>>&);
+ 
+@@ -127,9 +126,12 @@ class QuantizedGraph {
+         float* appro_dist,
+         buffer::SearchBuffer& search_pool,
+         uint32_t cur_degree
+-    ) const;
++    );
+ 
+    public:
++    int hops = 0;
++    int approx_comps = 0;
++    int exact_comps = 0;
+     explicit QuantizedGraph(size_t, size_t, size_t);
+ 
+     [[nodiscard]] auto num_vertices() const { return this->num_points_; }
+@@ -243,6 +245,9 @@ inline void QuantizedGraph::search(
+     /* Init query matrix */
+     this->visited_.clear();
+     this->search_pool_.clear();
++    hops = 0;
++    approx_comps = 0;
++    exact_comps = 0;
+     search_qg(query, knn, results);
+ }
+ 
+@@ -270,6 +275,7 @@ inline void QuantizedGraph::search_qg(
+     std::vector<float> appro_dist(degree_bound_);  // approximate dis
+ 
+     while (search_pool_.has_next()) {
++        hops++;
+         PID cur_node = search_pool_.pop();
+         if (visited_.get(cur_node)) {
+             continue;
+@@ -298,8 +304,9 @@ inline float QuantizedGraph::scan_neighbors(
+     float* appro_dist,
+     buffer::SearchBuffer& search_pool,
+     uint32_t cur_degree
+-) const {
++) {
+     float sqr_y = space::l2_sqr(q_obj.query_data(), cur_data, dimension_);
++    exact_comps++;
+ 
+     /* Compute approximate distance by Fast Scan */
+     const auto* packed_code = reinterpret_cast<const uint8_t*>(&cur_data[code_offset_]);
+@@ -316,6 +323,7 @@ inline float QuantizedGraph::scan_neighbors(
+     );
+ 
+     const PID* ptr_nb = reinterpret_cast<const PID*>(&cur_data[neighbor_offset_]);
++    approx_comps += cur_degree;
+     for (uint32_t i = 0; i < cur_degree; ++i) {
+         PID cur_neighbor = ptr_nb[i];
+         float tmp_dist = appro_dist[i];
+@@ -390,7 +398,7 @@ inline void QuantizedGraph::find_candidates(
+     std::vector<Candidate<float>>& results,
+     HashBasedBooleanSet& vis,
+     const std::vector<uint32_t>& degrees
+-) const {
++) {
+     const float* query = get_vector(cur_id);
+     QGQuery q_obj(query, padded_dim_);
+     q_obj.query_prepare(rotator_, scanner_);

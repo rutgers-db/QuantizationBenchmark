@@ -84,20 +84,16 @@ class RabitQ(BaseQuantizer):
         return Q.T  # Transpose to match RaBitQ convention
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
+        return self.train(nd, data) and self.add(nd, data)
+
+    def train(self, nd: int, data: np.ndarray) -> bool:
         """
-        Train the RaBitQ quantizer on the given data.
-
-        Args:
-            nd: Number of data vectors
-            data: Training data of shape (nd, d) where d is the dimensionality
-
-        Returns:
-            bool: True if training was successful, False otherwise
+        Learn coarse centroids and the random projection from the training sample.
         """
         try:
-            self.data = np.ascontiguousarray(data, dtype=np.float32)
-            self._original_data = self.data  # For default search_and_rerank
+            train_data = np.ascontiguousarray(data, dtype=np.float32)
             self.ndata = nd
+
             kmeans = faiss.Kmeans(
                 d=self.ndim,
                 k=self.nlist,
@@ -105,114 +101,98 @@ class RabitQ(BaseQuantizer):
                 verbose=False,
                 seed=1234
             )
-            kmeans.train(data)
-            self.coarse_quantizer = kmeans.centroids
+            kmeans.train(train_data)
+            self.coarse_quantizer = np.ascontiguousarray(kmeans.centroids.astype('float32'))
+            self.centroid_orig = self.coarse_quantizer
+
             self.coarse_index = faiss.IndexFlatL2(self.ndim)
             self.coarse_index.add(self.coarse_quantizer)
-            _, self.assignments = self.coarse_index.search(data, 1)
-            self.assignments = self.assignments.flatten()
 
-            # Pad data to b_dim
             max_bd = max(self.ndim, self.b_dim)
-            data_pad = np.pad(self.data, ((0, 0), (0, max_bd - self.ndim)), 'constant').astype('float32')
-
-            # Set random seed for reproducibility
             np.random.seed(0)
+            self.projection_matrix = self._orthogonal_matrix(max_bd).astype('float32')
 
-            # Generate orthogonal projection matrix
-            P = self._orthogonal_matrix(max_bd)
-            self.projection_matrix = P
+            centroids_pad = np.pad(
+                self.centroid_orig,
+                ((0, 0), (0, max_bd - self.ndim)),
+                'constant'
+            ).astype('float32')
+            self.randomized_centroid = np.ascontiguousarray(centroids_pad @ self.projection_matrix)
 
-            # Pad centroids
-            centroids = kmeans.centroids.astype('float32')
-            centroids_pad = np.pad(centroids, ((0, 0), (0, max_bd - self.ndim)), 'constant').astype('float32')
+            self.trained = False
+            return True
+        except Exception as e:
+            print(f"Training error: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
-            # Project centroids
-            CP = centroids_pad @ P  # (nclusters, max_bd)
-            self.randomized_centroid = CP
+    def add(self, nd: int, data: np.ndarray) -> bool:
+        """
+        Encode the full database with the previously learned centroids/projection
+        and build the C++ search index.
+        """
+        if self.coarse_index is None or self.projection_matrix is None or self.randomized_centroid is None:
+            raise RuntimeError("Index not trained. Call train() first.")
 
-            # Store the original centroids
-            self.centroid_orig = centroids
+        try:
+            self.data = np.ascontiguousarray(data, dtype=np.float32)
+            self._original_data = self.data
+            self.ndata = nd
 
-            # Project data
-            XP = data_pad @ P  # (nd, max_bd)
+            _, assignments = self.coarse_index.search(self.data, 1)
+            self.assignments = assignments.flatten()
+            cluster_id = self.assignments.astype(np.uint32, copy=False)
 
-            # Prepare arrays for all data points
-            cluster_id = self.assignments.astype(np.uint32)
+            max_bd = max(self.ndim, self.b_dim)
+            data_pad = np.pad(
+                self.data,
+                ((0, 0), (0, max_bd - self.ndim)),
+                'constant'
+            ).astype('float32')
 
-            # Compute distance to assigned centroid (before projection)
-            # For each point, compute distance to its assigned centroid
-            dist_to_c = np.zeros(nd, dtype=np.float32)
-            for i in range(nd):
-                cluster = cluster_id[i]
-                dist_to_c[i] = np.linalg.norm(self.data[i] - centroids[cluster])
-
+            XP = np.ascontiguousarray(data_pad @ self.projection_matrix)
+            assigned_centroids = self.centroid_orig[cluster_id]
+            dist_to_c = np.linalg.norm(self.data - assigned_centroids, axis=1).astype('float32')
             self.dist_to_centroid = dist_to_c
 
-            # Compute residuals: subtract assigned centroid from projected data
-            XP_residual = np.zeros_like(XP)
-            for i in range(nd):
-                cluster = cluster_id[i]
-                XP_residual[i] = XP[i] - CP[cluster]
-
-            # Generate binary codes (first b_dim dimensions)
-            bin_XP = (XP_residual[:, :self.b_dim] > 0).astype(np.bool_)
+            XP_residual = XP - self.randomized_centroid[cluster_id]
+            bin_XP = np.ascontiguousarray((XP_residual[:, :self.b_dim] > 0).astype(np.bool_))
             self.bin_XP = bin_XP
 
-            # Compute x0 values
-            # x0 = sum(XP_residual * sign(bin_XP) / sqrt(B)) / ||XP_residual||
+            residual_norm = np.linalg.norm(XP_residual, axis=1, keepdims=True) + 1e-10
             x0 = np.sum(
                 XP_residual[:, :self.b_dim] * (2 * bin_XP - 1) / np.sqrt(self.b_dim),
                 axis=1,
                 keepdims=True
-            ) / (np.linalg.norm(XP_residual, axis=1, keepdims=True) + 1e-10)
-
-            # Handle ill-defined x0
+            ) / residual_norm
             x0[~np.isfinite(x0)] = 0.8
             self.x0_values = x0.flatten().astype('float32')
 
-            # Pack binary codes into uint64
             bin_XP_flat = bin_XP.flatten()
             num_uint64 = self.b_dim // 64
-
-            # Pack bits into uint64 (little-endian bit packing)
             binary_codes = np.packbits(bin_XP_flat.reshape(-1, 8, 8)[:, ::-1]).view(np.uint64)
-            binary_codes = binary_codes.reshape(nd, num_uint64)
-            self.binary_codes = binary_codes
+            self.binary_codes = np.ascontiguousarray(binary_codes.reshape(nd, num_uint64))
 
-            # Build C++ index
-            if self.cpp_index is not None:
-                # Store all arrays as class members to prevent Python GC
-                # centroids: (nclusters, b_dim)
-                self._cpp_centroids = CP[:, :self.b_dim].astype('float32')
+            self._cpp_centroids = np.ascontiguousarray(self.randomized_centroid[:, :self.b_dim].astype('float32'))
+            self._cpp_dist_to_c = np.ascontiguousarray(dist_to_c.astype('float32'))
+            self._cpp_x0 = np.ascontiguousarray(self.x0_values.astype('float32'))
+            self._cpp_cluster_id = np.ascontiguousarray(cluster_id.astype('uint32'))
+            self._cpp_binary = np.ascontiguousarray(self.binary_codes.astype('uint64'))
 
-                # dist_to_centroid: (nd,)
-                self._cpp_dist_to_c = dist_to_c.astype('float32')
-
-                # x0: (nd,)
-                self._cpp_x0 = self.x0_values.astype('float32')
-
-                # cluster_id: (nd,)
-                self._cpp_cluster_id = cluster_id.astype('uint32')
-
-                # binary_codes: (nd, b_dim//64)
-                self._cpp_binary = self.binary_codes.astype('uint64')
-
-                # Build index - pass the stored member variables
-                self.cpp_index.build(
-                    self.data,
-                    self._cpp_centroids,
-                    self._cpp_dist_to_c,
-                    self._cpp_x0,
-                    self._cpp_cluster_id,
-                    self._cpp_binary
-                )
+            self.cpp_index.build(
+                self.data,
+                self._cpp_centroids,
+                self._cpp_dist_to_c,
+                self._cpp_x0,
+                self._cpp_cluster_id,
+                self._cpp_binary
+            )
 
             self.trained = True
             return True
-
         except Exception as e:
-            print(f"Training error: {e}")
+            print(f"Add error: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -238,6 +218,8 @@ class RabitQ(BaseQuantizer):
         queries = queries.astype(np.float32)
         
         nprobe = search_params.get("nprobe", 1)
+        available_clusters = int(self.coarse_quantizer.shape[0]) if self.coarse_quantizer is not None else 1
+        nprobe = max(1, min(int(nprobe), available_clusters))
         _, assignments = self.coarse_index.search(queries, nprobe)
 
         # C++ implementation is required
@@ -338,6 +320,8 @@ class RabitQ(BaseQuantizer):
         queries = queries.astype(np.float32)
         
         nprobe = search_params.get("nprobe", 1)
+        available_clusters = int(self.coarse_quantizer.shape[0]) if self.coarse_quantizer is not None else 1
+        nprobe = max(1, min(int(nprobe), available_clusters))
         _, assignments = self.coarse_index.search(queries, nprobe)
 
         # C++ implementation is required

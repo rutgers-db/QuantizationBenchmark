@@ -338,7 +338,11 @@ class BenchmarkRunner:
             print("  Experiment: Distribution shift")
             print(f"  Shift group: {self.distribution_shift_group}")
             print(f"  Shift-train size: {self.distribution_shift_info['shift_train_indices'].shape[0]}")
-            print(f"  Selected cluster: {self.distribution_shift_info.get('selected_cluster_id')}")
+            if self.distribution_shift_info.get('selected_cluster_count', 1) == 1:
+                print(f"  Selected cluster: {self.distribution_shift_info.get('selected_cluster_id')}")
+            else:
+                print(f"  Selected clusters: {self.distribution_shift_info.get('selected_cluster_ids')}")
+                print(f"  Candidate pool size: {self.distribution_shift_info.get('candidate_pool_size')}")
             print(f"  JS divergence: {self.distribution_shift_info.get('js_divergence'):.6f}")
         if debug:
             print(f"  Debug mode: ENABLED (real-time Docker output)")
@@ -368,9 +372,15 @@ class BenchmarkRunner:
                 'group_name': self.distribution_shift_group,
                 'k': self.distribution_shift_info.get('k'),
                 'seed': self.distribution_shift_info.get('seed'),
+                'selected_cluster_count': self.distribution_shift_info.get('selected_cluster_count'),
+                'selected_cluster_ids': self.distribution_shift_info.get('selected_cluster_ids'),
                 'selected_cluster_id': self.distribution_shift_info.get('selected_cluster_id'),
                 'selected_cluster_size': self.distribution_shift_info.get('selected_cluster_size'),
                 'selected_cluster_fraction': self.distribution_shift_info.get('selected_cluster_fraction'),
+                'candidate_pool_size': self.distribution_shift_info.get('candidate_pool_size'),
+                'candidate_pool_fraction': self.distribution_shift_info.get('candidate_pool_fraction'),
+                'shift_sample_size': self.distribution_shift_info.get('shift_sample_size'),
+                'shift_sample_fraction': self.distribution_shift_info.get('shift_sample_fraction'),
                 'js_divergence': self.distribution_shift_info.get('js_divergence'),
             },
         }
@@ -815,7 +825,11 @@ class BenchmarkRunner:
                     'map': search_result.get('map'),
                     'recall@1': search_result.get('recall@1'),
                     'predictions': search_result.get('predictions'),
-                    'distances': search_result.get('distances')
+                    'distances': search_result.get('distances'),
+                    # Graph search metrics (hops, comps, nrerank stats)
+                    'hops_stats': search_result.get('hops_stats'),
+                    'comps_stats': search_result.get('comps_stats'),
+                    'nrerank_stats': search_result.get('nrerank_stats')
                 }
                 all_results.append(result)
 
@@ -886,31 +900,34 @@ class BenchmarkRunner:
             }
             return [error_result]
 
-        # Create one result dict per search configuration
-        all_results = []
+        # Create one result object per build config with all search results as a list
+        search_results_formatted = []
         for search_result in search_results_list:
-            result = {
-                'dataset': self.dataset_name,
-                'graph': graph_name,
-                'graph_config': graph_config,
-                'status': 'success',
-                # Graph build metrics
-                'build_time': build_time,
-                'graph_memory': graph_memory,
-                # Search metrics
+            search_results_formatted.append({
                 'search_params': search_result.get('search_params', {}),
                 'query_time': search_result.get('query_time'),
                 'queries_per_second': search_result.get('queries_per_second'),
                 'recall': search_result.get('recall'),
                 'map': search_result.get('map'),
                 'recall@1': search_result.get('recall@1'),
-                'predictions': search_result.get('predictions'),
-                'distances': search_result.get('distances')
-            }
-            all_results.append(result)
+                # Graph search metrics (hops, comps, nrerank stats)
+                'hops_stats': search_result.get('hops_stats'),
+                'comps_stats': search_result.get('comps_stats'),
+                'nrerank_stats': search_result.get('nrerank_stats'),
+            })
 
-        print(f"\nTotal results: {len(all_results)}")
-        return all_results
+        result = {
+            'dataset': self.dataset_name,
+            'graph': graph_name,
+            'build_params': graph_config.get('build_params', {}),
+            'status': 'success',
+            'build_time': build_time,
+            'graph_memory': graph_memory,
+            'search_results': search_results_formatted
+        }
+
+        print(f"\nTotal search configs: {len(search_results_formatted)}")
+        return [result]
 
     def _run_graph_benchmark(
         self,
@@ -1010,7 +1027,11 @@ class BenchmarkRunner:
                 'map': search_result.get('map'),
                 'recall@1': search_result.get('recall@1'),
                 'predictions': search_result.get('predictions'),
-                'distances': search_result.get('distances')
+                'distances': search_result.get('distances'),
+                # Graph search metrics (hops, comps, nrerank stats)
+                'hops_stats': search_result.get('hops_stats'),
+                'comps_stats': search_result.get('comps_stats'),
+                'nrerank_stats': search_result.get('nrerank_stats')
             }
             all_results.append(result)
 

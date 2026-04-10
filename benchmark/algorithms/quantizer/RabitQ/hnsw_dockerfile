@@ -1,0 +1,93 @@
+# Dockerfile for HNSW + RabitQ
+# RabitQ requires its C++ source code at /opt/RaBitQ
+
+FROM python:3.9-slim
+
+# Build arguments for quantizer and graph
+ARG QUANTIZER_NAME=RabitQ
+ARG GRAPH_NAME=hnsw
+
+# Avoid timezone prompt
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    g++ \
+    git \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Eigen 3.4.0 (required by RabitQ)
+RUN cd /tmp && \
+    wget https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz && \
+    tar -xzf eigen-3.4.0.tar.gz && \
+    cd eigen-3.4.0 && \
+    mkdir build && cd build && \
+    cmake .. && \
+    make install && \
+    cd / && rm -rf /tmp/eigen-3.4.0*
+
+# Clone hnswlib
+RUN cd /opt && \
+    git clone https://github.com/nmslib/hnswlib.git && \
+    cd hnswlib && \
+    git checkout v0.8.0
+
+# Copy and apply the hnswlib patch
+COPY benchmark/graphs/hnsw/hnswlib_custom_quantizer.patch /tmp/hnswlib_custom_quantizer.patch
+RUN cd /opt/hnswlib && \
+    git apply /tmp/hnswlib_custom_quantizer.patch && \
+    rm /tmp/hnswlib_custom_quantizer.patch
+
+# Clone RaBitQ (RabitQ-specific dependency)
+RUN cd /opt && \
+    git clone https://github.com/gaoj0017/RaBitQ.git
+
+# Copy and apply the RaBitQ patch
+COPY benchmark/algorithms/quantizer/RabitQ/rabitq.patch /tmp/rabitq.patch
+RUN cd /opt/RaBitQ && \
+    git apply /tmp/rabitq.patch && \
+    rm /tmp/rabitq.patch
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    numpy \
+    h5py \
+    pyyaml \
+    psutil \
+    "pybind11[global]" \
+    faiss-cpu
+
+# Copy the benchmark framework code
+COPY benchmark/ /benchmark/
+
+# Copy the quantizer module
+COPY benchmark/algorithms/quantizer/${QUANTIZER_NAME}/ /algorithms/quantizer/${QUANTIZER_NAME}/
+
+# Copy the graph module
+COPY benchmark/graphs/${GRAPH_NAME}/ /algorithms/graphs/${GRAPH_NAME}/
+
+# Build RabitQ C++ bindings
+RUN cd /algorithms/quantizer/${QUANTIZER_NAME}/ && \
+    mkdir -p build && \
+    cd build && \
+    cmake .. && \
+    make -j$(nproc) && \
+    cp rabitq_cpp*.so .. && \
+    cd .. && \
+    rm -rf build
+
+# Build hnswlib Python bindings
+RUN cd /opt/hnswlib && \
+    pip install .
+
+# Set Python path to include all necessary directories
+ENV PYTHONPATH=/:/opt/hnswlib:/opt/RaBitQ:/algorithms/quantizer/${QUANTIZER_NAME}:/algorithms/graphs/${GRAPH_NAME}
+ENV HNSWLIB_PATH=/opt/hnswlib
+ENV RABITQ_PATH=/opt/RaBitQ
+
+# Set working directory
+WORKDIR /workspace

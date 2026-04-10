@@ -1,0 +1,429 @@
+diff --git a/hnswlib/hnswalg.h b/hnswlib/hnswalg.h
+index e269ae6..a3a32fe 100644
+--- a/hnswlib/hnswalg.h
++++ b/hnswlib/hnswalg.h
+@@ -9,6 +9,7 @@
+ #include <unordered_set>
+ #include <list>
+ #include <memory>
++#include <functional>
+ 
+ namespace hnswlib {
+ typedef unsigned int tableint;
+@@ -439,6 +440,106 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
+         return top_candidates;
+     }
+ 
++    template <bool bare_bone_search = true, bool collect_metrics = false>
++    std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
++    searchBaseLayerSTWithQuantizer(
++        tableint ep_id,
++        const void *data_point,
++        size_t ef,
++        std::function<float(int)> func
++        ) const {
++        VisitedList *vl = visited_list_pool_->getFreeVisitedList();
++        vl_type *visited_array = vl->mass;
++        vl_type visited_array_tag = vl->curV;
++
++        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
++        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> candidate_set;
++
++        dist_t lowerBound;
++        
++        dist_t dist = func(getExternalLabel(ep_id));
++        lowerBound = dist;
++        top_candidates.emplace(dist, ep_id);
++        
++        candidate_set.emplace(-dist, ep_id);
++        
++
++        visited_array[ep_id] = visited_array_tag;
++
++        while (!candidate_set.empty()) {
++            std::pair<dist_t, tableint> current_node_pair = candidate_set.top();
++            dist_t candidate_dist = -current_node_pair.first;
++
++            bool flag_stop_search;
++            // For quantized distances, only stop when we have enough candidates
++            // AND the current candidate is worse than our worst result
++            flag_stop_search = candidate_dist > lowerBound && top_candidates.size() >= ef;
++
++            if (flag_stop_search) {
++                break;
++            }
++            candidate_set.pop();
++
++            tableint current_node_id = current_node_pair.second;
++            int *data = (int *) get_linklist0(current_node_id);
++            size_t size = getListCount((linklistsizeint*)data);
++//                bool cur_node_deleted = isMarkedDeleted(current_node_id);
++            
++            metric_hops++;
++            metric_distance_computations+=size;
++            
++
++#ifdef USE_SSE
++            _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
++            _mm_prefetch((char *) (visited_array + *(data + 1) + 64), _MM_HINT_T0);
++            _mm_prefetch(data_level0_memory_ + (*(data + 1)) * size_data_per_element_ + offsetData_, _MM_HINT_T0);
++            _mm_prefetch((char *) (data + 2), _MM_HINT_T0);
++#endif
++
++            for (size_t j = 1; j <= size; j++) {
++                int candidate_id = *(data + j);
++//                    if (candidate_id == 0) continue;
++#ifdef USE_SSE
++                _mm_prefetch((char *) (visited_array + *(data + j + 1)), _MM_HINT_T0);
++#endif
++                if (!(visited_array[candidate_id] == visited_array_tag)) {
++                    visited_array[candidate_id] = visited_array_tag;
++
++                    dist_t dist = func(getExternalLabel(candidate_id));
++
++                    bool flag_consider_candidate;
++                    flag_consider_candidate = top_candidates.size() < ef || lowerBound > dist;
++                    
++
++                    if (flag_consider_candidate) {
++                        candidate_set.emplace(-dist, candidate_id);
++#ifdef USE_SSE
++                        _mm_prefetch(data_level0_memory_ + candidate_set.top().second * size_data_per_element_ +
++                                        offsetLevel0_,  ///////////
++                                        _MM_HINT_T0);  ////////////////////////
++#endif
++                        top_candidates.emplace(dist, candidate_id);
++
++                        bool flag_remove_extra = false;
++                        flag_remove_extra = top_candidates.size() > ef;
++                        
++                        while (flag_remove_extra) {
++                            tableint id = top_candidates.top().second;
++                            top_candidates.pop();
++                            flag_remove_extra = top_candidates.size() > ef;
++                            
++                        }
++
++                        if (!top_candidates.empty())
++                            lowerBound = top_candidates.top().first;
++                    }
++                }
++            }
++        }
++
++        visited_list_pool_->releaseVisitedList(vl);
++        return top_candidates;
++    }
+ 
+     void getNeighborsByHeuristic2(
+         std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> &top_candidates,
+@@ -1323,6 +1424,56 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
+         return result;
+     }
+ 
++    std::priority_queue<std::pair<dist_t, labeltype >>
++    searchKnnWithQuantizer(const void *query_data, size_t k, size_t ef, std::function<float(int)> func) const {
++        std::priority_queue<std::pair<dist_t, labeltype >> result;
++        if (cur_element_count == 0) return result;
++
++        tableint currObj = enterpoint_node_;
++        int obj_id = getExternalLabel(currObj);
++        dist_t curdist = func(obj_id);
++
++        for (int level = maxlevel_; level > 0; level--) {
++            bool changed = true;
++            while (changed) {
++                changed = false;
++                unsigned int *data;
++
++                data = (unsigned int *) get_linklist(currObj, level);
++                int size = getListCount(data);
++                // metric_hops++;
++                // metric_distance_computations+=size;
++
++                tableint *datal = (tableint *) (data + 1);
++                for (int i = 0; i < size; i++) {
++                    tableint cand = datal[i];
++                    if (cand < 0 || cand > max_elements_)
++                        throw std::runtime_error("cand error");
++                    dist_t d = func(getExternalLabel(cand));
++
++                    if (d < curdist) {
++                        curdist = d;
++                        currObj = cand;
++                        changed = true;
++                    }
++                }
++            }
++        }
++
++        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
++        top_candidates = searchBaseLayerSTWithQuantizer<true>(
++                    currObj, query_data, ef, func);
++        
++        while (top_candidates.size() > k) {
++            top_candidates.pop();
++        }
++        while (top_candidates.size() > 0) {
++            std::pair<dist_t, tableint> rez = top_candidates.top();
++            result.push(std::pair<dist_t, labeltype>(rez.first, getExternalLabel(rez.second)));
++            top_candidates.pop();
++        }
++        return result;
++    }
+ 
+     std::vector<std::pair<dist_t, labeltype >>
+     searchStopConditionClosest(
+diff --git a/python_bindings/bindings.cpp b/python_bindings/bindings.cpp
+index dd09e80..a0fd267 100644
+--- a/python_bindings/bindings.cpp
++++ b/python_bindings/bindings.cpp
+@@ -722,6 +722,218 @@ class Index {
+     }
+ };
+ 
++template<typename dist_t, typename data_t = float>
++class QuantizationIndex {
++ public:
++    static const int ser_version = 1;  // serialization version
++
++    std::string space_name;
++    int dim;
++    size_t seed;
++    size_t default_ef;
++
++    bool index_inited;
++    bool ep_added;
++    bool normalize;
++    int num_threads_default;
++    hnswlib::labeltype cur_l;
++    hnswlib::HierarchicalNSW<dist_t>* appr_alg;
++    hnswlib::SpaceInterface<float>* l2space;
++    py::object  quantizer;
++
++
++    QuantizationIndex(const std::string &space_name, const int dim) : space_name(space_name), dim(dim) {
++        normalize = false;
++        if (space_name == "l2") {
++            l2space = new hnswlib::L2Space(dim);
++        } else {
++            throw std::runtime_error("Space name must be one of l2.");
++        }
++        appr_alg = NULL;
++        ep_added = true;
++        index_inited = false;
++        num_threads_default = std::thread::hardware_concurrency();
++        default_ef = 10;
++    }
++
++
++    ~QuantizationIndex() {
++        delete l2space;
++        if (appr_alg)
++            delete appr_alg;
++    }
++
++
++    float estimate_distance_(int idx, int thread_id){
++        py::object result = quantizer.attr("estimate_distance")(idx, thread_id);
++        return result.cast<float>();
++    }
++
++    float estimate_distance(int idx){
++        return estimate_distance_(idx, 0);
++    }
++
++    void init_new_index(
++        size_t maxElements,
++        size_t M,
++        size_t efConstruction,
++        size_t random_seed,
++        py::object quant,
++        bool allow_replace_deleted) {
++        if (appr_alg) {
++            throw std::runtime_error("The index is already initiated.");
++        }
++        cur_l = 0;
++        appr_alg = new hnswlib::HierarchicalNSW<dist_t>(l2space, maxElements, M, efConstruction, random_seed, allow_replace_deleted);
++        index_inited = true;
++        ep_added = false;
++        appr_alg->ef_ = default_ef;
++        seed = random_seed;
++        quantizer = quant;
++    }
++
++
++    void set_ef(size_t ef) {
++      default_ef = ef;
++      if (appr_alg)
++          appr_alg->ef_ = ef;
++    }
++
++
++    void set_num_threads(int num_threads) {
++        this->num_threads_default = num_threads;
++    }
++
++
++    void addItems(py::object input, py::object ids_ = py::none(), int num_threads = -1, bool replace_deleted = false) {
++        py::array_t < dist_t, py::array::c_style | py::array::forcecast > items(input);
++        auto buffer = items.request();
++        if (num_threads <= 0)
++            num_threads = num_threads_default;
++
++        size_t rows, features;
++        get_input_array_shapes(buffer, &rows, &features);
++
++        if (features != dim)
++            throw std::runtime_error("Wrong dimensionality of the vectors");
++
++        // avoid using threads when the number of additions is small:
++        if (rows <= num_threads * 4) {
++            num_threads = 1;
++        }
++
++        std::vector<size_t> ids = get_input_ids_and_check_shapes(ids_, rows);
++
++        {
++            int start = 0;
++            if (!ep_added) {
++                size_t id = ids.size() ? ids.at(0) : (cur_l);
++                float* vector_data = (float*)items.data(0);
++                std::vector<float> norm_array(dim);
++                appr_alg->addPoint((void*)vector_data, (size_t)id, replace_deleted);
++                start = 1;
++                ep_added = true;
++            }
++
++            py::gil_scoped_release l;
++            ParallelFor(start, rows, num_threads, [&](size_t row, size_t threadId) {
++                size_t id = ids.size() ? ids.at(row) : (cur_l + row);
++                appr_alg->addPoint((void*)items.data(row), (size_t)id, replace_deleted);
++            });
++            
++            cur_l += rows;
++        }
++    }
++
++
++
++    void set_query(const float* query_ptr, int query_dim) {
++        // Create a new numpy array with proper memory layout
++        py::array_t<float> query(query_dim);
++        float* query_data = query.mutable_data();
++        std::memcpy(query_data, query_ptr, query_dim * sizeof(float));
++
++        // Call Python method while GIL is held
++        quantizer.attr("set_query")(query, 0);
++    }
++
++    std::tuple<py::array_t<uint64_t>, py::array_t<float>, py::array_t<uint32_t>, py::array_t<uint32_t>> search(
++        py::array_t<float> queries,
++        uint32_t k,
++        uint32_t ef
++    ){
++        auto queries_buf = queries.request();
++        uint32_t nq = queries_buf.shape[0];
++        uint32_t dim = queries_buf.shape[1];
++        const float* query = static_cast<const float*>(queries_buf.ptr);
++
++        py::array_t<uint64_t> indices({nq, k});
++        py::array_t<float> distances({nq, k});
++        py::array_t<uint32_t> computations({nq});
++        py::array_t<uint32_t> hops({nq});
++        auto idx_buf = indices.request();
++        auto dist_buf = distances.request();
++        auto comp_buf = computations.request();
++        auto hops_buf = hops.request();
++        uint64_t* idx_ptr = static_cast<uint64_t*>(idx_buf.ptr);
++        float* dist_ptr = static_cast<float*>(dist_buf.ptr);
++        uint32_t* hops_ptr = static_cast<uint32_t*>(hops_buf.ptr);
++        uint32_t* comps_ptr = static_cast<uint32_t*>(comp_buf.ptr);
++
++        for (uint32_t i = 0; i < nq; i++){
++            set_query(query + i * dim, dim);
++            appr_alg->metric_hops = 0;
++            appr_alg->metric_distance_computations = 0;
++
++            // Step 1: Search for ef candidates using quantized distances
++            std::priority_queue<std::pair<dist_t, hnswlib::labeltype >> quant_result =
++                appr_alg->searchKnnWithQuantizer(query + i * dim, ef, ef, [this](int idx) { return estimate_distance(idx); });
++
++            // Step 2: Rerank candidates using exact distances
++            std::vector<std::pair<dist_t, hnswlib::labeltype>> candidates;
++            candidates.reserve(ef);
++
++            while (!quant_result.empty()) {
++                auto& item = quant_result.top();
++                hnswlib::labeltype label = item.second;
++
++                // Get internal ID from label and compute exact distance
++                auto search = appr_alg->label_lookup_.find(label);
++                if (search != appr_alg->label_lookup_.end()) {
++                    hnswlib::tableint internal_id = search->second;
++                    char* data_ptr = appr_alg->getDataByInternalId(internal_id);
++                    dist_t exact_dist = appr_alg->fstdistfunc_(query + i * dim, data_ptr, appr_alg->dist_func_param_);
++                    candidates.push_back({exact_dist, label});
++                }
++                quant_result.pop();
++            }
++
++            // Step 3: Sort by exact distance (ascending)
++            std::sort(candidates.begin(), candidates.end(),
++                [](const std::pair<dist_t, hnswlib::labeltype>& a, const std::pair<dist_t, hnswlib::labeltype>& b) {
++                    return a.first < b.first;
++                });
++
++            // Step 4: Return top k results
++            size_t result_size = std::min((size_t)k, candidates.size());
++            for (size_t j = 0; j < result_size; j++) {
++                idx_ptr[i * k + j] = candidates[j].second;
++                dist_ptr[i * k + j] = candidates[j].first;
++            }
++            // Fill remaining slots with zeros if we don't have enough candidates
++            for (size_t j = result_size; j < k; j++) {
++                idx_ptr[i * k + j] = 0;
++                dist_ptr[i * k + j] = 0.0f;
++            }
++
++            hops_ptr[i] = appr_alg->metric_hops;
++            comps_ptr[i] = appr_alg->metric_distance_computations;
++        }
++        return std::make_tuple(indices, distances, hops, computations);
++    }
++
++};
++
+ template<typename dist_t, typename data_t = float>
+ class BFIndex {
+  public:
+@@ -910,6 +1122,29 @@ class BFIndex {
+ PYBIND11_PLUGIN(hnswlib) {
+         py::module m("hnswlib");
+ 
++        py::class_<QuantizationIndex<float>>(m, "QuantizationIndex")
++        .def(py::init<const std::string &, const int>(), py::arg("space"), py::arg("dim"))
++        .def("init_index",
++            &QuantizationIndex<float>::init_new_index,
++            py::arg("max_elements"),
++            py::arg("M"),
++            py::arg("ef_construction"),
++            py::arg("random_seed"),
++            py::arg("quantizer"),
++            py::arg("allow_replace_deleted"))
++        .def("knn_query",
++            &QuantizationIndex<float>::search,
++            py::arg("query"),
++            py::arg("k"),
++            py::arg("ef"))
++        .def("add_items",
++            &QuantizationIndex<float>::addItems,
++            py::arg("data"),
++            py::arg("ids") = py::none(),
++            py::arg("num_threads") = -1,
++            py::arg("replace_deleted") = false)
++        .def("set_num_threads", &QuantizationIndex<float>::set_num_threads, py::arg("num_threads"));
++
+         py::class_<Index<float>>(m, "Index")
+         .def(py::init(&Index<float>::createFromParams), py::arg("params"))
+            /* WARNING: Index::createFromIndex is not thread-safe with Index::addItems */

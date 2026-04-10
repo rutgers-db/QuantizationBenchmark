@@ -1,0 +1,18 @@
+# Configure which distribution-shift HDF5 groups should be benchmarked for each dataset.
+# You can either use:
+# dataset_name:
+#   groups:
+#     - shift_group_a
+#     - shift_group_b
+# or:
+# dataset_name:
+#   - shift_group_a
+#   - shift_group_b
+sift-128-euclidean:
+  groups:
+    - distribution_shift_k100_cnt1_size10k
+    - distribution_shift_k100_cnt5_size10k
+    - distribution_shift_k100_cnt10_size10k
+    - distribution_shift_k100_cnt20_size10k
+    - distribution_shift_k100_cnt50_size10k
+    - distribution_shift_k100_cnt100_size10k
