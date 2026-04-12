@@ -1,0 +1,407 @@
+[
+  {
+    "build_params": {
+      "data_bytes": 4,
+      "nbit": 1,
+      "ndim": 128,
+      "nlist": 1,
+      "nthread": 16,
+      "space": "l2"
+    },
+    "build_metrics": {
+      "training_time": 1.2189948558807373,
+      "add_time": 0.0,
+      "build_time": null,
+      "mse": 149781.59375,
+      "quantizer_memory": 594000.0,
+      "graph_memory": null,
+      "compression_rate": 0.03125
+    },
+    "search_results": [
+      {
+        "search_params": {
+          "topk": 100,
+          "nrerank": [
+            100,
+            120
+          ],
+          "nprobe": 1
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 100,
+            "nrerank": [
+              100,
+              120
+            ],
+            "nprobe": 1
+          },
+          "query_time": 3.4828572273254395,
+          "queries_per_second": 2871.205836846552,
+          "recall": 0.354866,
+          "map": 0.203997320747042,
+          "recall@1": 0.8812,
+          "rerank_results": [
+            {
+              "nrerank": 100,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f83bbedc3f0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 100, 1, True"
+            },
+            {
+              "nrerank": 120,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f83bbedc3f0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 120, 1, True"
+            }
+          ],
+          "hops_stats": null,
+          "comps_stats": null,
+          "nrerank_stats": null
+        }
+      },
+      {
+        "search_params": {
+          "topk": 10,
+          "nrerank": [
+            10,
+            30
+          ],
+          "nprobe": 1
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 10,
+            "nrerank": [
+              10,
+              30
+            ],
+            "nprobe": 1
+          },
+          "query_time": 3.4828572273254395,
+          "queries_per_second": 2871.205836846552,
+          "recall": 0.2597,
+          "map": 0.1670623571428574,
+          "recall@1": 0.5322,
+          "rerank_results": [
+            {
+              "nrerank": 10,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f83bbedc3f0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 10, 1, True"
+            },
+            {
+              "nrerank": 30,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f83bbedc3f0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 30, 1, True"
+            }
+          ],
+          "hops_stats": null,
+          "comps_stats": null,
+          "nrerank_stats": null
+        }
+      },
+      {
+        "search_params": {
+          "topk": 50,
+          "nrerank": [
+            50,
+            70
+          ],
+          "nprobe": 1
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 50,
+            "nrerank": [
+              50,
+              70
+            ],
+            "nprobe": 1
+          },
+          "query_time": 3.4828572273254395,
+          "queries_per_second": 2871.205836846552,
+          "recall": 0.32161,
+          "map": 0.18136633398603524,
+          "recall@1": 0.7953,
+          "rerank_results": [
+            {
+              "nrerank": 50,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f83bbedc3f0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 50, 1, True"
+            },
+            {
+              "nrerank": 70,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f83bbedc3f0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 70, 1, True"
+            }
+          ],
+          "hops_stats": null,
+          "comps_stats": null,
+          "nrerank_stats": null
+        }
+      }
+    ]
+  },
+  {
+    "build_params": {
+      "data_bytes": 4,
+      "nbit": 2,
+      "ndim": 128,
+      "nlist": 1,
+      "nthread": 16,
+      "space": "l2"
+    },
+    "build_metrics": {
+      "training_time": 16.11074948310852,
+      "add_time": 0.0,
+      "build_time": null,
+      "mse": 149781.59375,
+      "quantizer_memory": 617496.0,
+      "graph_memory": null,
+      "compression_rate": 0.0625
+    },
+    "search_results": [
+      {
+        "search_params": {
+          "topk": 100,
+          "nrerank": [
+            100,
+            120
+          ],
+          "nprobe": 1
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 100,
+            "nrerank": [
+              100,
+              120
+            ],
+            "nprobe": 1
+          },
+          "query_time": 4.520172834396362,
+          "queries_per_second": 2212.3047870879545,
+          "recall": 0.634063,
+          "map": 0.5396837604970965,
+          "recall@1": 0.9986,
+          "rerank_results": [
+            {
+              "nrerank": 100,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f372d6ac8f0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 100, 1, True"
+            },
+            {
+              "nrerank": 120,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f372d6ac8f0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 120, 1, True"
+            }
+          ],
+          "hops_stats": null,
+          "comps_stats": null,
+          "nrerank_stats": null
+        }
+      },
+      {
+        "search_params": {
+          "topk": 10,
+          "nrerank": [
+            10,
+            30
+          ],
+          "nprobe": 1
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 10,
+            "nrerank": [
+              10,
+              30
+            ],
+            "nprobe": 1
+          },
+          "query_time": 4.520172834396362,
+          "queries_per_second": 2212.3047870879545,
+          "recall": 0.55405,
+          "map": 0.46381544444444717,
+          "recall@1": 0.9019,
+          "rerank_results": [
+            {
+              "nrerank": 10,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f372d6ac8f0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 10, 1, True"
+            },
+            {
+              "nrerank": 30,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f372d6ac8f0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 30, 1, True"
+            }
+          ],
+          "hops_stats": null,
+          "comps_stats": null,
+          "nrerank_stats": null
+        }
+      },
+      {
+        "search_params": {
+          "topk": 50,
+          "nrerank": [
+            50,
+            70
+          ],
+          "nprobe": 1
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 50,
+            "nrerank": [
+              50,
+              70
+            ],
+            "nprobe": 1
+          },
+          "query_time": 4.520172834396362,
+          "queries_per_second": 2212.3047870879545,
+          "recall": 0.608602,
+          "map": 0.5094414058219401,
+          "recall@1": 0.9918,
+          "rerank_results": [
+            {
+              "nrerank": 50,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f372d6ac8f0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 50, 1, True"
+            },
+            {
+              "nrerank": 70,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f372d6ac8f0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 70, 1, True"
+            }
+          ],
+          "hops_stats": null,
+          "comps_stats": null,
+          "nrerank_stats": null
+        }
+      }
+    ]
+  },
+  {
+    "build_params": {
+      "data_bytes": 4,
+      "nbit": 4,
+      "ndim": 128,
+      "nlist": 1,
+      "nthread": 16,
+      "space": "l2"
+    },
+    "build_metrics": {
+      "training_time": 26.16327452659607,
+      "add_time": 0.0,
+      "build_time": null,
+      "mse": 149781.59375,
+      "quantizer_memory": 648752.0,
+      "graph_memory": null,
+      "compression_rate": 0.125
+    },
+    "search_results": [
+      {
+        "search_params": {
+          "topk": 100,
+          "nrerank": [
+            100,
+            120
+          ],
+          "nprobe": 1
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 100,
+            "nrerank": [
+              100,
+              120
+            ],
+            "nprobe": 1
+          },
+          "query_time": 4.683922290802002,
+          "queries_per_second": 2134.962832247961,
+          "recall": 0.879706,
+          "map": 0.8647167933504454,
+          "recall@1": 1.0,
+          "rerank_results": [
+            {
+              "nrerank": 100,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f764658c4b0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 100, 1, True"
+            },
+            {
+              "nrerank": 120,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f764658c4b0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 120, 1, True"
+            }
+          ],
+          "hops_stats": null,
+          "comps_stats": null,
+          "nrerank_stats": null
+        }
+      },
+      {
+        "search_params": {
+          "topk": 10,
+          "nrerank": [
+            10,
+            30
+          ],
+          "nprobe": 1
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 10,
+            "nrerank": [
+              10,
+              30
+            ],
+            "nprobe": 1
+          },
+          "query_time": 4.683922290802002,
+          "queries_per_second": 2134.962832247961,
+          "recall": 0.84112,
+          "map": 0.8188858650793508,
+          "recall@1": 0.9991,
+          "rerank_results": [
+            {
+              "nrerank": 10,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f764658c4b0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 10, 1, True"
+            },
+            {
+              "nrerank": 30,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f764658c4b0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 30, 1, True"
+            }
+          ],
+          "hops_stats": null,
+          "comps_stats": null,
+          "nrerank_stats": null
+        }
+      },
+      {
+        "search_params": {
+          "topk": 50,
+          "nrerank": [
+            50,
+            70
+          ],
+          "nprobe": 1
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 50,
+            "nrerank": [
+              50,
+              70
+            ],
+            "nprobe": 1
+          },
+          "query_time": 4.683922290802002,
+          "queries_per_second": 2134.962832247961,
+          "recall": 0.8705,
+          "map": 0.8534384089849575,
+          "recall@1": 1.0,
+          "rerank_results": [
+            {
+              "nrerank": 50,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f764658c4b0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 50, 1, True"
+            },
+            {
+              "nrerank": 70,
+              "error": "search_batch(): incompatible function arguments. The following argument types are supported:\n    1. (self: rabitqlib_cpp.IVF, queries: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], k: typing.SupportsInt | typing.SupportsIndex, nprobe: typing.SupportsInt | typing.SupportsIndex, use_hacc: bool = True) -> tuple[numpy.typing.NDArray[numpy.int64], numpy.typing.NDArray[numpy.float32]]\n\nInvoked with: <rabitqlib_cpp.IVF object at 0x7f764658c4b0>, array([[  1.,   3.,  11., ...,  42.,  48.,  11.],\n       [ 40.,  25.,  11., ...,   3.,  19.,  13.],\n       [ 28.,   4.,   3., ...,   2.,  54.,  47.],\n       ...,\n       [  0.,  15.,  64., ...,   3.,  62., 118.],\n       [131.,   2.,   0., ...,   7.,   0.,   0.],\n       [ 23.,   0.,   0., ...,  79.,  16.,   4.]], dtype=float32), array([[  0.,  16.,  35., ...,  25.,  23.,   1.],\n       [ 14.,  35.,  19., ...,  11.,  21.,  33.],\n       [  0.,   1.,   5., ...,   4.,  23.,  10.],\n       ...,\n       [ 30.,  12.,  12., ...,  50.,  10.,   0.],\n       [  0.,   5.,  12., ...,   1.,   2.,  13.],\n       [114.,  31.,   0., ...,  25.,  16.,   0.]], dtype=float32), 70, 1, True"
+            }
+          ],
+          "hops_stats": null,
+          "comps_stats": null,
+          "nrerank_stats": null
+        }
+      }
+    ]
+  }
+]

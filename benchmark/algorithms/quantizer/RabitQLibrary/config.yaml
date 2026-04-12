@@ -9,18 +9,18 @@ sift-128-euclidean:
     nthread: 16        # Number of threads for parallel processing
     space: "l2"        # Distance metric (l2 for Euclidean distance)
   build:
-    nbit: [1, 2]
+    nbit: [1, 2, 4]
     nlist: 1
   search:
-    - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: 1
-      nrerank: [100]
+    - topk: 100
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
-      nprobe: 1
-      nrerank: [10]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nprobe: 1
-      nrerank: [50]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 gist-960-euclidean:
   # Build/Search separation format
@@ -30,18 +30,18 @@ gist-960-euclidean:
     nthread: 16        # Number of threads for parallel processing
     space: "l2"        # Distance metric (l2 for Euclidean distance)
   build:
-    nbit: [1, 2]
+    nbit: [1, 2, 4]
     nlist: 1
   search:
-    - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
-      nrerank: [100]
+    - topk: 100
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
-      nrerank: [10]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
-      nrerank: [50]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     # Optional: Add nrerank values for search_and_rerank test
     # nrerank: [100, 200]  # If not specified, defaults to [topk, 2*topk]
 
@@ -53,18 +53,18 @@ audio-128-euclidean:
     nthread: 16        # Number of threads for parallel processing
     space: "l2"        # Distance metric (l2 for Euclidean distance)
   build:
-    nbit: [1, 2]
+    nbit: [1, 2, 4]
     nlist: 1
   search:
-    - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
-      nrerank: [100]
+    - topk: 100
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
-      nrerank: [10]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
-      nrerank: [50]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 video-1024-euclidean:
   # Build/Search separation format
@@ -74,26 +74,70 @@ video-1024-euclidean:
     nthread: 16        # Number of threads for parallel processing
     space: "l2"        # Distance metric (l2 for Euclidean distance)
   build:
-    nbit: [1, 2]
+    nbit: [1, 2, 4]
     nlist: 1
   search:
-    - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
-      nrerank: [100]
+    - topk: 100
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
-      nrerank: [10]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
-      nrerank: [50]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
-siftsmall-128-euclidean:
-  # Build/Search separation format
+text2image-200-euclidean:
+  # Product Quantization with build/search separation format
+  # Automatically generates all combinations: 3 x 3 = 9 configurations
   common:
-    data_bytes: 4      # Data type size in bytes (float32)
-    ndim: 128          # Dimensionality
-    nthread: 16        # Number of threads for parallel processing
-    space: "l2"        # Distance metric (l2 for Euclidean distance)
-  build: {}            # No build-specific parameters for RaBitQ
+    data_bytes: 4
+    ndim: 200
+    nthread: 16
+    space: "l2"
+  build:
+    nbit: [1, 2, 4]
+    nlist: 1
   search:
-    topk: 100          # Number of nearest neighbors to retrieve (default: 100)   
+    - topk: 100
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+    - topk: 10
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+    - topk: 50
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+
+paper-200-euclidean:
+  # Product Quantization with build/search separation format
+  # Automatically generates all combinations: 3 x 3 = 9 configurations
+  common:
+    data_bytes: 4
+    ndim: 200
+    nthread: 16
+    space: "l2"
+  build:
+    nbit: [1, 2, 4]
+    nlist: 1
+  search:
+    - topk: 100
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+    - topk: 10
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+    - topk: 50
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+
+# siftsmall-128-euclidean:
+#   # Build/Search separation format
+#   common:
+#     data_bytes: 4      # Data type size in bytes (float32)
+#     ndim: 128          # Dimensionality
+#     nthread: 16        # Number of threads for parallel processing
+#     space: "l2"        # Distance metric (l2 for Euclidean distance)
+#   build: {}            # No build-specific parameters for RaBitQ
+#   search:
+#     topk: 100          # Number of nearest neighbors to retrieve (default: 100)   

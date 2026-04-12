@@ -25,7 +25,7 @@ class RabitQLibrary(BaseQuantizer):
     Supports arbitrary dimensions and configurable bit-widths.
     """
 
-    def __init__(self, ndim, nlist, data_bytes, bits=4, nthread=1, space="l2"):
+    def __init__(self, ndim, nlist, data_bytes, nbit=4, nthread=1, space="l2"):
         """
         Initialize RaBitQLibrary quantizer.
 
@@ -41,10 +41,10 @@ class RabitQLibrary(BaseQuantizer):
         self.ndim = ndim
         self.nlist = nlist
         self.data_bytes = data_bytes
-        self.bits = bits
+        self.bits = nbit
         self.nthread = nthread
         self.space = space
-
+        faiss.omp_set_num_threads(self.nthread)
         self.data = None
         self.ndata = 0
         self.trained = False
@@ -61,9 +61,6 @@ class RabitQLibrary(BaseQuantizer):
                 "Make sure the C++ module was built correctly in the Docker image."
             )
 
-    # ------------------------------------------------------------------
-    # Training: learn IVF centroids via K-means
-    # ------------------------------------------------------------------
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
         return self.train(nd, data) and self.add(nd, data)
@@ -101,9 +98,6 @@ class RabitQLibrary(BaseQuantizer):
             traceback.print_exc()
             return False
 
-    # ------------------------------------------------------------------
-    # Add: encode database and build C++ IVF index
-    # ------------------------------------------------------------------
 
     def add(self, nd: int, data: np.ndarray) -> bool:
         """
@@ -128,6 +122,7 @@ class RabitQLibrary(BaseQuantizer):
                 self.ndim,
                 int(self._trained_centroids.shape[0]),
                 self.bits,
+                self.nthread,
                 metric_str,
             )
             self.index.construct(
@@ -145,9 +140,6 @@ class RabitQLibrary(BaseQuantizer):
             traceback.print_exc()
             return False
 
-    # ------------------------------------------------------------------
-    # Query
-    # ------------------------------------------------------------------
 
     def query(self, nq: int, queries: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -174,60 +166,8 @@ class RabitQLibrary(BaseQuantizer):
         nprobe = max(1, min(int(nprobe), int(self._trained_centroids.shape[0])))
         use_hacc = bool(search_params.get("use_hacc", True))
 
-        I, D = self.index.search_batch(queries, self.data, topk, nprobe, use_hacc)
+        I, D = self.index.search_batch(queries, topk, nprobe, use_hacc)
         return I, D
-
-    # ------------------------------------------------------------------
-    # Search + rerank
-    # ------------------------------------------------------------------
-
-    def searchAndRerank(
-        self,
-        nq: int,
-        queries: np.ndarray,
-        topk: int,
-        nrerank: int,
-        **search_params,
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Search for nrerank candidates with RaBitQ, then rerank using exact L2.
-
-        Args:
-            nq: Number of query vectors
-            queries: Query vectors of shape (nq, ndim)
-            topk: Number of nearest neighbors to return
-            nrerank: Number of candidates to retrieve before reranking
-            **search_params: Passed through to query()
-
-        Returns:
-            Tuple[np.ndarray, np.ndarray]:
-                - I: Reranked indices, shape (nq, topk)
-                - D: Exact L2 distances, shape (nq, topk)
-        """
-        if not self.trained:
-            raise RuntimeError("Index not trained. Call fit() first.")
-
-        queries = np.ascontiguousarray(queries, dtype=np.float32)
-        nprobe = search_params.get("nprobe", 1)
-        nprobe = max(1, min(int(nprobe), int(self._trained_centroids.shape[0])))
-        use_hacc = bool(search_params.get("use_hacc", True))
-
-        # Get nrerank approximate candidates
-        I_approx, _ = self.index.search_batch(queries, self.data, nrerank, nprobe, use_hacc)
-
-        # Rerank with exact L2 distances
-        selected = self.data[I_approx]           # (nq, nrerank, ndim)
-        diff = selected - queries[:, None, :]    # (nq, nrerank, ndim)
-        D_exact = np.linalg.norm(diff, axis=2)   # (nq, nrerank)
-
-        topk_idx = np.argsort(D_exact, axis=1)[:, :topk]
-        I = np.take_along_axis(I_approx, topk_idx, axis=1)
-        D = np.take_along_axis(D_exact, topk_idx, axis=1)
-        return I, D
-
-    # ------------------------------------------------------------------
-    # Metrics
-    # ------------------------------------------------------------------
 
     def getMemoryUsage(self) -> float:
         """Return memory usage of this process in KB."""
