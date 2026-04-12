@@ -25,7 +25,7 @@ class RabitQLibrary(BaseQuantizer):
     Supports arbitrary dimensions and configurable bit-widths.
     """
 
-    def __init__(self, ndim, nlist, data_bytes, bits=4, nthread=1, space="l2"):
+    def __init__(self, ndim, nlist, data_bytes, nbit=4, nthread=1, space="l2"):
         """
         Initialize RaBitQLibrary quantizer.
 
@@ -41,10 +41,10 @@ class RabitQLibrary(BaseQuantizer):
         self.ndim = ndim
         self.nlist = nlist
         self.data_bytes = data_bytes
-        self.bits = bits
+        self.bits = nbit
         self.nthread = nthread
         self.space = space
-
+        faiss.omp_set_num_threads(self.nthread)
         self.data = None
         self.ndata = 0
         self.trained = False
@@ -128,6 +128,7 @@ class RabitQLibrary(BaseQuantizer):
                 self.ndim,
                 int(self._trained_centroids.shape[0]),
                 self.bits,
+                self.nthread,
                 metric_str,
             )
             self.index.construct(
@@ -174,7 +175,7 @@ class RabitQLibrary(BaseQuantizer):
         nprobe = max(1, min(int(nprobe), int(self._trained_centroids.shape[0])))
         use_hacc = bool(search_params.get("use_hacc", True))
 
-        I, D = self.index.search_batch(queries, self.data, topk, nprobe, use_hacc)
+        I, D = self.index.search_batch(queries, topk, nprobe, use_hacc)
         return I, D
 
     # ------------------------------------------------------------------
