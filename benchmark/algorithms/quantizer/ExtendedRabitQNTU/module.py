@@ -93,7 +93,7 @@ class ExtendedRabitQNTU(BaseQuantizer):
         return True
 
     def query(self, nq: int, queries: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
-        queries = np.ascontiguousarray(queries.astype(np.float32, copy=False))
+        queries = np.array(queries.astype(np.float32, copy=False))
         nprobe = int(search_params.get('nprobe', 1))
         nprobe = max(1, min(nprobe, self.centroids.shape[0]))
         I, D = self.Index.search(queries, nq, topk, nprobe, self.nthread)
@@ -101,7 +101,7 @@ class ExtendedRabitQNTU(BaseQuantizer):
         return I, D
 
     def searchAndRerank(self, nq, query, topk, nrerank, **search_params):
-        query = np.ascontiguousarray(query.astype(np.float32, copy=False))
+        query = np.array(query.astype(np.float32, copy=False))
         nprobe = int(search_params.get('nprobe', 1))
         nprobe = max(1, min(nprobe, self.centroids.shape[0]))
         I, D = self.Index.search(query, nq, nrerank, nprobe, self.nthread)
