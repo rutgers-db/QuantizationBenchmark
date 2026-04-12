@@ -8,8 +8,8 @@ sift-128-euclidean:
     # space: "l2"
     nthread: 16
   build:
-    nbit: [2,3,4,6,8]
-    nlist: [1]
+    nbit: [2,4,8]
+    nlist: [1024, 2048, 4096, 8192]
   search:
     - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
       nprobe: [10, 20, 30, 40, 50, 75, 100]
@@ -31,8 +31,8 @@ gist-960-euclidean:
     # space: "l2"
     nthread: 16
   build:
-    nbit: [2,3,4,6,8]
-    nlist: [1]
+    nbit: [2,4,8]
+    nlist: [1024, 2048, 4096, 8192]
   search:
     - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
       nprobe: [10, 20, 30, 40, 50, 75, 100]
@@ -54,8 +54,8 @@ audio-128-euclidean:
     # space: "l2"
     nthread: 16
   build:
-    nbit: [2,3,4,6,8]
-    nlist: [1]
+    nbit: [2,4,8]
+    nlist: [1024, 2048, 4096, 8192]
   search:
     - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
       nprobe: [10, 20, 30, 40, 50, 75, 100]
@@ -77,8 +77,8 @@ video-1024-euclidean:
     # space: "l2"
     nthread: 16
   build:
-    nbit: [2,3,4,6,8]
-    nlist: [1]
+    nbit: [2,4,8]
+    nlist: [1024, 2048, 4096, 8192]
   search:
     - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
       nprobe: [10, 20, 30, 40, 50, 75, 100]
@@ -100,8 +100,8 @@ text2image-200-euclidean:
     # space: "l2"
     nthread: 16
   build:
-    nbit: [2,3,4,6,8]
-    nlist: [1]
+    nbit: [2,4,8]
+    nlist: [1024, 2048, 4096, 8192]
   search:
     - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
       nprobe: [10, 20, 30, 40, 50, 75, 100]
@@ -123,8 +123,8 @@ paper-200-euclidean:
     # space: "l2"
     nthread: 16
   build:
-    nbit: [2,3,4,6,8]
-    nlist: [1]
+    nbit: [2,4,8]
+    nlist: [1024, 2048, 4096, 8192]
   search:
     - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
       nprobe: [10, 20, 30, 40, 50, 75, 100]
