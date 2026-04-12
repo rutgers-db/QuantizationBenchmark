@@ -4,6 +4,7 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 #include <omp.h>
+#include <limits>
 
 #include "rabitqlib/defines.hpp"
 #include "rabitqlib/index/ivf/ivf.hpp"
@@ -19,6 +20,7 @@ class PyIVF {
     size_t dim_;
     size_t k_;
     size_t bits_;
+    int nthread_;
     rabitqlib::MetricType metric_type_;
 
    public:
@@ -27,10 +29,11 @@ class PyIVF {
         size_t dim,
         size_t k,
         size_t bits,
+        int nthread,
         const std::string& metric = "l2",
         const std::string& rotator = "fht"
     )
-        : n_(n), dim_(dim), k_(k), bits_(bits) {
+        : n_(n), dim_(dim), k_(k), bits_(bits), nthread_(nthread){
         metric_type_ =
             (metric == "ip" || metric == "IP") ? rabitqlib::METRIC_IP : rabitqlib::METRIC_L2;
         rabitqlib::RotatorType rtype = (rotator == "matrix")
@@ -61,6 +64,7 @@ class PyIVF {
             throw std::runtime_error("cluster_ids must be 1-dimensional");
         }
 
+        omp_set_num_threads(nthread_);
         ivf_->construct(
             static_cast<const float*>(d.ptr),
             static_cast<const float*>(c.ptr),
@@ -94,17 +98,15 @@ class PyIVF {
         return results;
     }
 
-    // Search a batch of queries and return (nq, k) index array and (nq, k) distance array
+    // Search a batch of queries, return (nq, k) index array.
+    // Distances are not exposed by IVF::search(); the returned D array is filled with NaN.
     std::pair<py::array_t<int64_t>, py::array_t<float>> search_batch(
         py::array_t<float, py::array::c_style | py::array::forcecast> queries,
-        py::array_t<float, py::array::c_style | py::array::forcecast> data,
         size_t k,
         size_t nprobe,
-        bool use_hacc = true,
-        int num_threads = 16
+        bool use_hacc = true
     ) {
         auto q = queries.request();
-        auto d = data.request();
 
         if (q.ndim != 2) {
             throw std::runtime_error("queries must be 2-dimensional");
@@ -112,7 +114,6 @@ class PyIVF {
 
         size_t nq = static_cast<size_t>(q.shape[0]);
         const float* q_ptr = static_cast<const float*>(q.ptr);
-        const float* data_ptr = static_cast<const float*>(d.ptr);
         size_t dim = static_cast<size_t>(q.shape[1]);
 
         py::array_t<int64_t> I({static_cast<py::ssize_t>(nq), static_cast<py::ssize_t>(k)});
@@ -123,24 +124,14 @@ class PyIVF {
         int64_t* I_ptr = static_cast<int64_t*>(I_buf.ptr);
         float* D_ptr = static_cast<float*>(D_buf.ptr);
 
-        #pragma omp parallel num_threads(num_threads)
-        {
+        std::fill(D_ptr, D_ptr + nq * k, std::numeric_limits<float>::quiet_NaN());
+
+#pragma omp parallel for num_threads(nthread_)
+        for (size_t i = 0; i < nq; ++i) {
             std::vector<PID> tmp(k);
-            #pragma omp for schedule(static)
-            for (size_t i = 0; i < nq; ++i) {
-                ivf_->search(q_ptr + i * dim, k, nprobe, tmp.data(), use_hacc);
-                for (size_t j = 0; j < k; ++j) {
-                    I_ptr[i * k + j] = static_cast<int64_t>(tmp[j]);
-                    // Compute exact L2 distance for returned result
-                    const float* xi = data_ptr + static_cast<size_t>(tmp[j]) * dim;
-                    const float* qi = q_ptr + i * dim;
-                    float dist = 0.0f;
-                    for (size_t d = 0; d < dim; ++d) {
-                        float diff = xi[d] - qi[d];
-                        dist += diff * diff;
-                    }
-                    D_ptr[i * k + j] = dist;
-                }
+            ivf_->search(q_ptr + i * dim, k, nprobe, tmp.data(), use_hacc);
+            for (size_t j = 0; j < k; ++j) {
+                I_ptr[i * k + j] = static_cast<int64_t>(tmp[j]);
             }
         }
 
@@ -155,11 +146,12 @@ PYBIND11_MODULE(rabitqlib_cpp, m) {
 
     py::class_<PyIVF>(m, "IVF")
         .def(
-            py::init<size_t, size_t, size_t, size_t, const std::string&, const std::string&>(),
+            py::init<size_t, size_t, size_t, size_t, int, const std::string&, const std::string&>(),
             py::arg("n"),
             py::arg("dim"),
             py::arg("k"),
             py::arg("bits"),
+            py::arg("nthread") = 1,
             py::arg("metric") = "l2",
             py::arg("rotator") = "fht"
         )
@@ -183,14 +175,8 @@ PYBIND11_MODULE(rabitqlib_cpp, m) {
             "search_batch",
             &PyIVF::search_batch,
             py::arg("queries"),
-            py::arg("data"),
             py::arg("k"),
             py::arg("nprobe"),
-            py::arg("use_hacc") = true,
-            py::arg("num_threads") = 16
-        )
-        .def("num_clusters", &PyIVF::num_clusters)
-        .def("padded_dim", &PyIVF::padded_dim)
-        .def("save", &PyIVF::save, py::arg("filename"))
-        .def("load", &PyIVF::load, py::arg("filename"));
+            py::arg("use_hacc") = true
+        );
 }

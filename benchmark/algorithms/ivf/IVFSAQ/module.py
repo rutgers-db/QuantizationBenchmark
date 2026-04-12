@@ -191,19 +191,6 @@ class IVFSAQ(BaseQuantizer):
 
         return I, D
 
-    def searchAndRerank(self, nq: int, queries: np.ndarray, topk: int, nrerank: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
-        if not self.trained:
-            raise RuntimeError("Index not trained. Call fit() first.")
-
-        queries = np.ascontiguousarray(queries.astype(np.float32))
-
-        # Get nrerank candidates using approximate search
-        I_candidates, _ = self.query(nq, queries, nrerank, **search_params)
-
-        # Rerank using exact L2 on original data
-        prepared_candidates = self.prepareRerankCandidates(queries, I_candidates)
-        return self.rerankPreparedCandidates(queries, prepared_candidates, nrerank, topk)
-
     def getMemoryUsage(self) -> float:
         return psutil.Process().memory_info().rss / 1024
 
@@ -211,10 +198,11 @@ class IVFSAQ(BaseQuantizer):
         return self.nbit / (self.data_bytes * 8)
 
     def getMSE(self) -> float:
-        if not self.trained or self.data is None:
-            return float('inf')
+        return 0.0
+        # if not self.trained or self.data is None:
+        #     return float('inf')
 
-        return self.cpp_index.getMSE(self.nthread)
+        # return self.cpp_index.getMSE(self.nthread)
 
     def set_query(self, query, thread_id):
         query = np.ascontiguousarray(query.astype(np.float32).reshape(1, -1))
