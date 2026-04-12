@@ -1,0 +1,29 @@
+FROM python:3.10-slim
+
+# Build arguments
+ARG ALGO_TYPE
+ARG ALGO_NAME
+
+# ScaNN requires libgomp for OpenMP parallelism
+RUN apt-get update && apt-get install -y \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies.
+# ScaNN is installed via the official PyPI wheel (x86_64 Linux, Python 3.10).
+# numpy<2.0 is pinned for ABI stability with the prebuilt ScaNN wheel.
+RUN pip install --no-cache-dir \
+    "numpy<2.0" \
+    h5py \
+    pyyaml \
+    psutil \
+    scann
+
+# Copy benchmark framework
+COPY benchmark/ /benchmark/
+
+# Copy algorithm module
+COPY benchmark/algorithms/${ALGO_TYPE}/${ALGO_NAME}/ /algorithms/${ALGO_TYPE}/${ALGO_NAME}/
+
+ENV PYTHONPATH=/
+WORKDIR /workspace

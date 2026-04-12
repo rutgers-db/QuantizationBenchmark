@@ -1,95 +1,80 @@
 # Configuration for RaBitQ (Randomized Bit Quantization)
-# RaBitQ without IVF (C=1, single centroid = data mean)
+# Current C++ backend only supports 128-D and 960-D vectors.
 
 sift-128-euclidean:
-  # Build/Search separation format
   common:
-    data_bytes: 4      # Data type size in bytes (float32)
-    ndim: 128          # Dimensionality
-    nthread: 16        # Number of threads for parallel processing
-    space: "l2"        # Distance metric (l2 for Euclidean distance)
+    data_bytes: 4
+    ndim: 128
+    nthread: 16
+    space: "l2"
   build:
     nlist: [256]
   search:
-    - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
+    - topk: 100
       nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100]
     - topk: 10
       nprobe: [10, 20, 30, 40, 50, 75, 100]
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [10]
     - topk: 50
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [50]
 
 gist-960-euclidean:
-  # Build/Search separation format
   common:
-    data_bytes: 4      # Data type size in bytes (float32)
-    ndim: 960          # Dimensionality
-    nthread: 16        # Number of threads for parallel processing
-    space: "l2"        # Distance metric (l2 for Euclidean distance)
+    data_bytes: 4
+    ndim: 960
+    nthread: 16
+    space: "l2"
   build:
     nlist: [4096]
   search:
-    - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
+    - topk: 100
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100]
     - topk: 10
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [10]
     - topk: 50
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [50]
-    # Optional: Add nrerank values for search_and_rerank test
-    # nrerank: [100, 200]  # If not specified, defaults to [topk, 2*topk]
 
 audio-128-euclidean:
-  # Build/Search separation format
   common:
-    data_bytes: 4      # Data type size in bytes (float32)
-    ndim: 128          # Dimensionality
-    nthread: 16        # Number of threads for parallel processing
-    space: "l2"        # Distance metric (l2 for Euclidean distance)
+    data_bytes: 4
+    ndim: 128
+    nthread: 16
+    space: "l2"
   build:
     nlist: [4096]
   search:
-    - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
+    - topk: 100
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [100]
     - topk: 10
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [10]
     - topk: 50
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
-      nrerank: [50]
-
-video-1024-euclidean:
-  # Build/Search separation format
-  common:
-    data_bytes: 4      # Data type size in bytes (float32)
-    ndim: 1024          # Dimensionality
-    nthread: 16        # Number of threads for parallel processing
-    space: "l2"        # Distance metric (l2 for Euclidean distance)
-  build:
-    nlist: [4096]
-  search:
-    - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
-      nrerank: [100]
-    - topk: 10
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
-      nrerank: [10]
-    - topk: 50
-      nprobe: [10, 20, 30, 40, 50, 75, 100, 250, 500, 750, 1000]
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
       nrerank: [50]
 
 siftsmall-128-euclidean:
-  # Build/Search separation format
   common:
-    data_bytes: 4      # Data type size in bytes (float32)
-    ndim: 128          # Dimensionality
-    nthread: 16        # Number of threads for parallel processing
-    space: "l2"        # Distance metric (l2 for Euclidean distance)
-  build: {}            # No build-specific parameters for RaBitQ
+    data_bytes: 4
+    ndim: 128
+    nthread: 16
+    space: "l2"
+  build:
+    nlist: [4096]
   search:
-    topk: 100          # Number of nearest neighbors to retrieve (default: 100)   
+    - topk: 100
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
+      nrerank: [100]
+    - topk: 10
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
+      nrerank: [10]
+    - topk: 50
+      nprobe: [10, 20, 30, 40, 50, 75, 100]
+      nrerank: [50]

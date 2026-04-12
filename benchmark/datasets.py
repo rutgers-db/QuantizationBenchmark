@@ -5,13 +5,14 @@ import numpy
 from typing import Any, Callable, Dict, Optional, Tuple
 
 
-def get_dataset_fn(dataset_name: str, data_dir: str = "/data/local/embedding_dataset/hdf5/") -> str:
+def get_dataset_fn(dataset_name: str, data_dir: str = "/data/local/embedding_dataset/hdf5") -> str:
     """
     Returns the full file path for a given dataset name in the data directory.
 
     Args:
         dataset_name (str): The name of the dataset.
-        data_dir (str): The directory where datasets are stored. Defaults to "/data/local/embedding_dataset/hdf5/".
+        data_dir (str): The directory where datasets are stored. Defaults to
+            "/data/local/embedding_dataset/hdf5".
 
     Returns:
         str: The full file path of the dataset.
@@ -21,13 +22,14 @@ def get_dataset_fn(dataset_name: str, data_dir: str = "/data/local/embedding_dat
     return os.path.join(data_dir, f"{dataset_name}.hdf5")
 
 
-def get_dataset(dataset_name: str, data_dir: str = "/data/local/embedding_dataset/hdf5/") -> Tuple[h5py.File, int]:
+def get_dataset(dataset_name: str, data_dir: str = "/data/local/embedding_dataset/hdf5") -> Tuple[h5py.File, int]:
     """
     hdf5 file should be located in the data directory
 
     Args:
         dataset_name (str): The name of the dataset.
-        data_dir (str): The directory where datasets are stored. Defaults to "/data/local/embedding_dataset/hdf5/".
+        data_dir (str): The directory where datasets are stored. Defaults to
+            "/data/local/embedding_dataset/hdf5".
 
     Returns:
         Tuple[h5py.File, int]: A tuple containing the opened HDF5 file object and

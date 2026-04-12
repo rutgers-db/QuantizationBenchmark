@@ -29,10 +29,6 @@ from benchmark.runner import BenchmarkRunner
 from benchmark.docker_runner import DockerRunner
 
 
-IVF_ALGORITHMS = {"Faiss-IVFPQ", "Faiss-IVFSQ"}
-DEFAULT_DATA_DIR = "/data/local/embedding_dataset/hdf5/"
-
-
 def _iter_algorithm_dirs(root_dir: str):
     """Yield algorithm directory names that contain a module.py file."""
     if not os.path.exists(root_dir):
@@ -44,6 +40,22 @@ def _iter_algorithm_dirs(root_dir: str):
             dirnames[:] = []
 
 
+def _resolve_quantizer_output_group(quantizer_name: str) -> str:
+    """Route results based on the algorithm's actual directory."""
+    if not quantizer_name:
+        return 'quantizer'
+
+    ivf_dir = os.path.join("benchmark", "algorithms", "ivf", quantizer_name)
+    if os.path.exists(os.path.join(ivf_dir, "module.py")):
+        return 'ivf'
+
+    quantizer_dir = os.path.join("benchmark", "algorithms", "quantizer", quantizer_name)
+    if os.path.exists(os.path.join(quantizer_dir, "module.py")):
+        return 'quantizer'
+
+    return 'quantizer'
+
+
 def _resolve_output_dir(output_dir: str, results, distribution_shift_test: bool = False) -> str:
     """Route results into the appropriate output directory."""
     if distribution_shift_test:
@@ -51,112 +63,11 @@ def _resolve_output_dir(output_dir: str, results, distribution_shift_test: bool 
 
     first_result = results[0] if isinstance(results, list) else results
     quantizer_name = first_result.get('quantizer')
-    output_group = 'ivf' if quantizer_name in IVF_ALGORITHMS else 'quantizer'
-    return os.path.join(output_dir, output_group)
-
-
-def _convert_types(obj, exclude_keys={'predictions', 'distances'}):
-    """Convert numpy types to Python types for JSON serialization."""
-    if isinstance(obj, dict):
-        return {k: _convert_types(v, exclude_keys) for k, v in obj.items()
-                if k not in exclude_keys}
-    elif isinstance(obj, list):
-        return [_convert_types(item, exclude_keys) for item in obj]
-    elif hasattr(obj, 'tolist'):
-        return obj.tolist()
-    elif hasattr(obj, 'item'):
-        return obj.item()
-    return obj
-
-
-def _build_result_filename(result) -> str:
-    """Build the output filename for a result set."""
-    if 'graph' in result:
-        if 'quantizer' in result and result['quantizer']:
-            algo_str = f"{result['graph']}_{result['quantizer']}"
-        else:
-            algo_str = result['graph']
-    else:
-        algo_str = result['quantizer']
-        if result.get('dimreduction'):
-            algo_str = f"{result['dimreduction']}_{algo_str}"
-    return f"{result['dataset']}_{algo_str}.json"
-
-
-def load_distribution_shift_groups(
-    dataset_name: str,
-    explicit_group: str = None,
-    config_path: str = 'benchmark/distribution_shift_groups.yaml',
-):
-    """Resolve which distribution shift groups to benchmark for a dataset."""
-    if explicit_group:
-        groups = [group.strip() for group in explicit_group.split(',') if group.strip()]
-        if groups:
-            return groups
-
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(
-            f"Distribution shift config not found: {config_path}. "
-            "Pass --distribution-shift-group or create the config file."
-        )
-
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f) or {}
-
-    dataset_config = config.get(dataset_name)
-    if dataset_config is None:
-        raise ValueError(
-            f"No distribution shift groups configured for dataset '{dataset_name}' in {config_path}."
-        )
-
-    if isinstance(dataset_config, dict):
-        groups = dataset_config.get('groups', [])
-    elif isinstance(dataset_config, list):
-        groups = dataset_config
-    else:
-        raise ValueError(
-            f"Invalid distribution shift config for dataset '{dataset_name}'. "
-            "Expected a list or a dict with a 'groups' key."
-        )
-
-    groups = [str(group).strip() for group in groups if str(group).strip()]
-    if not groups:
-        raise ValueError(
-            f"Dataset '{dataset_name}' has no distribution shift groups configured in {config_path}."
-        )
-
-    return groups
-
-
-def save_distribution_shift_results(results, output_dir: str = 'benchmark/results/distribution_shift'):
-    """Save results from multiple distribution shift groups into one JSON file."""
-    if not isinstance(results, list) or not results:
-        raise ValueError('Distribution shift results must be a non-empty list.')
-
-    os.makedirs(output_dir, exist_ok=True)
-    filename = _build_result_filename(results[0])
-    filepath = os.path.join(output_dir, filename)
-
-    from collections import defaultdict
-    grouped_results = defaultdict(list)
-
-    for result in results:
-        shift_group = result.get('distribution_shift', {}).get('group_name', 'distribution_shift')
-        grouped_results[shift_group].append(result)
-
-    serializable_results = []
-    for shift_group, group_results in grouped_results.items():
-        first_result = group_results[0]
-        serializable_results.append({
-            'distribution_shift_group': shift_group,
-            'distribution_shift_metadata': _convert_types(first_result.get('distribution_shift', {})),
-            'results': _convert_types(group_results),
-        })
-
-    with open(filepath, 'w') as f:
-        json.dump(serializable_results, f, indent=2)
-
-    print(f"\nDistribution shift results saved to: {filepath}")
+    output_group = _resolve_quantizer_output_group(quantizer_name)
+    resolved_output_dir = output_dir
+    if distribution_shift_test:
+        resolved_output_dir = os.path.join(resolved_output_dir, 'distribution_shift')
+    return os.path.join(resolved_output_dir, output_group)
 
 
 def list_algorithms():
@@ -484,8 +395,8 @@ Examples:
                        help='Algorithm(s) to run. Format: "Quantizer" or "DimReduction,Quantizer"')
     parser.add_argument('--graph', type=str,
                        help='Graph algorithm to use with the quantizer (e.g., "diskann")')
-    parser.add_argument('--data-dir', type=str, default=DEFAULT_DATA_DIR,
-                       help='Directory where datasets are stored (default: /data/local/embedding_dataset/hdf5/)')
+    parser.add_argument('--data-dir', type=str, default='/data/local/embedding_dataset/hdf5',
+                       help='Directory where datasets are stored (default: /data/local/embedding_dataset/hdf5)')
     parser.add_argument('--distribution-shift-test', action='store_true',
                        help='Run the distribution-shift benchmark using precomputed shift data stored in the HDF5 dataset')
     parser.add_argument('--distribution-shift-group', type=str, default=None,
