@@ -12,15 +12,15 @@ sift-128-euclidean:
     nbit: [1, 2, 4]
     nlist: 1
   search:
-    - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: [1]
-      nrerank: [100,120]
+    - topk: 100
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
-      nprobe: [1]
-      nrerank: [10,30]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nprobe: [1]
-      nrerank: [50,70]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 gist-960-euclidean:
   # Build/Search separation format
@@ -33,15 +33,15 @@ gist-960-euclidean:
     nbit: [1, 2, 4]
     nlist: 1
   search:
-    - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: [1]
-      nrerank: [100,120]
+    - topk: 100
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
-      nprobe: [1]
-      nrerank: [10,30]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nprobe: [1]
-      nrerank: [50,70]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     # Optional: Add nrerank values for search_and_rerank test
     # nrerank: [100, 200]  # If not specified, defaults to [topk, 2*topk]
 
@@ -56,15 +56,15 @@ audio-128-euclidean:
     nbit: [1, 2, 4]
     nlist: 1
   search:
-    - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: [1]
-      nrerank: [100,120]
+    - topk: 100
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
-      nprobe: [1]
-      nrerank: [10,30]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nprobe: [1]
-      nrerank: [50,70]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 video-1024-euclidean:
   # Build/Search separation format
@@ -77,15 +77,15 @@ video-1024-euclidean:
     nbit: [1, 2, 4]
     nlist: 1
   search:
-    - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: [1]
-      nrerank: [100,120]
+    - topk: 100
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
-      nprobe: [1]
-      nrerank: [10,30]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nprobe: [1]
-      nrerank: [50,70]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 text2image-200-euclidean:
   # Product Quantization with build/search separation format
@@ -99,15 +99,15 @@ text2image-200-euclidean:
     nbit: [1, 2, 4]
     nlist: 1
   search:
-    - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: [1]
-      nrerank: [100,120]
+    - topk: 100
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
-      nprobe: [1]
-      nrerank: [10,30]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nprobe: [1]
-      nrerank: [50,70]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 paper-200-euclidean:
   # Product Quantization with build/search separation format
@@ -121,15 +121,15 @@ paper-200-euclidean:
     nbit: [1, 2, 4]
     nlist: 1
   search:
-    - topk: 100          # Number of nearest neighbors to retrieve (default: 100)
-      nprobe: [1]
-      nrerank: [100,120]
+    - topk: 100
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 10
-      nprobe: [1]
-      nrerank: [10,30]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 50
-      nprobe: [1]
-      nrerank: [50,70]
+      npobe: [1]
+      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
 
 # siftsmall-128-euclidean:
 #   # Build/Search separation format
