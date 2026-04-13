@@ -244,7 +244,7 @@ class PyTurboQuant {
   }
 
   void set_nprobe(std::size_t nprobe) {
-    index_->ivf_.setup(index_->ivf_.nlist, nprobe);
+    index_->set_nprobe(nprobe);
   }
 
   std::size_t ntotal()   const { return index_->ntotal(); }

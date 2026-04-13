@@ -68,7 +68,7 @@
 //   class TurboQuantIndex — public API: Config / train / add / query
 //     public:  Config, constructor, getters, train(), add(),
 //              query(metric), query() L2 overload, ProfileStats + profile_nibble_query()
-//      constants, members |
+//     private: constants, members |
 //              helpers: require_trained, prepare_query, parallel_for |
 //              encode: encode_rotated, build_rotated_residual, encode_vector_inplace |
 //              flat query: nibble, packed, generic impls |
@@ -1874,13 +1874,28 @@ struct KMeansIVF {
       std::vector<float> min_sq(max_n, std::numeric_limits<float>::max());
       for (std::size_t ci = 1; ci < k; ++ci) {
         const float* last = cents.data() + (ci - 1) * d;
-        for (std::size_t i = 0; i < max_n; ++i) {
+        // Embarrassingly parallel: each i updates only min_sq[i].
+        #pragma omp parallel for num_threads(static_cast<int>(num_threads)) schedule(static)
+        for (std::ptrdiff_t ii = 0; ii < static_cast<std::ptrdiff_t>(max_n); ++ii) {
+          const std::size_t i = static_cast<std::size_t>(ii);
           const float* xi = data + sample[i] * d;
           float dsq = detail::l2_sq_distance(xi, last, d);
           if (dsq < min_sq[i]) min_sq[i] = dsq;
         }
+        // SIMD horizontal sum of min_sq.
         float total = 0.f;
-        for (float v : min_sq) total += v;
+        {
+#if defined(__AVX512F__)
+          __m512 vacc = _mm512_setzero_ps();
+          std::size_t i = 0;
+          for (; i + 16 <= max_n; i += 16)
+            vacc = _mm512_add_ps(vacc, _mm512_loadu_ps(min_sq.data() + i));
+          total = _mm512_reduce_add_ps(vacc);
+          for (; i < max_n; ++i) total += min_sq[i];
+#else
+          for (float v : min_sq) total += v;
+#endif
+        }
         std::uniform_real_distribution<float> ureal(0.f, total > 0.f ? total : 1.f);
         float tgt = ureal(rng), acc = 0.f;
         std::size_t chosen = max_n - 1;
@@ -1914,26 +1929,73 @@ struct KMeansIVF {
 
       if (iter > 0 && changed == 0) break;
 
-      // Recompute centroids as cluster means
-      std::fill(cents.begin(), cents.end(), 0.f);
-      std::vector<std::size_t> cnt(k, 0);
-      for (std::size_t i = 0; i < max_n; ++i) {
-        const std::size_t c = asgn[i];
-        const float* xi = data + sample[i] * d;
-        float* cc = cents.data() + c * d;
-        for (std::size_t j = 0; j < d; ++j) cc[j] += xi[j];
-        ++cnt[c];
-      }
-      for (std::size_t c = 0; c < k; ++c) {
-        if (cnt[c] > 0) {
-          const float inv = 1.f / static_cast<float>(cnt[c]);
-          float* cc = cents.data() + c * d;
-          for (std::size_t j = 0; j < d; ++j) cc[j] *= inv;
-        } else {
-          // Empty cluster: copy from a non-empty neighbor
-          std::size_t src = (c + 1) % k;
-          while (cnt[src] == 0) src = (src + 1) % k;
-          std::copy(cents.data() + src * d, cents.data() + src * d + d, cents.data() + c * d);
+      // Recompute centroids as cluster means.
+      // Use thread-local partial accumulators to avoid write conflicts,
+      // then merge with SIMD.
+      {
+        const std::size_t nt = std::min(num_threads, max_n);
+        std::vector<float>       partial_cents(nt * k * d, 0.f);
+        std::vector<std::size_t> partial_cnt  (nt * k,     0);
+        #pragma omp parallel num_threads(static_cast<int>(nt))
+        {
+          const std::size_t tid  = static_cast<std::size_t>(omp_get_thread_num());
+          float*       pcents = partial_cents.data() + tid * k * d;
+          std::size_t* pcnt   = partial_cnt.data()   + tid * k;
+          #pragma omp for schedule(static) nowait
+          for (std::ptrdiff_t ii = 0; ii < static_cast<std::ptrdiff_t>(max_n); ++ii) {
+            const std::size_t i  = static_cast<std::size_t>(ii);
+            const std::size_t c  = asgn[i];
+            const float*      xi = data + sample[i] * d;
+            float* pcc = pcents + c * d;
+            std::size_t j = 0;
+#if defined(__AVX512F__)
+            for (; j + 16 <= d; j += 16)
+              _mm512_storeu_ps(pcc + j,
+                _mm512_add_ps(_mm512_loadu_ps(pcc + j), _mm512_loadu_ps(xi + j)));
+#endif
+            for (; j < d; ++j) pcc[j] += xi[j];
+            ++pcnt[c];
+          }
+        }
+        // Merge thread partials into cents/cnt.
+        std::fill(cents.begin(), cents.end(), 0.f);
+        std::vector<std::size_t> cnt(k, 0);
+        for (std::size_t t = 0; t < nt; ++t) {
+          const float*       pcents = partial_cents.data() + t * k * d;
+          const std::size_t* pcnt   = partial_cnt.data()   + t * k;
+          for (std::size_t c = 0; c < k; ++c) {
+            cnt[c] += pcnt[c];
+            float*       cc  = cents.data() + c * d;
+            const float* pcc = pcents + c * d;
+            std::size_t j = 0;
+#if defined(__AVX512F__)
+            for (; j + 16 <= d; j += 16)
+              _mm512_storeu_ps(cc + j,
+                _mm512_add_ps(_mm512_loadu_ps(cc + j), _mm512_loadu_ps(pcc + j)));
+#endif
+            for (; j < d; ++j) cc[j] += pcc[j];
+          }
+        }
+        // Scale and handle empty clusters.
+        for (std::size_t c = 0; c < k; ++c) {
+          if (cnt[c] > 0) {
+            const float inv = 1.f / static_cast<float>(cnt[c]);
+            float* cc = cents.data() + c * d;
+#if defined(__AVX512F__)
+            const __m512 vinv = _mm512_set1_ps(inv);
+            std::size_t j = 0;
+            for (; j + 16 <= d; j += 16)
+              _mm512_storeu_ps(cc + j, _mm512_mul_ps(_mm512_loadu_ps(cc + j), vinv));
+            for (; j < d; ++j) cc[j] *= inv;
+#else
+            for (std::size_t j = 0; j < d; ++j) cc[j] *= inv;
+#endif
+          } else {
+            // Empty cluster: copy from a non-empty neighbor.
+            std::size_t src = (c + 1) % k;
+            while (cnt[src] == 0) src = (src + 1) % k;
+            std::copy(cents.data() + src * d, cents.data() + src * d + d, cents.data() + c * d);
+          }
         }
       }
     }
@@ -1976,11 +2038,10 @@ class TurboQuantIndex {
     std::size_t num_threads = 1;
     std::size_t nlist  = 1;   // IVF clusters; 1 = flat (current behavior preserved)
     std::size_t nprobe = 1;   // Clusters to probe per query (clamped to nlist)
+    bool l2_direct = true;    // MSE-mode L2: use ‖x̂_eff‖² (direct L2 ADC) instead of ‖x_eff‖²
   };
 
   // Validates dim and bitwidth; sets padded_dim_ = next power of 2 for Hadamard else dim.
-  // Auto-upgrade: if Dense was requested but dim is already a power of 2, use Hadamard
-  // (O(d log d) vs O(d³) QR decomposition — same quality for power-of-2 dims).
   explicit TurboQuantIndex(const Config& cfg)
       : dim_(cfg.dim),
         bitwidth_(cfg.bitwidth),
@@ -1989,6 +2050,7 @@ class TurboQuantIndex {
         use_data_centroid_(cfg.use_data_centroid),
         force_generic_path_(cfg.force_generic_path),
         use_packed_nibbles_(cfg.use_packed_nibbles),
+        l2_direct_(cfg.l2_direct),
         seed_(cfg.seed),
         num_threads_(std::max<std::size_t>(1, cfg.num_threads)) {
     if (dim_ == 0)
@@ -2017,6 +2079,11 @@ class TurboQuantIndex {
     num_threads_ = std::max<std::size_t>(1, t);
   }
 
+  // Sets the number of IVF clusters to probe per query.
+  void set_nprobe(std::size_t nprobe) noexcept {
+    ivf_.setup(ivf_.nlist, nprobe);
+  }
+
   // ------------------------------------------------------------------
   // train — prepare centroid, codebook, rotations, and storage layout
   //
@@ -2030,110 +2097,54 @@ class TurboQuantIndex {
     if (use_data_centroid_) {
       if (n == 0 || x == nullptr)
         throw std::invalid_argument("train: n > 0 and x != null required for use_data_centroid");
-      // Parallel + SIMD centroid accumulation.
-      // Each thread accumulates a local buffer over its share of training vectors,
-      // then partial sums are reduced into centroid_. AVX-512 processes 16 floats/cycle.
-      centroid_.assign(padded_dim_, 0.0f);  // zero-pad upfront; [dim_, padded_dim_) stay 0
-      const std::size_t nt = num_threads_;
-#if defined(__AVX512F__)
-      const std::size_t full16 = (dim_ >> 4) << 4;
-#elif defined(__AVX2__)
-      const std::size_t full8  = (dim_ >> 3) << 3;
-#endif
-      if (nt <= 1) {
-        // Single-threaded SIMD accumulation
-        for (std::size_t i = 0; i < n; ++i) {
-          const float* xi = x + i * dim_;
-#if defined(__AVX512F__)
-          for (std::size_t j = 0; j < full16; j += 16)
-            _mm512_storeu_ps(centroid_.data() + j,
-              _mm512_add_ps(_mm512_loadu_ps(centroid_.data() + j), _mm512_loadu_ps(xi + j)));
-          for (std::size_t j = full16; j < dim_; ++j) centroid_[j] += xi[j];
-#elif defined(__AVX2__)
-          for (std::size_t j = 0; j < full8; j += 8)
-            _mm256_storeu_ps(centroid_.data() + j,
-              _mm256_add_ps(_mm256_loadu_ps(centroid_.data() + j), _mm256_loadu_ps(xi + j)));
-          for (std::size_t j = full8; j < dim_; ++j) centroid_[j] += xi[j];
-#else
-          for (std::size_t j = 0; j < dim_; ++j) centroid_[j] += xi[j];
-#endif
-        }
-      } else {
-        // Multi-threaded: each thread owns a local accumulator for its chunk of vectors
-        std::vector<std::vector<float>> local_sums(nt, std::vector<float>(dim_, 0.0f));
-        #pragma omp parallel num_threads(static_cast<int>(nt))
+      centroid_.assign(dim_, 0.0f);
+      {
+        // Parallel partial sums per thread, then SIMD merge.
+        const int nt = static_cast<int>(num_threads_);
+        std::vector<float> partial(static_cast<std::size_t>(nt) * dim_, 0.0f);
+        #pragma omp parallel num_threads(nt)
         {
-          const int tid  = omp_get_thread_num();
-          const int nthr = omp_get_num_threads();
-          float* loc = local_sums[tid].data();
-          const std::size_t chunk = (n + nthr - 1) / nthr;
-          const std::size_t i0 = static_cast<std::size_t>(tid) * chunk;
-          const std::size_t i1 = std::min(i0 + chunk, n);
+          const int tid = omp_get_thread_num();
+          float* p = partial.data() + static_cast<std::size_t>(tid) * dim_;
+          #pragma omp for schedule(static)
+          for (std::ptrdiff_t ii = 0; ii < static_cast<std::ptrdiff_t>(n); ++ii) {
+            const float* xi = x + static_cast<std::size_t>(ii) * dim_;
+            std::size_t j = 0;
 #if defined(__AVX512F__)
-          for (std::size_t i = i0; i < i1; ++i) {
-            const float* xi = x + i * dim_;
-            for (std::size_t j = 0; j < full16; j += 16)
-              _mm512_storeu_ps(loc + j,
-                _mm512_add_ps(_mm512_loadu_ps(loc + j), _mm512_loadu_ps(xi + j)));
-            for (std::size_t j = full16; j < dim_; ++j) loc[j] += xi[j];
-          }
-#elif defined(__AVX2__)
-          for (std::size_t i = i0; i < i1; ++i) {
-            const float* xi = x + i * dim_;
-            for (std::size_t j = 0; j < full8; j += 8)
-              _mm256_storeu_ps(loc + j,
-                _mm256_add_ps(_mm256_loadu_ps(loc + j), _mm256_loadu_ps(xi + j)));
-            for (std::size_t j = full8; j < dim_; ++j) loc[j] += xi[j];
-          }
-#else
-          for (std::size_t i = i0; i < i1; ++i) {
-            const float* xi = x + i * dim_;
-            for (std::size_t j = 0; j < dim_; ++j) loc[j] += xi[j];
-          }
+            for (; j + 16 <= dim_; j += 16)
+              _mm512_storeu_ps(p + j,
+                _mm512_add_ps(_mm512_loadu_ps(p + j), _mm512_loadu_ps(xi + j)));
 #endif
+            for (; j < dim_; ++j) p[j] += xi[j];
+          }
         }
-        // Reduce partial sums into centroid_ (SIMD)
+        // Merge per-thread partial sums into centroid_ with SIMD.
+        for (int t = 0; t < nt; ++t) {
+          const float* p = partial.data() + static_cast<std::size_t>(t) * dim_;
+          std::size_t j = 0;
 #if defined(__AVX512F__)
-        for (std::size_t t = 0; t < nt; ++t) {
-          const float* loc = local_sums[t].data();
-          for (std::size_t j = 0; j < full16; j += 16)
+          for (; j + 16 <= dim_; j += 16)
             _mm512_storeu_ps(centroid_.data() + j,
-              _mm512_add_ps(_mm512_loadu_ps(centroid_.data() + j), _mm512_loadu_ps(loc + j)));
-          for (std::size_t j = full16; j < dim_; ++j) centroid_[j] += loc[j];
-        }
-#elif defined(__AVX2__)
-        for (std::size_t t = 0; t < nt; ++t) {
-          const float* loc = local_sums[t].data();
-          for (std::size_t j = 0; j < full8; j += 8)
-            _mm256_storeu_ps(centroid_.data() + j,
-              _mm256_add_ps(_mm256_loadu_ps(centroid_.data() + j), _mm256_loadu_ps(loc + j)));
-          for (std::size_t j = full8; j < dim_; ++j) centroid_[j] += loc[j];
-        }
-#else
-        for (std::size_t t = 0; t < nt; ++t)
-          for (std::size_t j = 0; j < dim_; ++j) centroid_[j] += local_sums[t][j];
+              _mm512_add_ps(_mm512_loadu_ps(centroid_.data() + j), _mm512_loadu_ps(p + j)));
 #endif
+          for (; j < dim_; ++j) centroid_[j] += p[j];
+        }
       }
-      // Scale and compute c_norm_sq_
-      const float inv_n = 1.0f / static_cast<float>(n);
+      {
+        const float inv_n = 1.0f / static_cast<float>(n);
 #if defined(__AVX512F__)
-      { const __m512 vinv = _mm512_set1_ps(inv_n);
-        for (std::size_t j = 0; j < full16; j += 16)
+        const __m512 vinv = _mm512_set1_ps(inv_n);
+        std::size_t j = 0;
+        for (; j + 16 <= dim_; j += 16)
           _mm512_storeu_ps(centroid_.data() + j,
             _mm512_mul_ps(_mm512_loadu_ps(centroid_.data() + j), vinv));
-        for (std::size_t j = full16; j < dim_; ++j) centroid_[j] *= inv_n; }
-#elif defined(__AVX2__)
-      { const __m256 vinv = _mm256_set1_ps(inv_n);
-        for (std::size_t j = 0; j < full8; j += 8)
-          _mm256_storeu_ps(centroid_.data() + j,
-            _mm256_mul_ps(_mm256_loadu_ps(centroid_.data() + j), vinv));
-        for (std::size_t j = full8; j < dim_; ++j) centroid_[j] *= inv_n; }
+        for (; j < dim_; ++j) centroid_[j] *= inv_n;
 #else
-      for (std::size_t j = 0; j < dim_; ++j) centroid_[j] *= inv_n;
+        for (std::size_t j = 0; j < dim_; ++j) centroid_[j] *= inv_n;
 #endif
-      // centroid_ already has padded_dim_ elements; [dim_, padded_dim_) remain 0.0f
-      c_norm_sq_ = 0.0f;
-      for (std::size_t j = 0; j < dim_; ++j) c_norm_sq_ += centroid_[j] * centroid_[j];
+      }
+      centroid_.resize(padded_dim_, 0.0f);  // zero-pad for internal use
+      c_norm_sq_ = detail::dot_product(centroid_.data(), centroid_.data(), dim_);
     } else {
       centroid_.clear();
       c_norm_sq_ = 0.0f;
@@ -2235,13 +2246,28 @@ class TurboQuantIndex {
           // No fill needed: [0,dim_) is overwritten below; [dim_,padded_dim_) stays zero from construction.
           float cx_dot = 0.0f;
           if (use_data_centroid_) {
-            for (std::size_t j = 0; j < dim_; ++j) {
+            std::size_t j = 0;
+#if defined(__AVX512F__)
+            __m512 vcx = _mm512_setzero_ps();
+            for (; j + 16 <= dim_; j += 16) {
+              const __m512 vx = _mm512_loadu_ps(src + j);
+              const __m512 vc = _mm512_loadu_ps(centroid_.data() + j);
+              _mm512_storeu_ps(x_eff.data() + j, _mm512_sub_ps(vx, vc));
+              vcx = _mm512_fmadd_ps(vc, vx, vcx);
+            }
+            cx_dot = _mm512_reduce_add_ps(vcx);
+#endif
+            for (; j < dim_; ++j) {
               x_eff[j] = src[j] - centroid_[j];
               cx_dot  += centroid_[j] * src[j];
             }
           } else {
-            for (std::size_t j = 0; j < dim_; ++j)
-              x_eff[j] = src[j];
+            std::size_t j = 0;
+#if defined(__AVX512F__)
+            for (; j + 16 <= dim_; j += 16)
+              _mm512_storeu_ps(x_eff.data() + j, _mm512_loadu_ps(src + j));
+#endif
+            for (; j < dim_; ++j) x_eff[j] = src[j];
           }
           const float norm = detail::l2_norm(x_eff.data(), dim_);
           storage_.norms[gi]        = norm;
@@ -2256,10 +2282,31 @@ class TurboQuantIndex {
 
           // Normalise and rotate
           const float inv_norm = 1.0f / norm;
-          for (std::size_t j = 0; j < dim_; ++j) unit[j] = x_eff[j] * inv_norm;
+          {
+            std::size_t j = 0;
+#if defined(__AVX512F__)
+            const __m512 vinv = _mm512_set1_ps(inv_norm);
+            for (; j + 16 <= dim_; j += 16)
+              _mm512_storeu_ps(unit.data() + j,
+                _mm512_mul_ps(_mm512_loadu_ps(x_eff.data() + j), vinv));
+#endif
+            for (; j < dim_; ++j) unit[j] = x_eff[j] * inv_norm;
+          }
           rotation_.forward(unit.data(), rotated.data(), work.data());
 
           encode_rotated(rotated.data(), codes.data());
+
+          // Direct L2 ADC: override ‖x_eff‖² with ‖x̂_eff‖² = norm² · Σ c[code_j]²
+          // so the L2 kernel computes ‖q − x̂‖² (exact distance to reconstructed
+          // point) instead of a biased estimate of ‖q − x‖².
+          if (l2_direct_ && mode_ != Mode::kInnerProduct) {
+            float uhat_sq = 0.0f;
+            for (std::size_t j = 0; j < padded_dim_; ++j) {
+              const float c = codebook_.centroids[codes[j]];
+              uhat_sq += c * c;
+            }
+            storage_.norm_squares[gi] = norm * norm * uhat_sq;
+          }
 
           if (mode_ != Mode::kInnerProduct) {
             // MSE path: store codes only
@@ -2543,7 +2590,7 @@ class TurboQuantIndex {
     return s;
   }
 
- 
+ private:
   // ------------------------------------------------------------------
   // Constants — mirror detail:: values as local aliases for convenience
   // ------------------------------------------------------------------
@@ -2564,6 +2611,7 @@ class TurboQuantIndex {
   bool          use_data_centroid_  = false;
   bool          force_generic_path_ = false;
   bool          use_packed_nibbles_ = true;
+  bool          l2_direct_          = false;
   std::uint64_t seed_        = 0;
   std::size_t   num_threads_ = 1;
   std::size_t   ntotal_      = 0;
@@ -2669,9 +2717,20 @@ class TurboQuantIndex {
     const float* cp = local_centroid ? local_centroid
                     : (use_data_centroid_ ? centroid_.data() : nullptr);
     if (cp) {
-      for (std::size_t j = 0; j < dim_; ++j) x_eff[j] = src[j] - cp[j];
+      std::size_t j = 0;
+#if defined(__AVX512F__)
+      for (; j + 16 <= dim_; j += 16)
+        _mm512_storeu_ps(x_eff.data() + j,
+          _mm512_sub_ps(_mm512_loadu_ps(src + j), _mm512_loadu_ps(cp + j)));
+#endif
+      for (; j < dim_; ++j) x_eff[j] = src[j] - cp[j];
     } else {
-      for (std::size_t j = 0; j < dim_; ++j) x_eff[j] = src[j];
+      std::size_t j = 0;
+#if defined(__AVX512F__)
+      for (; j + 16 <= dim_; j += 16)
+        _mm512_storeu_ps(x_eff.data() + j, _mm512_loadu_ps(src + j));
+#endif
+      for (; j < dim_; ++j) x_eff[j] = src[j];
     }
 
     const float norm = detail::l2_norm(x_eff.data(), dim_);
@@ -2685,9 +2744,28 @@ class TurboQuantIndex {
     }
 
     const float inv = 1.0f / norm;
-    for (std::size_t j = 0; j < dim_; ++j) unit[j] = x_eff[j] * inv;
+    {
+      std::size_t j = 0;
+#if defined(__AVX512F__)
+      const __m512 vinv = _mm512_set1_ps(inv);
+      for (; j + 16 <= dim_; j += 16)
+        _mm512_storeu_ps(unit.data() + j,
+          _mm512_mul_ps(_mm512_loadu_ps(x_eff.data() + j), vinv));
+#endif
+      for (; j < dim_; ++j) unit[j] = x_eff[j] * inv;
+    }
     rotation_.forward(unit.data(), rotated.data(), work.data());
     encode_rotated(rotated.data(), codes.data());
+
+    // Direct L2 ADC: override ‖x_eff‖² with ‖x̂_eff‖² = norm² · Σ c[code_j]²
+    if (l2_direct_ && mode_ != Mode::kInnerProduct) {
+      float uhat_sq = 0.0f;
+      for (std::size_t j = 0; j < padded_dim_; ++j) {
+        const float c = codebook_.centroids[codes[j]];
+        uhat_sq += c * c;
+      }
+      storage_.norm_squares[gi] = norm * norm * uhat_sq;
+    }
 
     if (mode_ != Mode::kInnerProduct) {
       if (storage_.path == StorageLayout::Path::kPackedNibble) {
@@ -3454,6 +3532,7 @@ class TurboQuantIndex {
     });
   }
 
+ public:
   // ------------------------------------------------------------------
   // reconstruct — approximate inverse of add() (debug / analysis only)
   // ------------------------------------------------------------------
@@ -3468,7 +3547,17 @@ class TurboQuantIndex {
       const std::uint32_t mse_mask = (1u << mse_bits_) - 1u;
 
       for (std::size_t i = begin; i < end; ++i) {
-        if (storage_.path == StorageLayout::Path::kPackedNibble) {
+        if (storage_.path == StorageLayout::Path::kBigPackedNibble) {
+          const std::size_t bi   = i / kBigBlockSize;
+          const std::size_t lane = i % kBigBlockSize;
+          const std::uint8_t* pk = storage_.big_packed_nibble_block_ptr(bi);
+          for (std::size_t j = 0; j < padded_dim_; ++j) {
+            const std::uint8_t byte = pk[j * 64 + (lane < 64 ? lane : lane - 64)];
+            const std::uint8_t nib  = (lane < 64) ? (byte & 0x0f) : (byte >> 4);
+            const std::uint32_t code = static_cast<std::uint32_t>(nib) & mse_mask;
+            rotated[j] = (code < codebook_.size) ? codebook_.centroids[code] : 0.0f;
+          }
+        } else if (storage_.path == StorageLayout::Path::kPackedNibble) {
           const std::size_t bi   = i / kPackedBlockSize;
           const std::size_t lane = i % kPackedBlockSize;
           const std::uint8_t* pk = storage_.packed_nibble_block_ptr(bi);
