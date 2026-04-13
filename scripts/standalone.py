@@ -55,7 +55,7 @@ STYLES = {
     "OptimizedScalarQuantization":       {"color": "#8c564b"},
     "RabitQLibrary":                     {"color": "#d62728"},
     "SAQ_nlist1":                        {"color": "#f39c12"},
-    "TurboQuant_nlist1":                 {"color": "#00acc1"},
+    "TurboQuant":                 {"color": "#00acc1"},
 }
 
 # ── Load data ──────────────────────────────────────────────────
