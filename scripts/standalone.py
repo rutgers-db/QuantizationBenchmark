@@ -5,6 +5,7 @@ import math
 import matplotlib.pyplot as plt
 import matplotlib
 from collections import defaultdict
+from matplotlib.legend_handler import HandlerTuple
 
 
 matplotlib.rcParams.update({
@@ -18,7 +19,7 @@ matplotlib.rcParams.update({
 
 # ── Configuration ──────────────────────────────────────────────
 # Set to a dataset name to process only that dataset, or None for all datasets.
-DATASET = "audio-128-euclidean"  # e.g. "audio-128-euclidean"
+DATASET = "audio-128-euclidean"
 
 KNOWN_DATASETS = [
     "audio-128-euclidean",
@@ -29,16 +30,18 @@ KNOWN_DATASETS = [
     "video-1024-euclidean",
 ]
 
-# Compression rates to include, mapped to legend suffix and marker shape
+# Compression rates to include: marker shape and legend suffix
 RATE_CONFIG = {
     0.03125: {"suffix": "32x", "marker": "o"},
     0.0625:  {"suffix": "16x", "marker": "s"},
     0.125:   {"suffix": "8x",  "marker": "^"},
 }
 
+SCATTER_MARKER_SIZE = 80   # marker size (s=) for scatter points in the plot
+
 # ── Paths ──────────────────────────────────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_DIR = os.path.dirname(SCRIPT_DIR)
+REPO_DIR   = os.path.dirname(SCRIPT_DIR)
 RESULTS_QUANTIZER_DIR = os.path.join(REPO_DIR, "benchmark", "results", "quantizer")
 FIGURES_DIR = os.path.join(REPO_DIR, "figures", "standalone")
 LEGENDS_DIR = os.path.join(FIGURES_DIR, "legends")
@@ -46,21 +49,35 @@ LEGENDS_DIR = os.path.join(FIGURES_DIR, "legends")
 os.makedirs(FIGURES_DIR, exist_ok=True)
 os.makedirs(LEGENDS_DIR, exist_ok=True)
 
-# Only color per algorithm; marker is determined by compression rate
+# ── Styles ─────────────────────────────────────────────────────
+# Marker is determined by compression rate.
+# Algorithms without param_key use a single "color".
+# Algorithms with param_key use "param_colors": {value: color} to split groups;
+# the legend entry will be "alias (param_key=value)".
 STYLES = {
-    "ProductQuantizationFaiss":          {"color": "#1f77b4"},
-    "OptimizedProductQuantizationFaiss": {"color": "#9467bd"},
-    "ProductQuantizationFastScanFaiss":  {"color": "#7f7f7f"},
-    "ScalarQuatizationFaiss":            {"color": "#ff7f0e"},
-    "OptimizedScalarQuantization":       {"color": "#8c564b"},
-    "RabitQLibrary":                     {"color": "#d62728"},
-    "SAQ_nlist1":                        {"color": "#f39c12"},
-    "TurboQuant_nlist1":                 {"color": "#00acc1"},
+    "ProductQuantizationFaiss": {
+        "alias": "PQ",
+        "param_key": "nbit",
+        "param_colors": {4: "#1f77b4", 8: "#aec7e8"},
+    },
+    "OptimizedProductQuantizationFaiss": {
+        "alias": "OPQ",
+        "param_key": "nbit",
+        "param_colors": {4: "#9467bd", 8: "#c5b0d5"},
+    },
+    "ProductQuantizationFastScanFaiss": {"alias": "PQFast", "color": "#7f7f7f"},
+    "ScalarQuatizationFaiss":           {"alias": "SQ",     "color": "#ff7f0e"},
+    "OptimizedScalarQuantization":      {"alias": "OSQ",    "color": "#8c564b"},
+    "RabitQLibrary":                    {"alias": "RabitQ", "color": "#d62728"},
+    "SAQ_nlist1":                       {"alias": "SAQ",    "color": "#f39c12"},
+    "TurboQuant":                       {"alias": "Turbo",  "color": "#00acc1"},
 }
 
 # ── Load data ──────────────────────────────────────────────────
-# data[dataset][topk][algo][compression_rate] = [(recall, qps), ...]
-data = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(list))))
+# data[dataset][topk][algo][rate][group] = [(recall, qps), ...]
+# group: value of param_key (e.g. nbit=4), or None for algos without param_key
+data = defaultdict(lambda: defaultdict(lambda: defaultdict(
+       lambda: defaultdict(lambda: defaultdict(list)))))
 
 for filepath in sorted(glob.glob(os.path.join(RESULTS_QUANTIZER_DIR, "*.json"))):
     filename = os.path.basename(filepath)
@@ -75,39 +92,45 @@ for filepath in sorted(glob.glob(os.path.join(RESULTS_QUANTIZER_DIR, "*.json")))
         continue
 
     algo = name[len(ds_match) + 1:]
+    if algo not in STYLES:
+        continue
 
     with open(filepath) as f:
         entries = json.load(f)
+
+    style     = STYLES[algo]
+    param_key = style.get("param_key")
 
     for entry in entries:
         rate = entry.get("build_metrics", {}).get("compression_rate")
         if rate not in RATE_CONFIG:
             continue
+        group = entry.get("build_params", {}).get(param_key) if param_key else None
         for sr in entry.get("search_results", []):
-            topk = sr.get("search_params", {}).get("topk")
+            topk    = sr.get("search_params", {}).get("topk")
             metrics = sr.get("metrics", {})
-            recall = metrics.get("recall")
-            qps = metrics.get("queries_per_second")
+            recall  = metrics.get("recall")
+            qps     = metrics.get("queries_per_second")
             if topk is not None and recall is not None and qps is not None:
-                data[ds_match][topk][algo][rate].append((recall, qps))
+                data[ds_match][topk][algo][rate][group].append((recall, qps))
 
 
+# ── Helpers ────────────────────────────────────────────────────
 def save_figure(fig, stem):
     fig.savefig(stem + ".pdf", format="pdf", bbox_inches="tight")
     fig.savefig(stem + ".png", format="png", dpi=150, bbox_inches="tight")
     print(f"[OK] Saved: {stem}.pdf / .png")
 
 
-def save_legend(algo_handles, rate_handles, stem):
-    all_handles = list(algo_handles.values()) + list(rate_handles.values())
-    if not all_handles:
+def _save_handles(handles, stem, ncol):
+    if not handles:
         return
     fig_leg = plt.figure()
     legend = fig_leg.legend(
-        all_handles,
-        [h.get_label() for h in all_handles],
+        handles,
+        [h.get_label() for h in handles],
         loc="center",
-        ncol=max(len(algo_handles), len(rate_handles)),
+        ncol=max(ncol, 1),
         frameon=False,
         fontsize=12,
     )
@@ -121,59 +144,113 @@ def save_legend(algo_handles, rate_handles, stem):
     plt.close(fig_leg)
 
 
-# ── Plot one figure per (dataset, topk); one shared legend per dataset ────
-for dataset, topk_data in sorted(data.items()):
-    # Collect legend handles across all topk so the legend is dataset-wide
-    algo_handles = {}
-    rate_handles = {}
+def save_legend(algo_handles, rate_handles, stem):
+    # Color legend: each entry shows all marker shapes in the algo's color
+    markers = [rc["marker"] for rc in RATE_CONFIG.values()]
+    color_handles = []
+    color_labels  = []
+    for handle in algo_handles.values():
+        color = handle.get_color()
+        sub = tuple(
+            matplotlib.lines.Line2D([], [], linestyle="none",
+                                    marker=m, color=color, markersize=7)
+            for m in markers
+        )
+        color_handles.append(sub)
+        color_labels.append(handle.get_label())
 
+    if color_handles:
+        fig_leg = plt.figure()
+        legend = fig_leg.legend(
+            color_handles, color_labels,
+            loc="center",
+            ncol=max(len(color_handles), 1),
+            frameon=False,
+            fontsize=12,
+            handler_map={tuple: HandlerTuple(ndivide=None, pad=0.5)},
+        )
+        fig_leg.canvas.draw()
+        bbox = legend.get_window_extent().transformed(
+            fig_leg.dpi_scale_trans.inverted()
+        )
+        fig_leg.savefig(stem + "_color.pdf", format="pdf", bbox_inches=bbox, pad_inches=0.05)
+        fig_leg.savefig(stem + "_color.png", format="png", dpi=150, bbox_inches=bbox, pad_inches=0.05)
+        print(f"[OK] Saved: {stem}_color.pdf / .png")
+        plt.close(fig_leg)
+
+    # Marker legend: one entry per compression rate
+    _save_handles(
+        list(rate_handles.values()),
+        stem + "_marker",
+        ncol=len(rate_handles),
+    )
+
+
+# ── Plot ───────────────────────────────────────────────────────
+# algo_handles / rate_handles are shared across all datasets for a unified legend
+algo_handles = {}
+rate_handles = {}
+
+for dataset, topk_data in sorted(data.items()):
     for topk, algo_data in sorted(topk_data.items()):
         fig, ax = plt.subplots(figsize=(9, 6))
 
-        # Only consider algorithms that will actually be plotted
+        # Collect QPS of all points that will be drawn
         plotted_qps = [
             qps
-            for algo, rate_map in algo_data.items()
-            if algo in STYLES
-            for rate, points in rate_map.items()
+            for _, rate_map in algo_data.items()
+            for rate, group_map in rate_map.items()
             if rate in RATE_CONFIG
+            for points in group_map.values()
             for _, qps in points
         ]
         use_log = plotted_qps and (max(plotted_qps) / max(min(plotted_qps), 1e-9)) > 10
 
         for algo, rate_map in sorted(algo_data.items()):
-            if algo not in STYLES:
-                continue
-            color = STYLES[algo]["color"]
+            style     = STYLES[algo]
+            param_key = style.get("param_key")
+            alias     = style.get("alias", algo)
+
             for rate, rc in RATE_CONFIG.items():
                 if rate not in rate_map:
                     continue
-                points = rate_map[rate]
-                recalls  = [p[0] for p in points]
-                qps_vals = [p[1] for p in points]
-                ax.scatter(
-                    recalls, qps_vals,
-                    marker=rc["marker"],
-                    color=color,
-                    s=30,
-                    alpha=0.7,
-                )
-                if algo not in algo_handles:
-                    algo_handles[algo] = matplotlib.lines.Line2D(
-                        [], [], linestyle="none",
-                        marker="o", color=color,
-                        markersize=7, label=algo,
-                    )
-                if rate not in rate_handles:
-                    rate_handles[rate] = matplotlib.lines.Line2D(
-                        [], [], linestyle="none",
-                        marker=rc["marker"], color="black",
-                        markersize=7, label=rc["suffix"],
-                    )
+                for group, points in sorted(rate_map[rate].items(),
+                                            key=lambda kv: (kv[0] is None, kv[0])):
+                    # Color
+                    if param_key and group is not None:
+                        color = style["param_colors"].get(group, "#999999")
+                    else:
+                        color = style["color"]
+
+                    recalls  = [p[0] for p in points]
+                    qps_vals = [p[1] for p in points]
+                    ax.scatter(recalls, qps_vals,
+                               marker=rc["marker"], color=color,
+                               s=SCATTER_MARKER_SIZE, alpha=0.7)
+
+                    # Legend entries (accumulated once across all datasets)
+                    if param_key and group is not None:
+                        leg_key   = (algo, group)
+                        leg_label = f"{alias} ({param_key}={group})"
+                    else:
+                        leg_key   = (algo, None)
+                        leg_label = alias
+
+                    if leg_key not in algo_handles:
+                        algo_handles[leg_key] = matplotlib.lines.Line2D(
+                            [], [], linestyle="none", marker="o",
+                            color=color, markersize=7, label=leg_label,
+                        )
+                    if rate not in rate_handles:
+                        rate_handles[rate] = matplotlib.lines.Line2D(
+                            [], [], linestyle="none", marker=rc["marker"],
+                            color="black", markersize=7, label=rc["suffix"],
+                        )
 
         if use_log:
             ax.set_yscale("log")
-            ax.yaxis.set_major_locator(matplotlib.ticker.LogLocator(base=10, subs=[1, 2, 5]))
+            ax.yaxis.set_major_locator(
+                matplotlib.ticker.LogLocator(base=10, subs=[1, 2, 5]))
             ax.yaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter())
             ax.yaxis.get_major_formatter().set_scientific(False)
 
@@ -187,6 +264,6 @@ for dataset, topk_data in sorted(data.items()):
         save_figure(fig, stem)
         plt.close(fig)
 
-    # Save one shared legend for all topk figures of this dataset
-    leg_stem = os.path.join(LEGENDS_DIR, f"{dataset}_by_compression_rate_legend")
-    save_legend(algo_handles, rate_handles, leg_stem)
+# One shared legend for all datasets and topk values
+save_legend(algo_handles, rate_handles,
+            os.path.join(LEGENDS_DIR, "standalone_legend"))
