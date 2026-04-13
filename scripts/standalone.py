@@ -19,7 +19,7 @@ matplotlib.rcParams.update({
 
 # ── Configuration ──────────────────────────────────────────────
 # Set to a dataset name to process only that dataset, or None for all datasets.
-DATASET = "audio-128-euclidean"
+DATASET = None
 
 KNOWN_DATASETS = [
     "audio-128-euclidean",
@@ -256,7 +256,7 @@ for dataset, topk_data in sorted(data.items()):
 
         ax.set_xlabel(f"Recall@{topk}")
         ax.set_ylabel("Queries per Second")
-        ax.set_title(f"{dataset}  —  top{topk}")
+        # ax.set_title(f"{dataset}  —  top{topk}")
         ax.grid(True, which="both", linestyle="--", alpha=0.5)
 
         fig.tight_layout()
