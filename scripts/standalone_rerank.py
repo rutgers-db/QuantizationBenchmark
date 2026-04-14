@@ -227,14 +227,23 @@ def save_legend(algo_handles, rate_handles, algo_rates, stem):
         color_handles.append(sub)
         color_labels.append(handle.get_label())
 
-    # Baseline indicator: grey marker with semi-transparent golden border
-    baseline_handle = matplotlib.lines.Line2D(
-        [], [], linestyle="none", marker="o",
-        color="grey", markeredgecolor=(1.0, 0.84, 0.0, 0.5), markeredgewidth=2.5,
-        markersize=8, label="Baseline",
+    # Baseline indicator: one marker per rate that actually appeared, all with gold border
+    rates_seen = set().union(*algo_rates.values()) if algo_rates else set()
+    baseline_tuple = tuple(
+        matplotlib.lines.Line2D(
+            [], [], linestyle="none",
+            marker=RATE_CONFIG[rate]["marker"],
+            color="grey",
+            markeredgecolor=(1.0, 0.84, 0.0, 0.5),
+            markeredgewidth=1.5,
+            markersize=7,
+        )
+        for rate in RATE_CONFIG
+        if rate in rates_seen
     )
-    color_handles.append(baseline_handle)
-    color_labels.append("Baseline")
+    if baseline_tuple:
+        color_handles.append(baseline_tuple)
+        color_labels.append("Baseline")
 
     if color_handles:
         fig_leg = plt.figure()
@@ -458,7 +467,7 @@ for dataset, topk_data in sorted(data.items()):
                             ax2.scatter([b_disp], [base_qps],
                                         color=color,
                                         edgecolors=[gold_rgba],
-                                        linewidths=2.5,
+                                        linewidths=1.5,
                                         marker=rc["marker"],
                                         s=(MARKER_SIZE * 3) ** 2 / 4,
                                         zorder=5)
