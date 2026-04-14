@@ -69,7 +69,7 @@ STYLES = {
     "ScalarQuatizationFaiss":           {"alias": "SQ",     "color": "#ff7f0e"},
     "OptimizedScalarQuantization":      {"alias": "OSQ",    "color": "#8c564b"},
     "RabitQLibrary":                    {"alias": "RabitQ", "color": "#d62728"},
-    "SAQ_nlist1":                       {"alias": "SAQ",    "color": "#f39c12"},
+    "SAQ":                       {"alias": "SAQ",    "color": "#066909"},
     "TurboQuant":                       {"alias": "Turbo",  "color": "#00acc1"},
 }
 
