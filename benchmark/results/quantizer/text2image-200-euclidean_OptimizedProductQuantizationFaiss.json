@@ -1,0 +1,320 @@
+[
+  {
+    "build_params": {
+      "data_bytes": 4,
+      "nbit": 8,
+      "ndim": 200,
+      "niter": 50,
+      "nsubvec": 25,
+      "nthread": 16,
+      "space": "l2"
+    },
+    "build_metrics": {
+      "training_time": 30.035109043121338,
+      "add_time": 0.0,
+      "build_time": null,
+      "mse": 0.2169460505247116,
+      "quantizer_memory": 884604.0,
+      "graph_memory": null,
+      "compression_rate": 0.03125
+    },
+    "search_results": [
+      {
+        "search_params": {
+          "topk": 100,
+          "nrerank": [
+            200,
+            300,
+            500,
+            800,
+            1000
+          ]
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 100,
+            "nrerank": [
+              200,
+              300,
+              500,
+              800,
+              1000
+            ]
+          },
+          "query_time": 38.74315667152405,
+          "queries_per_second": 774.3302966856543,
+          "recall": 0.33770266666666665,
+          "map": 0.20682522800853317,
+          "recall@1": 0.7561666666666667,
+          "rerank_results": [
+            {
+              "nrerank": 200,
+              "search_time": 38.889530181884766,
+              "rerank_only_time": 5.400532960891724,
+              "rerank_time": 44.29006314277649,
+              "rerank_queries_per_second": 677.352838791174,
+              "rerank_recall": 0.47914233333333334,
+              "rerank_map": 0.47914232727272704,
+              "rerank_recall@1": 0.8293333333333334
+            },
+            {
+              "nrerank": 300,
+              "search_time": 39.11021447181702,
+              "rerank_only_time": 7.542891263961792,
+              "rerank_time": 46.65310573577881,
+              "rerank_queries_per_second": 643.0440058997541,
+              "rerank_recall": 0.5644916666666666,
+              "rerank_map": 0.5644916612021883,
+              "rerank_recall@1": 0.8639333333333333
+            },
+            {
+              "nrerank": 500,
+              "search_time": 39.392897844314575,
+              "rerank_only_time": 10.79401159286499,
+              "rerank_time": 50.186909437179565,
+              "rerank_queries_per_second": 597.7654399610298,
+              "rerank_recall": 0.6654606666666667,
+              "rerank_map": 0.6654606579332819,
+              "rerank_recall@1": 0.8994333333333333
+            },
+            {
+              "nrerank": 800,
+              "search_time": 40.15655779838562,
+              "rerank_only_time": 15.50878357887268,
+              "rerank_time": 55.6653413772583,
+              "rerank_queries_per_second": 538.9349864340596,
+              "rerank_recall": 0.7473406666666667,
+              "rerank_map": 0.7473406589750353,
+              "rerank_recall@1": 0.9252333333333334
+            },
+            {
+              "nrerank": 1000,
+              "search_time": 40.35366988182068,
+              "rerank_only_time": 18.878217458724976,
+              "rerank_time": 59.231887340545654,
+              "rerank_queries_per_second": 506.483945505891,
+              "rerank_recall": 0.781446,
+              "rerank_map": 0.781445992559512,
+              "rerank_recall@1": 0.9368333333333333
+            }
+          ],
+          "hops_stats": null,
+          "comps_stats": null,
+          "nrerank_stats": null
+        }
+      }
+    ]
+  },
+  {
+    "build_params": {
+      "data_bytes": 4,
+      "nbit": 8,
+      "ndim": 200,
+      "niter": 50,
+      "nsubvec": 50,
+      "nthread": 16,
+      "space": "l2"
+    },
+    "build_metrics": {
+      "training_time": 45.357398986816406,
+      "add_time": 0.0,
+      "build_time": null,
+      "mse": 0.07647264748811722,
+      "quantizer_memory": 915200.0,
+      "graph_memory": null,
+      "compression_rate": 0.0625
+    },
+    "search_results": [
+      {
+        "search_params": {
+          "topk": 100,
+          "nrerank": [
+            200,
+            300,
+            500,
+            800,
+            1000
+          ]
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 100,
+            "nrerank": [
+              200,
+              300,
+              500,
+              800,
+              1000
+            ]
+          },
+          "query_time": 95.74257802963257,
+          "queries_per_second": 313.34021516231707,
+          "recall": 0.5490216666666666,
+          "map": 0.4394258549923482,
+          "recall@1": 0.9658,
+          "rerank_results": [
+            {
+              "nrerank": 200,
+              "search_time": 96.10454869270325,
+              "rerank_only_time": 5.451510190963745,
+              "rerank_time": 101.55605888366699,
+              "rerank_queries_per_second": 295.40334993075265,
+              "rerank_recall": 0.7406223333333334,
+              "rerank_map": 0.7406223294573661,
+              "rerank_recall@1": 0.9836666666666667
+            },
+            {
+              "nrerank": 300,
+              "search_time": 96.61681389808655,
+              "rerank_only_time": 7.700973272323608,
+              "rerank_time": 104.31778717041016,
+              "rerank_queries_per_second": 287.5827873054187,
+              "rerank_recall": 0.8265273333333333,
+              "rerank_map": 0.82652731246915,
+              "rerank_recall@1": 0.9898666666666667
+            },
+            {
+              "nrerank": 500,
+              "search_time": 96.84237408638,
+              "rerank_only_time": 10.701243877410889,
+              "rerank_time": 107.5436179637909,
+              "rerank_queries_per_second": 278.9565812273562,
+              "rerank_recall": 0.9025926666666667,
+              "rerank_map": 0.9025926449617346,
+              "rerank_recall@1": 0.9946666666666667
+            },
+            {
+              "nrerank": 800,
+              "search_time": 97.63953971862793,
+              "rerank_only_time": 15.779856204986572,
+              "rerank_time": 113.4193959236145,
+              "rerank_queries_per_second": 264.5050236399103,
+              "rerank_recall": 0.9460756666666666,
+              "rerank_map": 0.9460756414771981,
+              "rerank_recall@1": 0.9971333333333333
+            },
+            {
+              "nrerank": 1000,
+              "search_time": 97.89647388458252,
+              "rerank_only_time": 19.193461656570435,
+              "rerank_time": 117.08993554115295,
+              "rerank_queries_per_second": 256.21331040408734,
+              "rerank_recall": 0.960156,
+              "rerank_map": 0.9601559784825136,
+              "rerank_recall@1": 0.9981666666666666
+            }
+          ],
+          "hops_stats": null,
+          "comps_stats": null,
+          "nrerank_stats": null
+        }
+      }
+    ]
+  },
+  {
+    "build_params": {
+      "data_bytes": 4,
+      "nbit": 8,
+      "ndim": 200,
+      "niter": 50,
+      "nsubvec": 100,
+      "nthread": 16,
+      "space": "l2"
+    },
+    "build_metrics": {
+      "training_time": 74.77678775787354,
+      "add_time": 0.0,
+      "build_time": null,
+      "mse": 0.007009071297943592,
+      "quantizer_memory": 962232.0,
+      "graph_memory": null,
+      "compression_rate": 0.125
+    },
+    "search_results": [
+      {
+        "search_params": {
+          "topk": 100,
+          "nrerank": [
+            200,
+            300,
+            500,
+            800,
+            1000
+          ]
+        },
+        "metrics": {
+          "search_params": {
+            "topk": 100,
+            "nrerank": [
+              200,
+              300,
+              500,
+              800,
+              1000
+            ]
+          },
+          "query_time": 128.7482144832611,
+          "queries_per_second": 233.01294018256368,
+          "recall": 0.8326173333333333,
+          "map": 0.8042367796353499,
+          "recall@1": 1.0,
+          "rerank_results": [
+            {
+              "nrerank": 200,
+              "search_time": 130.54520082473755,
+              "rerank_only_time": 5.334099769592285,
+              "rerank_time": 135.87930059432983,
+              "rerank_queries_per_second": 220.78418028928155,
+              "rerank_recall": 0.9824623333333333,
+              "rerank_map": 0.9824623196541957,
+              "rerank_recall@1": 1.0
+            },
+            {
+              "nrerank": 300,
+              "search_time": 131.16318726539612,
+              "rerank_only_time": 7.41089391708374,
+              "rerank_time": 138.57408118247986,
+              "rerank_queries_per_second": 216.49070117589167,
+              "rerank_recall": 0.9959343333333334,
+              "rerank_map": 0.9959343299663663,
+              "rerank_recall@1": 1.0
+            },
+            {
+              "nrerank": 500,
+              "search_time": 131.46748685836792,
+              "rerank_only_time": 10.782560586929321,
+              "rerank_time": 142.25004744529724,
+              "rerank_queries_per_second": 210.8962389733937,
+              "rerank_recall": 0.9994323333333334,
+              "rerank_map": 0.9994323333333434,
+              "rerank_recall@1": 1.0
+            },
+            {
+              "nrerank": 800,
+              "search_time": 131.97837209701538,
+              "rerank_only_time": 15.176628351211548,
+              "rerank_time": 147.15500044822693,
+              "rerank_queries_per_second": 203.86667057606923,
+              "rerank_recall": 0.9999203333333333,
+              "rerank_map": 0.9999203333333367,
+              "rerank_recall@1": 1.0
+            },
+            {
+              "nrerank": 1000,
+              "search_time": 132.03996109962463,
+              "rerank_only_time": 18.665801763534546,
+              "rerank_time": 150.70576286315918,
+              "rerank_queries_per_second": 199.0633896809905,
+              "rerank_recall": 0.9999706666666667,
+              "rerank_map": 0.999970666666668,
+              "rerank_recall@1": 1.0
+            }
+          ],
+          "hops_stats": null,
+          "comps_stats": null,
+          "nrerank_stats": null
+        }
+      }
+    ]
+  }
+]
