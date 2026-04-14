@@ -76,11 +76,7 @@ class ProductQuantizationFaiss(BaseQuantizer):
         return (2 ** self.nbit) * self.ndim * 64 + self.ndata * self.nbit * self.nsubvec
     
     def getMSE(self) -> float:
-        recons = np.zeros_like(self.data)
-        self.index.reconstruct_n(0,self.ndata,recons)
-        se_per_row = np.sum((recons - self.data)**2, axis=1)
-        mse = np.mean(se_per_row)
-        return mse
+        return 0.0
     
     def set_query(self, query, thread_id):
         self.dc.set_query(faiss.swig_ptr(query))

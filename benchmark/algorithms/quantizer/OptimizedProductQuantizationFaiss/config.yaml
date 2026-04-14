@@ -7,16 +7,12 @@ sift-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    niter : [20]
+    niter : [50]
     nsubvec: [16, 32, 64]
-    nbit: [4, 8]
+    nbit: [8]
   search:
     - topk: 100
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 10
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nrerank: [200, 300, 500, 800, 1000]
 
 gist-960-euclidean:
   # Product Quantization with build/search separation format
@@ -27,16 +23,12 @@ gist-960-euclidean:
     nthread: 16
     space: "l2"
   build:
-    niter : [20]
-    nsubvec: [16,32,64]
-    nbit: [4,8]
+    niter : [50]
+    nsubvec: [120,240,480]
+    nbit: [8]
   search:
     - topk: 100
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 10
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nrerank: [200, 300, 500, 800, 1000]
 
 audio-128-euclidean:
   # Product Quantization with build/search separation format
@@ -47,16 +39,12 @@ audio-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    niter : [20]
+    niter : [50]
     nsubvec: [16, 32, 64]
-    nbit: [4, 8]
+    nbit: [8]
   search:
     - topk: 100
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 10
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nrerank: [200, 300, 500, 800, 1000]
 
 video-1024-euclidean:
   # Product Quantization with build/search separation format
@@ -67,16 +55,12 @@ video-1024-euclidean:
     nthread: 16
     space: "l2"
   build:
-    niter : [20]
-    nsubvec: [32, 64, 128, 256, 512]
-    nbit: [4, 8]
+    niter : [50]
+    nsubvec: [128, 256, 512]
+    nbit: [8]
   search:
     - topk: 100
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 10
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nrerank: [200, 300, 500, 800, 1000]
 
 text2image-200-euclidean:
   # Product Quantization with build/search separation format
@@ -87,16 +71,12 @@ text2image-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    niter : [20]
+    niter : [50]
     nsubvec: [25, 50, 100]
-    nbit: [4, 8]
+    nbit: [8]
   search:
     - topk: 100
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 10
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nrerank: [200, 300, 500, 800, 1000]
 
 paper-200-euclidean:
   # Product Quantization with build/search separation format
@@ -107,13 +87,9 @@ paper-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    niter : [20]
+    niter : [50]
     nsubvec: [25, 50, 100]
-    nbit: [4, 8]
+    nbit: [8]
   search:
     - topk: 100
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 10
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nrerank: [200, 300, 500, 800, 1000]

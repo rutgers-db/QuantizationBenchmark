@@ -246,14 +246,15 @@ def main():
                 linewidth=1.5, alpha=0.8)
         all_qps.extend(qps_vals)
 
-    # Log scale if range is large
-    if all_qps:
-        qps_range = max(all_qps) / max(min(all_qps), 1e-9)
-        if qps_range > 10:
-            ax.set_yscale("log")
-            ax.yaxis.set_major_locator(matplotlib.ticker.LogLocator(base=10, subs=[1, 2, 5]))
-            ax.yaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter())
-            ax.yaxis.get_major_formatter().set_scientific(False)
+    # Fixed log scale y-axis, capped at 100000
+    ax.set_yscale("log")
+    ax.set_ylim(top=100000)
+    ax.yaxis.set_major_locator(matplotlib.ticker.LogLocator(base=10, subs=[1, 2, 5]))
+    ax.yaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter())
+    ax.yaxis.get_major_formatter().set_scientific(False)
+
+    # Fixed x-axis range
+    ax.set_xlim(0.5, 1.0)
 
     ax.set_xlabel("Recall@100")
     ax.set_ylabel("QPS")

@@ -104,6 +104,9 @@ class PyIVF {
         size_t nprobe,
         bool use_hacc = true
     ) {
+#if defined(__AVX512BW__)
+        std::cout << "AVX512BW" << std::endl;
+#endif
         auto q = queries.request();
 
         if (q.ndim != 2) {

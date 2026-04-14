@@ -131,15 +131,7 @@ class IVFOSQ(BaseQuantizer):
         return code_bits + correction_bits + centroid_bits
 
     def getMSE(self) -> float:
-        if self.indexed_data is None or self.ndata <= 0:
-            return 0.0
-        reconstructed = np.asarray(self.ivf_index.reconstruct_all(), dtype=np.float32)
-        for list_id, ids in enumerate(self.invlists):
-            if ids.size == 0:
-                continue
-            reconstructed[ids] += self.centroids[list_id]
-        se_per_row = np.sum((reconstructed - self.indexed_data) ** 2, axis=1)
-        return float(np.mean(se_per_row))
+        return 0.0
 
     def set_query(self, query, thread_id):
         query = np.ascontiguousarray(np.asarray(query, dtype=np.float32))

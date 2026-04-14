@@ -255,32 +255,11 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
         search_params_clean = {
             k: v for k, v in representative_params.items() if k not in ['topk', 'nrerank']
         }
-        max_topk = max(params.get('topk', 100) for _, params in grouped_configs)
-        nrerank_pool = []
-        for _, params in grouped_configs:
-            if 'nrerank' in params:
-                nrerank_value = params['nrerank']
-                if isinstance(nrerank_value, list):
-                    nrerank_pool.extend(nrerank_value)
-                else:
-                    nrerank_pool.append(nrerank_value)
-        shared_query_k = max([max_topk] + nrerank_pool) if nrerank_pool else max_topk
 
         print(f"\n{'='*60}")
         print(f"Search Group {group_idx + 1}/{len(grouped_search_configs)}")
         print(f"{'='*60}")
-        print(f"Shared search params: {search_params_clean}")
-        print(f"Shared query top-k: {shared_query_k}")
-
-        print("\n=== Shared Query Phase ===")
-        start_time = time.time()
-        I_shared, D_shared = quantizer.query(nq, test_data, shared_query_k, **search_params_clean)
-        shared_query_time = time.time() - start_time
-        print(f"Shared query time: {shared_query_time:.4f}s")
-
-        prepared_candidates = None
-        if nrerank_pool and not has_custom_search_and_rerank:
-            prepared_candidates = quantizer.prepareRerankCandidates(test_data, I_shared)
+        print(f"Search params: {search_params_clean}")
 
         for search_idx, search_params in grouped_configs:
             print(f"\n{'-'*60}")
@@ -290,9 +269,12 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
             topk = search_params.get('topk', 100)
             print(f"Top-k: {topk}")
 
-            I = I_shared[:, :topk]
-            D = D_shared[:, :topk]
-            query_time = shared_query_time
+            # Step 1: Run base query with topk (no reranking)
+            print(f"\n=== Base Query Phase (k={topk}) ===")
+            start_time = time.time()
+            I, D = quantizer.query(nq, test_data, topk, **search_params_clean)
+            query_time = time.time() - start_time
+            print(f"Base query time: {query_time:.4f}s")
 
             recall = calculate_recall(I, ground_truth[:, :topk])
             map_score = calculate_map(I, ground_truth[:, :topk])
@@ -301,6 +283,7 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
             print(f"MAP@{topk}: {map_score:.4f}")
             print(f"Recall@1: {recall_at_1:.4f}")
 
+            # Step 2: For each nrerank value, run searchAndRerank independently
             rerank_results = []
             if 'nrerank' in search_params:
                 print("\n=== Search and Rerank Phase ===")
@@ -352,9 +335,18 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
                 else:
                     for nrerank in nrerank_values:
                         print(f"\nTesting nrerank={nrerank}...")
-                        rerank_start_time = time.time()
 
                         try:
+                            # Run independent query with k=nrerank to get candidates
+                            search_start_time = time.time()
+                            I_candidates, D_candidates = quantizer.query(
+                                nq, test_data, nrerank, **search_params_clean
+                            )
+                            search_time = time.time() - search_start_time
+
+                            # Prepare and rerank candidates
+                            rerank_start_time = time.time()
+                            prepared_candidates = quantizer.prepareRerankCandidates(test_data, I_candidates)
                             I_rerank, D_rerank = quantizer.rerankPreparedCandidates(
                                 test_data,
                                 prepared_candidates,
@@ -362,13 +354,13 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
                                 topk
                             )
                             rerank_only_time = time.time() - rerank_start_time
-                            rerank_time = shared_query_time + rerank_only_time
+                            rerank_time = search_time + rerank_only_time
 
                             rerank_recall = calculate_recall(I_rerank, ground_truth[:, :topk])
                             rerank_map = calculate_map(I_rerank, ground_truth[:, :topk])
                             rerank_recall_at_1 = calculate_recall_at_1(I_rerank, ground_truth[:, :topk])
 
-                            print(f"  Search time (shared): {shared_query_time:.4f}s")
+                            print(f"  Search time (k={nrerank}): {search_time:.4f}s")
                             print(f"  Rerank-only time: {rerank_only_time:.4f}s")
                             print(f"  Total rerank time: {rerank_time:.4f}s")
                             print(f"  Recall@{topk} (after rerank): {rerank_recall:.4f}")
@@ -377,7 +369,7 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
 
                             rerank_results.append({
                                 'nrerank': nrerank,
-                                'search_time': shared_query_time,
+                                'search_time': search_time,
                                 'rerank_only_time': rerank_only_time,
                                 'rerank_time': rerank_time,
                                 'rerank_queries_per_second': len(test_data) / rerank_time if rerank_time > 0 else 0,

@@ -8,15 +8,9 @@ sift-128-euclidean:
     num_leaves: [1024, 2048, 4096, 8192]
     dims_per_block: [1,2,4]
   search:
-    - topk: 10
-      num_leaves_to_search: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      num_leaves_to_search: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
       num_leaves_to_search: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nrerank: [200, 300, 500, 1000]
 
 gist-960-euclidean:
   common:
@@ -28,15 +22,9 @@ gist-960-euclidean:
     num_leaves: [1024, 2048, 4096, 8192]
     dims_per_block: [1,2,4]
   search:
-    - topk: 10
-      num_leaves_to_search: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      num_leaves_to_search: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
       num_leaves_to_search: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nrerank: [200, 300, 500, 1000]
 
 audio-128-euclidean:
   common:
@@ -48,15 +36,9 @@ audio-128-euclidean:
     num_leaves: [256, 512, 1024]
     dims_per_block: [1,2,4]
   search:
-    - topk: 10
-      num_leaves_to_search: [10, 20, 30, 50, 75, 100, 150, 200, 300, 500]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      num_leaves_to_search: [10, 20, 30, 50, 75, 100, 150, 200, 300, 500]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
       num_leaves_to_search: [10, 20, 30, 50, 75, 100, 150, 200, 300, 500]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nrerank: [200, 300, 500, 1000]
 
 video-1024-euclidean:
   common:
@@ -68,15 +50,9 @@ video-1024-euclidean:
     num_leaves: [512, 1024, 2048]
     dims_per_block: [1,2,4]
   search:
-    - topk: 10
-      num_leaves_to_search: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      num_leaves_to_search: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
       num_leaves_to_search: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nrerank: [200, 300, 500, 1000]
 
 text2image-200-euclidean:
   common:
@@ -88,15 +64,9 @@ text2image-200-euclidean:
     num_leaves: [1024, 2048, 4096, 8192]
     dims_per_block: [1,2,4]
   search:
-    - topk: 10
-      num_leaves_to_search: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      num_leaves_to_search: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
       num_leaves_to_search: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nrerank: [200, 300, 500, 1000]
 
 paper-200-euclidean:
   common:
@@ -108,12 +78,6 @@ paper-200-euclidean:
     num_leaves: [1024, 2048, 4096, 8192]
     dims_per_block: [1,2,4]
   search:
-    - topk: 10
-      num_leaves_to_search: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      num_leaves_to_search: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
       num_leaves_to_search: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nrerank: [200, 300, 500, 1000]

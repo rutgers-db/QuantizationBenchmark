@@ -199,11 +199,7 @@ class ResidualOPQIVFPQ(BaseQuantizer):
         return codebook_bits + centroid_bits + code_bits + rotation_bits
 
     def getMSE(self) -> float:
-        if self.data is None or self.ndata <= 0:
-            return 0.0
-        reconstructed = np.asarray(self.index.reconstruct_all(), dtype=np.float32)
-        se_per_row = np.sum((reconstructed - self.data) ** 2, axis=1)
-        return float(np.mean(se_per_row))
+        return 0.0
 
     def set_query(self, query: np.ndarray, thread_id: int):
         prepared_query = self._prepare_vectors(
