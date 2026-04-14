@@ -18,7 +18,7 @@ matplotlib.rcParams.update({
 })
 
 # ── Configuration ──────────────────────────────────────────────
-DATASET = "sift-128-euclidean"
+DATASET = None
 
 KNOWN_DATASETS = [
     "audio-128-euclidean",
