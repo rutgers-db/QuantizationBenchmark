@@ -405,7 +405,7 @@ for dataset, topk_data in sorted(data.items()):
 
         fig.tight_layout()
         stem = os.path.join(FIGURES_DIR,
-                            f"{dataset}_top{topk}_rerank_delta_qps")
+                            f"{dataset}_top{topk}_delta")
         save_figure(fig, stem)
         plt.close(fig)
 
@@ -487,7 +487,7 @@ for dataset, topk_data in sorted(data.items()):
 
         fig2.tight_layout()
         stem2 = os.path.join(FIGURES_DIR,
-                             f"{dataset}_top{topk}_rerank_qps")
+                             f"{dataset}_top{topk}")
         save_figure(fig2, stem2)
         plt.close(fig2)
 

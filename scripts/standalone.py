@@ -264,7 +264,7 @@ for dataset, topk_data in sorted(data.items()):
         ax.grid(True, which="both", linestyle="--", alpha=0.5)
 
         fig.tight_layout()
-        stem = os.path.join(FIGURES_DIR, f"{dataset}_top{topk}_by_compression_rate")
+        stem = os.path.join(FIGURES_DIR, f"{dataset}_top{topk}")
         save_figure(fig, stem)
         plt.close(fig)
 
