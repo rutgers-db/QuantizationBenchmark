@@ -18,7 +18,7 @@ matplotlib.rcParams.update({
 })
 
 # ── Configuration ──────────────────────────────────────────────
-DATASET = "sift-128-euclidean"
+DATASET = None
 
 KNOWN_DATASETS = [
     "audio-128-euclidean",
@@ -208,8 +208,7 @@ def _save_handles(handles, stem, ncol):
 
 
 def save_legend(algo_handles, rate_handles, algo_rates, stem):
-    # Color legend: each algo entry shows the markers for its rates (HandlerTuple),
-    # plus one extra entry for the baseline (golden border).
+    # Color legend: each algo entry shows the markers for its rates (HandlerTuple).
     color_handles = []
     color_labels  = []
     for leg_key, handle in algo_handles.items():
@@ -226,24 +225,6 @@ def save_legend(algo_handles, rate_handles, algo_rates, stem):
         )
         color_handles.append(sub)
         color_labels.append(handle.get_label())
-
-    # Baseline indicator: one marker per rate that actually appeared, all with gold border
-    rates_seen = set().union(*algo_rates.values()) if algo_rates else set()
-    baseline_tuple = tuple(
-        matplotlib.lines.Line2D(
-            [], [], linestyle="none",
-            marker=RATE_CONFIG[rate]["marker"],
-            color="grey",
-            markeredgecolor=(1.0, 0.84, 0.0, 0.8),
-            markeredgewidth=1.5,
-            markersize=7,
-        )
-        for rate in RATE_CONFIG
-        if rate in rates_seen
-    )
-    if baseline_tuple:
-        color_handles.append(baseline_tuple)
-        color_labels.append("Baseline")
 
     if color_handles:
         fig_leg = plt.figure()
@@ -264,10 +245,15 @@ def save_legend(algo_handles, rate_handles, algo_rates, stem):
         print(f"[OK] Saved: {stem}_color.pdf / .png")
         plt.close(fig_leg)
 
+    # Rate legend: compression rate entries + one "w/o rerank" baseline entry (gold patch).
+    baseline_handle = matplotlib.patches.Patch(
+        facecolor=(0.85, 0.60, 0.0), label="w/o rerank",
+    )
+    rate_handles_list = list(rate_handles.values()) + [baseline_handle]
     _save_handles(
-        list(rate_handles.values()),
+        rate_handles_list,
         stem + "_rate",
-        ncol=len(rate_handles),
+        ncol=len(rate_handles_list),
     )
 
 
@@ -405,7 +391,7 @@ for dataset, topk_data in sorted(data.items()):
 
         fig.tight_layout()
         stem = os.path.join(FIGURES_DIR,
-                            f"{dataset}_top{topk}_rerank_delta_qps")
+                            f"{dataset}_top{topk}_delta")
         save_figure(fig, stem)
         plt.close(fig)
 
@@ -487,7 +473,7 @@ for dataset, topk_data in sorted(data.items()):
 
         fig2.tight_layout()
         stem2 = os.path.join(FIGURES_DIR,
-                             f"{dataset}_top{topk}_rerank_qps")
+                             f"{dataset}_top{topk}")
         save_figure(fig2, stem2)
         plt.close(fig2)
 
