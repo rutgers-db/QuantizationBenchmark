@@ -66,7 +66,7 @@ STYLES = {
         "param_colors": {4: "#9467bd", 8: "#c5b0d5"},
     },
     "ProductQuantizationFastScanFaiss": {"alias": "PQFast", "color": "#7f7f7f"},
-    "ScalarQuatizationFaiss":           {"alias": "SQ",     "color": "#ff7f0e"},
+    "ScalarQuatizationFaiss":           {"alias": "SQ",     "color": "#08087b"},
     "OptimizedScalarQuantization":      {"alias": "OSQ",    "color": "#8c564b"},
     "RabitQLibrary":                    {"alias": "RabitQ", "color": "#d62728"},
     "SAQ":                       {"alias": "SAQ",    "color": "#066909"},

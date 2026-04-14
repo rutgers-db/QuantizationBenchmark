@@ -113,7 +113,7 @@ STYLES = {
         "param_colors": {4: "#9467bd", 8: "#c5b0d5"},
     },
     "ProductQuantizationFastScanFaiss": {"alias": "PQFast", "color": "#7f7f7f"},
-    "ScalarQuatizationFaiss":           {"alias": "SQ",     "color": "#ff7f0e"},
+    "ScalarQuatizationFaiss":           {"alias": "SQ",     "color": "#08087b"},
     "OptimizedScalarQuantization":      {"alias": "OSQ",    "color": "#8c564b"},
     "RabitQLibrary":                    {"alias": "RabitQ", "color": "#d62728"},
     "SAQ":                              {"alias": "SAQ",    "color": "#066909"},
@@ -234,7 +234,7 @@ def save_legend(algo_handles, rate_handles, algo_rates, stem):
             [], [], linestyle="none",
             marker=RATE_CONFIG[rate]["marker"],
             color="grey",
-            markeredgecolor=(1.0, 0.84, 0.0, 0.5),
+            markeredgecolor=(1.0, 0.84, 0.0, 0.8),
             markeredgewidth=1.5,
             markersize=7,
         )
@@ -463,7 +463,7 @@ for dataset, topk_data in sorted(data.items()):
                                      linewidth=LINE_WIDTH,
                                      alpha=0.85)
                             # Baseline marker with semi-transparent gold edge
-                            gold_rgba = (1.0, 0.84, 0.0, 0.5)
+                            gold_rgba = (1.0, 0.84, 0.0, 0.8)
                             ax2.scatter([b_disp], [base_qps],
                                         color=color,
                                         edgecolors=[gold_rgba],
