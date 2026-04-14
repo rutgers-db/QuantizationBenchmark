@@ -1,11 +1,9 @@
 import os
 import json
 import glob
-import math
 import matplotlib.pyplot as plt
 import matplotlib
 from collections import defaultdict
-from matplotlib.legend_handler import HandlerTuple
 
 
 matplotlib.rcParams.update({
@@ -30,30 +28,33 @@ KNOWN_DATASETS = [
     "video-1024-euclidean",
 ]
 
-# Compression rates to include: marker shape and legend suffix
+# Compression rates to include: line style and legend suffix
+# Different rates are distinguished by line style, not marker.
 RATE_CONFIG = {
-    0.03125: {"suffix": "32x", "marker": "o"},
-    0.0625:  {"suffix": "16x", "marker": "s"},
-    0.125:   {"suffix": "8x",  "marker": "^"},
+    0.03125: {"suffix": "32x", "linestyle": ":"},
+    0.0625:  {"suffix": "16x", "linestyle": "--"},
+    0.125:   {"suffix": "8x",  "linestyle": "-"},
 }
 
-SCATTER_MARKER_SIZE = 80   # marker size (s=) for scatter points in the plot
+LINE_WIDTH = 1.8
 
+# Only plot rerank points with rerank_recall >= RECALL_MIN.
+# Set to None to disable filtering.
+RECALL_MIN = 0
 # ── Paths ──────────────────────────────────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_DIR   = os.path.dirname(SCRIPT_DIR)
 RESULTS_QUANTIZER_DIR = os.path.join(REPO_DIR, "benchmark", "results", "quantizer")
-FIGURES_DIR = os.path.join(REPO_DIR, "figures", "standalone")
+FIGURES_DIR = os.path.join(REPO_DIR, "figures", "standalone_rerank")
 LEGENDS_DIR = os.path.join(FIGURES_DIR, "legends")
 
 os.makedirs(FIGURES_DIR, exist_ok=True)
 os.makedirs(LEGENDS_DIR, exist_ok=True)
 
 # ── Styles ─────────────────────────────────────────────────────
-# Marker is determined by compression rate.
+# Color encodes algorithm identity (same palette as standalone.py).
 # Algorithms without param_key use a single "color".
-# Algorithms with param_key use "param_colors": {value: color} to split groups;
-# the legend entry will be "alias (param_key=value)".
+# Algorithms with param_key use "param_colors": {value: color} to split groups.
 STYLES = {
     "ProductQuantizationFaiss": {
         "alias": "PQ",
@@ -74,7 +75,7 @@ STYLES = {
 }
 
 # ── Load data ──────────────────────────────────────────────────
-# data[dataset][topk][algo][rate][group] = [(recall, qps), ...]
+# data[dataset][topk][algo][rate][group] = [(nrerank, rerank_recall, rerank_qps), ...]
 # group: value of param_key (e.g. nbit=4), or None for algos without param_key
 data = defaultdict(lambda: defaultdict(lambda: defaultdict(
        lambda: defaultdict(lambda: defaultdict(list)))))
@@ -106,13 +107,22 @@ for filepath in sorted(glob.glob(os.path.join(RESULTS_QUANTIZER_DIR, "*.json")))
         if rate not in RATE_CONFIG:
             continue
         group = entry.get("build_params", {}).get(param_key) if param_key else None
+
         for sr in entry.get("search_results", []):
             topk    = sr.get("search_params", {}).get("topk")
             metrics = sr.get("metrics", {})
-            recall  = metrics.get("recall")
-            qps     = metrics.get("queries_per_second")
-            if topk is not None and recall is not None and qps is not None:
-                data[ds_match][topk][algo][rate][group].append((recall, qps))
+            rerank_results = metrics.get("rerank_results", [])
+            if topk is None or not rerank_results:
+                continue
+
+            for rr in rerank_results:
+                nrerank    = rr.get("nrerank")
+                rr_recall  = rr.get("rerank_recall")
+                rr_qps     = rr.get("rerank_queries_per_second")
+                if nrerank is not None and rr_recall is not None and rr_qps is not None:
+                    data[ds_match][topk][algo][rate][group].append(
+                        (nrerank, rr_recall, rr_qps)
+                    )
 
 
 # ── Helpers ────────────────────────────────────────────────────
@@ -144,94 +154,75 @@ def _save_handles(handles, stem, ncol):
     plt.close(fig_leg)
 
 
-def save_legend(algo_handles, rate_handles, algo_rates, stem):
-    # Color legend: each entry shows only the marker shapes that exist for that group
-    color_handles = []
-    color_labels  = []
-    for leg_key, handle in algo_handles.items():
-        color      = handle.get_color()
-        rates_present = algo_rates.get(leg_key, set())
-        # Keep only markers for rates that actually have data, in RATE_CONFIG order
-        sub = tuple(
-            matplotlib.lines.Line2D([], [], linestyle="none",
-                                    marker=rc["marker"], color=color, markersize=7)
-            for rate, rc in RATE_CONFIG.items()
-            if rate in rates_present
-        )
-        color_handles.append(sub)
-        color_labels.append(handle.get_label())
+def save_legend(algo_handles, rate_handles, stem):
+    # Color legend: one solid line per algorithm/group, uniform style (no per-rate variation).
+    _save_handles(
+        list(algo_handles.values()),
+        stem + "_color",
+        ncol=max(len(algo_handles), 1),
+    )
 
-    if color_handles:
-        fig_leg = plt.figure()
-        legend = fig_leg.legend(
-            color_handles, color_labels,
-            loc="center",
-            ncol=max(len(color_handles), 1),
-            frameon=False,
-            fontsize=12,
-            handler_map={tuple: HandlerTuple(ndivide=None, pad=0.5)},
-        )
-        fig_leg.canvas.draw()
-        bbox = legend.get_window_extent().transformed(
-            fig_leg.dpi_scale_trans.inverted()
-        )
-        fig_leg.savefig(stem + "_color.pdf", format="pdf", bbox_inches=bbox, pad_inches=0.05)
-        fig_leg.savefig(stem + "_color.png", format="png", dpi=150, bbox_inches=bbox, pad_inches=0.05)
-        print(f"[OK] Saved: {stem}_color.pdf / .png")
-        plt.close(fig_leg)
-
-    # Marker legend: one entry per compression rate
+    # Line-style legend: one entry per compression rate.
     _save_handles(
         list(rate_handles.values()),
-        stem + "_marker",
+        stem + "_linestyle",
         ncol=len(rate_handles),
     )
 
 
 # ── Plot ───────────────────────────────────────────────────────
-# algo_handles / rate_handles are shared across all datasets for a unified legend
-algo_handles = {}
-rate_handles = {}
-algo_rates   = {}   # leg_key -> set of rates that actually have data
+# algo_handles / rate_handles are shared across all datasets for a unified legend.
+algo_handles = {}   # leg_key -> Line2D (color legend)
+rate_handles = {}   # rate   -> Line2D (line-style legend)
 
 for dataset, topk_data in sorted(data.items()):
     for topk, algo_data in sorted(topk_data.items()):
-        fig, ax = plt.subplots(figsize=(9, 6))
+        for rate, rc in RATE_CONFIG.items():
+            fig, ax = plt.subplots(figsize=(9, 6))
 
-        # Collect QPS of all points that will be drawn
-        plotted_qps = [
-            qps
-            for _, rate_map in algo_data.items()
-            for rate, group_map in rate_map.items()
-            if rate in RATE_CONFIG
-            for points in group_map.values()
-            for _, qps in points
-        ]
-        use_log = plotted_qps and (max(plotted_qps) / max(min(plotted_qps), 1e-9)) > 10
+            # Determine y-axis scale for this rate only
+            plotted_qps = [
+                rr_qps
+                for _, rate_map in algo_data.items()
+                if rate in rate_map
+                for points in rate_map[rate].values()
+                for _, rr_recall, rr_qps in points
+                if RECALL_MIN is None or rr_recall >= RECALL_MIN
+            ]
+            use_log = plotted_qps and (max(plotted_qps) / max(min(plotted_qps), 1e-9)) > 10
 
-        for algo, rate_map in sorted(algo_data.items()):
-            style     = STYLES[algo]
-            param_key = style.get("param_key")
-            alias     = style.get("alias", algo)
-
-            for rate, rc in RATE_CONFIG.items():
+            for algo, rate_map in sorted(algo_data.items()):
                 if rate not in rate_map:
                     continue
+                style     = STYLES[algo]
+                param_key = style.get("param_key")
+                alias     = style.get("alias", algo)
+
                 for group, points in sorted(rate_map[rate].items(),
                                             key=lambda kv: (kv[0] is None, kv[0])):
-                    # Color
+                    # Resolve color
                     if param_key and group is not None:
                         color = style["param_colors"].get(group, "#999999")
                     else:
                         color = style["color"]
 
-                    recalls  = [p[0] for p in points]
-                    qps_vals = [p[1] for p in points]
-                    ax.scatter(recalls, qps_vals,
-                               marker=rc["marker"], color=color,
-                               s=SCATTER_MARKER_SIZE, alpha=0.7)
+                    # Sort by nrerank so the line is drawn in order
+                    pts_sorted = sorted(points, key=lambda p: p[0])
+                    if RECALL_MIN is not None:
+                        pts_sorted = [p for p in pts_sorted if p[1] >= RECALL_MIN]
+                    if not pts_sorted:
+                        continue
+                    recalls  = [p[1] for p in pts_sorted]
+                    qps_vals = [p[2] for p in pts_sorted]
 
-                    # Legend entries (accumulated once across all datasets)
+                    ax.plot(recalls, qps_vals,
+                            color=color,
+                            linestyle=rc["linestyle"],
+                            linewidth=LINE_WIDTH,
+                            marker="o", markersize=4,
+                            alpha=0.85)
+
+                    # Accumulate legend entries (once across all datasets)
                     if param_key and group is not None:
                         leg_key   = (algo, group)
                         leg_label = f"{alias} ({param_key}={group})"
@@ -240,34 +231,37 @@ for dataset, topk_data in sorted(data.items()):
                         leg_label = alias
 
                     if leg_key not in algo_handles:
+                        # Solid line with algo color; uniform marker for all entries
                         algo_handles[leg_key] = matplotlib.lines.Line2D(
-                            [], [], linestyle="none", marker="o",
-                            color=color, markersize=7, label=leg_label,
+                            [], [], linestyle="-", color=color,
+                            linewidth=LINE_WIDTH,
+                            marker="o", markersize=4,
+                            label=leg_label,
                         )
-                    algo_rates.setdefault(leg_key, set()).add(rate)
+
                     if rate not in rate_handles:
                         rate_handles[rate] = matplotlib.lines.Line2D(
-                            [], [], linestyle="none", marker=rc["marker"],
-                            color="black", markersize=7, label=rc["suffix"],
+                            [], [], linestyle=rc["linestyle"], color="black",
+                            linewidth=LINE_WIDTH, label=rc["suffix"],
                         )
 
-        if use_log:
-            ax.set_yscale("log")
-            ax.yaxis.set_major_locator(
-                matplotlib.ticker.LogLocator(base=10, subs=[1, 2, 5]))
-            ax.yaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter())
-            ax.yaxis.get_major_formatter().set_scientific(False)
+            if use_log:
+                ax.set_yscale("log")
+                ax.yaxis.set_major_locator(
+                    matplotlib.ticker.LogLocator(base=10, subs=[1, 2, 5]))
+                ax.yaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter())
+                ax.yaxis.get_major_formatter().set_scientific(False)
 
-        ax.set_xlabel(f"Recall@{topk}")
-        ax.set_ylabel("Queries per Second")
-        # ax.set_title(f"{dataset}  —  top{topk}")
-        ax.grid(True, which="both", linestyle="--", alpha=0.5)
+            ax.set_xlabel(f"Recall@{topk}")
+            ax.set_ylabel("Queries per Second")
+            ax.grid(True, which="both", linestyle="--", alpha=0.5)
 
-        fig.tight_layout()
-        stem = os.path.join(FIGURES_DIR, f"{dataset}_top{topk}_by_compression_rate")
-        save_figure(fig, stem)
-        plt.close(fig)
+            fig.tight_layout()
+            stem = os.path.join(FIGURES_DIR,
+                                f"{dataset}_top{topk}_{rc['suffix']}_rerank")
+            save_figure(fig, stem)
+            plt.close(fig)
 
 # One shared legend for all datasets and topk values
-save_legend(algo_handles, rate_handles, algo_rates,
-            os.path.join(LEGENDS_DIR, "standalone_legend"))
+save_legend(algo_handles, rate_handles,
+            os.path.join(LEGENDS_DIR, "standalone_rerank_legend"))
