@@ -31,9 +31,9 @@ KNOWN_DATASETS = [
 
 # Compression rates: line style + marker both encode rate.
 RATE_CONFIG = {
-    0.03125: {"suffix": "32x", "linestyle": ":",  "marker": "^"},
+    0.03125: {"suffix": "32x", "linestyle": ":",  "marker": "o"},
     0.0625:  {"suffix": "16x", "linestyle": "--", "marker": "s"},
-    0.125:   {"suffix": "8x",  "linestyle": "-",  "marker": "o"},
+    0.125:   {"suffix": "8x",  "linestyle": "-",  "marker": "^"},
 }
 
 LINE_WIDTH = 1.8
