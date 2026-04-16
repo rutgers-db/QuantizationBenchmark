@@ -8,6 +8,7 @@
 #include <immintrin.h>
 #endif
 #include <limits>
+#include <queue>
 #include <stdexcept>
 #include <thread>
 
@@ -293,44 +294,66 @@ int OSQIndex::dot_uint8(const uint8_t* a, const uint8_t* b, size_t n) {
 }
 
 int OSQIndex::dot_int4_with_packed_doc(const uint8_t* q, const uint8_t* packed_doc, size_t dims) {
-#if defined(__AVX2__)
   size_t i = 0;
-  __m256i acc = _mm256_setzero_si256();
-  const __m128i nibble_mask = _mm_set1_epi8(0x0F);
-  const __m256i ones = _mm256_set1_epi16(1);
+  int s = 0;
 
-  for (; i + 16 <= dims; i += 16) {
-    const __m128i packed = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(packed_doc + i / 2));
-    const __m128i lo = _mm_and_si128(packed, nibble_mask);
-    const __m128i hi = _mm_and_si128(_mm_srli_epi16(packed, 4), nibble_mask);
-    const __m128i unpacked = _mm_unpacklo_epi8(lo, hi);
-    const __m128i q16 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(q + i));
-
-    const __m256i q16_wide = _mm256_cvtepu8_epi16(q16);
-    const __m256i d16_wide = _mm256_cvtepu8_epi16(unpacked);
-    const __m256i prod = _mm256_mullo_epi16(q16_wide, d16_wide);
-    acc = _mm256_add_epi32(acc, _mm256_madd_epi16(prod, ones));
+#if defined(__AVX512F__) && defined(__AVX512BW__)
+  {
+    __m512i acc512 = _mm512_setzero_si512();
+    const __m512i ones512 = _mm512_set1_epi16(1);
+    const __m128i nibble_mask128 = _mm_set1_epi8(0x0F);
+    for (; i + 32 <= dims; i += 32) {
+      // Load 16 packed bytes = 32 nibbles
+      const __m128i packed = _mm_loadu_si128(
+          reinterpret_cast<const __m128i*>(packed_doc + i / 2));
+      const __m128i lo = _mm_and_si128(packed, nibble_mask128);
+      const __m128i hi = _mm_and_si128(_mm_srli_epi16(packed, 4), nibble_mask128);
+      // Interleave: [lo0,hi0,lo1,hi1,...] = dims[i..i+31] as uint8
+      const __m128i unp_lo = _mm_unpacklo_epi8(lo, hi);
+      const __m128i unp_hi = _mm_unpackhi_epi8(lo, hi);
+      const __m256i unpacked = _mm256_set_m128i(unp_hi, unp_lo);
+      // Load 32 query bytes
+      const __m256i qv = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(q + i));
+      // Zero-extend 32 uint8 → 32 int16 and multiply-accumulate
+      const __m512i q16 = _mm512_cvtepu8_epi16(qv);
+      const __m512i d16 = _mm512_cvtepu8_epi16(unpacked);
+      const __m512i prod = _mm512_mullo_epi16(q16, d16);
+      acc512 = _mm512_add_epi32(acc512, _mm512_madd_epi16(prod, ones512));
+    }
+    s = _mm512_reduce_add_epi32(acc512);
   }
+#endif
 
-  alignas(32) int32_t lanes[8];
-  _mm256_store_si256(reinterpret_cast<__m256i*>(lanes), acc);
-  int s = lanes[0] + lanes[1] + lanes[2] + lanes[3] +
-          lanes[4] + lanes[5] + lanes[6] + lanes[7];
+#if defined(__AVX2__)
+  {
+    __m256i acc = _mm256_setzero_si256();
+    const __m128i nibble_mask = _mm_set1_epi8(0x0F);
+    const __m256i ones = _mm256_set1_epi16(1);
+    for (; i + 16 <= dims; i += 16) {
+      const __m128i packed = _mm_loadl_epi64(
+          reinterpret_cast<const __m128i*>(packed_doc + i / 2));
+      const __m128i lo = _mm_and_si128(packed, nibble_mask);
+      const __m128i hi = _mm_and_si128(_mm_srli_epi16(packed, 4), nibble_mask);
+      const __m128i unpacked = _mm_unpacklo_epi8(lo, hi);
+      const __m128i q16_128 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(q + i));
+      const __m256i q16_wide = _mm256_cvtepu8_epi16(q16_128);
+      const __m256i d16_wide = _mm256_cvtepu8_epi16(unpacked);
+      const __m256i prod = _mm256_mullo_epi16(q16_wide, d16_wide);
+      acc = _mm256_add_epi32(acc, _mm256_madd_epi16(prod, ones));
+    }
+    alignas(32) int32_t lanes[8];
+    _mm256_store_si256(reinterpret_cast<__m256i*>(lanes), acc);
+    s += lanes[0] + lanes[1] + lanes[2] + lanes[3] +
+         lanes[4] + lanes[5] + lanes[6] + lanes[7];
+  }
+#endif
+
   for (; i < dims; ++i) {
     const uint8_t p = packed_doc[i / 2];
     const uint8_t d = (i % 2 == 0) ? (p & 0x0F) : ((p >> 4) & 0x0F);
     s += static_cast<int>(q[i]) * static_cast<int>(d);
   }
   return s;
-#else
-  int s = 0;
-  for (size_t i = 0; i < dims; ++i) {
-    const uint8_t p = packed_doc[i / 2];
-    const uint8_t d = (i % 2 == 0) ? (p & 0x0F) : ((p >> 4) & 0x0F);
-    s += static_cast<int>(q[i]) * static_cast<int>(d);
-  }
-  return s;
-#endif
 }
 
 int OSQIndex::dot_int4_with_binary_doc_transposed(
@@ -463,10 +486,12 @@ void OSQIndex::search(size_t nq, const float* queries, size_t k, float* distance
       const float sy = static_cast<float>(eq.corr.quantized_component_sum);
       const float q_add = eq.corr.additional_correction;
 
-      std::vector<SearchResult> topk;
-      topk.reserve(k);
-      float worst_score = -std::numeric_limits<float>::infinity();
-      size_t worst_idx = 0;
+      // Min-heap: top() is always the worst (smallest) score in current top-k.
+      // O(log k) insertion vs O(k) linear scan.
+      auto pq_cmp = [](const SearchResult& a, const SearchResult& b) {
+        return a.score > b.score;
+      };
+      std::priority_queue<SearchResult, std::vector<SearchResult>, decltype(pq_cmp)> pq(pq_cmp);
 
       for (size_t i = 0; i < corrections_.size(); ++i) {
         if (i + kPrefetchDistance < corrections_.size()) {
@@ -515,31 +540,19 @@ void OSQIndex::search(size_t nq, const float* queries, size_t k, float* distance
           }
         }
 
-        if (topk.size() < k) {
-          topk.push_back(SearchResult{score, static_cast<idx_t>(i)});
-          if (topk.size() == k) {
-            worst_idx = 0;
-            worst_score = topk[0].score;
-            for (size_t t = 1; t < k; ++t) {
-              if (topk[t].score < worst_score) {
-                worst_score = topk[t].score;
-                worst_idx = t;
-              }
-            }
-          }
-          continue;
+        if (pq.size() < k) {
+          pq.push(SearchResult{score, static_cast<idx_t>(i)});
+        } else if (score > pq.top().score) {
+          pq.pop();
+          pq.push(SearchResult{score, static_cast<idx_t>(i)});
         }
+      }
 
-        if (score <= worst_score) continue;
-        topk[worst_idx] = SearchResult{score, static_cast<idx_t>(i)};
-        worst_idx = 0;
-        worst_score = topk[0].score;
-        for (size_t t = 1; t < k; ++t) {
-          if (topk[t].score < worst_score) {
-            worst_score = topk[t].score;
-            worst_idx = t;
-          }
-        }
+      std::vector<SearchResult> topk;
+      topk.reserve(pq.size());
+      while (!pq.empty()) {
+        topk.push_back(pq.top());
+        pq.pop();
       }
 
       std::sort(topk.begin(), topk.end(), [](const SearchResult& a, const SearchResult& b) {

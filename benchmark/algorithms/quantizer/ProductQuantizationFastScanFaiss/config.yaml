@@ -9,7 +9,7 @@ sift-128-euclidean:
     space: "l2"
     nthread: 16
   build:
-    nsubvec: [32, 64]
+    nsubvec: [32, 64, 128]
     nbit: [4] # Only bit = 4 allowed
   search:
     - topk: 100
@@ -24,7 +24,7 @@ gist-960-euclidean:
     space: "l2"
     nthread: 16
   build:
-    nsubvec: [240,480]
+    nsubvec: [240,480, 960]
     nbit: [4] # Only bit = 4 allowed
   search:
     - topk: 100
@@ -39,7 +39,7 @@ audio-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsubvec: [32, 64]
+    nsubvec: [32, 64, 128]
     nbit: [4]
   search:
     - topk: 100
@@ -54,7 +54,7 @@ video-1024-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsubvec: [256, 512]
+    nsubvec: [256, 512, 1024]
     nbit: [4]
   search:
     - topk: 100
@@ -69,7 +69,7 @@ text2image-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsubvec: [50, 100]
+    nsubvec: [50, 100, 200]
     nbit: [4]
   search:
     - topk: 100
@@ -84,7 +84,7 @@ paper-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsubvec: [50, 100]
+    nsubvec: [50, 100, 200]
     nbit: [4]
   search:
     - topk: 100

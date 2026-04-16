@@ -15,7 +15,8 @@ RUN pip install --no-cache-dir \
     pyyaml \
     psutil \
     pybind11 \
-    faiss-cpu
+    faiss-cpu \
+    threadpoolctl
 
 COPY benchmark/ /benchmark/
 COPY benchmark/algorithms/${ALGO_TYPE}/${ALGO_NAME}/ /algorithms/${ALGO_TYPE}/${ALGO_NAME}/

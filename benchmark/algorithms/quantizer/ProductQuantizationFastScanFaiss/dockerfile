@@ -15,7 +15,8 @@ RUN pip install --no-cache-dir \
     h5py \
     pyyaml \
     psutil \
-    faiss-cpu
+    faiss-cpu \
+    threadpoolctl
 
 # Copy the benchmark framework code
 COPY benchmark/ /benchmark/
