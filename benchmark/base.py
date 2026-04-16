@@ -1,8 +1,65 @@
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
-from typing import List, Tuple
+from threadpoolctl import threadpool_limits
+from typing import Tuple
 import os
 
+
+def _rerank_nthread(quantizer) -> int:
+    n = getattr(quantizer, "nthread", None)
+    if isinstance(n, (int, float)) and int(n) > 0:
+        return int(n)
+    return int(os.environ.get("OMP_NUM_THREADS", 0)) or (os.cpu_count() or 1)
+
+
+def _parallel_l2_topk(
+    I: np.ndarray,
+    selected: np.ndarray,
+    queries: np.ndarray,
+    topk: int,
+    nthread: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Parallel exact-L2 rerank of per-query candidate sets.
+
+    `selected` has shape (nq, nrerank, d); `I` has shape (nq, nrerank) with
+    `-1` marking invalid candidates. Returns the top-k ids and distances.
+
+    Parallelism: split the query axis into `nthread` chunks, process each
+    chunk in a worker thread, and pin the BLAS pool to 1 thread inside a
+    worker so the outer thread pool and inner BLAS pool don't oversubscribe.
+    The q·c term inside the L2 identity is a batched BLAS matmul, which
+    is the only computation worth parallelizing at this scale.
+    """
+    nq, nrerank = I.shape
+    k = min(int(topk), int(nrerank))
+    out_I = np.full((nq, topk), -1, dtype=np.int64)
+    out_D = np.full((nq, topk), np.inf, dtype=np.float32)
+    if nq == 0 or k <= 0:
+        return out_I, out_D
+
+    Q = queries if queries.dtype == np.float32 else queries.astype(np.float32, copy=False)
+
+    def rerank_chunk(start: int, end: int) -> None:
+        C = selected[start:end]
+        Qc = Q[start:end]
+        Ic = I[start:end]
+        c2 = np.einsum("ijk,ijk->ij", C, C)
+        q2 = np.einsum("ij,ij->i", Qc, Qc)[:, None]
+        qc = np.matmul(C, Qc[:, :, None])[:, :, 0]
+        D = np.sqrt(np.maximum(c2 + q2 - 2.0 * qc, 0.0)).astype(np.float32, copy=False)
+        D = np.where(Ic >= 0, D, np.inf)
+        order = np.argsort(D, axis=1)[:, :k]
+        out_I[start:end, :k] = np.take_along_axis(Ic, order, axis=1)
+        out_D[start:end, :k] = np.take_along_axis(D, order, axis=1)
+
+    workers = max(1, min(int(nthread), nq))
+    step = max(1, (nq + workers - 1) // workers)
+    with threadpool_limits(limits=1):
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            list(ex.map(lambda s: rerank_chunk(s, min(s + step, nq)), range(0, nq, step)))
+    return out_I, out_D
 
 
 class BaseQuantizer(ABC):
@@ -146,107 +203,52 @@ class BaseQuantizer(ABC):
 
     def searchAndRerank(self, nq: int, queries: np.ndarray, topk: int, nrerank: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Search for the top-k nearest neighbors for each query with reranking.
-
-        This default implementation:
-        1. Calls query() with nrerank as topk to get candidate neighbors
-        2. Reranks candidates using exact L2 distance
-        3. Returns top-k results after reranking
-
-        Subclasses can override this for custom reranking strategies.
-
-        Args:
-            nq: Number of query vectors
-            queries: Query vectors of shape (nq, d) where d is the dimensionality
-            topk: Number of nearest neighbors to return
-            nrerank: Number of neighbors to rerank using exact distance
-            **search_params: Optional search-time parameters (e.g., nprobe for IVF)
-
-        Returns:
-            Tuple[np.ndarray, np.ndarray]:
-                - I: Indices of nearest neighbors, shape (nq, topk)
-                - D: Distances to nearest neighbors, shape (nq, topk)
+        Approximate-search + exact-L2 rerank, parallelized across `nthread`
+        workers via `_parallel_l2_topk`.
         """
-        if self._original_data is None:
+        data = self._original_data if getattr(self, "_original_data", None) is not None else getattr(self, "data", None)
+        if data is None:
             raise RuntimeError(
                 "Original data not available for reranking. "
-                "Subclass must either: (1) set self._original_data in fit(), or "
-                "(2) override search_and_rerank() method."
+                "Subclass must set self._original_data in fit() or override searchAndRerank()."
             )
-
-        # Step 1: Get nrerank candidates using approximate search
-        I_candidates, _ = self.query(nq, queries, nrerank, **search_params)
-
-        # Step 2: Rerank using exact L2 distance
-        prepared_candidates = self.prepareRerankCandidates(queries, I_candidates)
-        return self.rerankPreparedCandidates(queries, prepared_candidates, nrerank, topk)
+        I, _ = self.query(nq, queries, nrerank, **search_params)
+        safe_I = np.where(I >= 0, I, 0)
+        selected = data[safe_I].astype(np.float32, copy=False)
+        return _parallel_l2_topk(I, selected, queries, topk, _rerank_nthread(self))
 
     def prepareRerankCandidates(
         self,
         queries: np.ndarray,
         candidate_indices: np.ndarray,
-    ) -> List[Tuple[np.ndarray, np.ndarray]]:
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Materialize candidate IDs and vectors once so multiple rerank passes can
-        reuse them without repeating setup work.
+        Gather candidate IDs and their original vectors as uniform (nq, nrerank)
+        and (nq, nrerank, d) arrays.
         """
-        original_data = getattr(self, "_original_data", None)
-        if original_data is None:
-            original_data = getattr(self, "data", None)
-
-        if original_data is None:
+        data = self._original_data if getattr(self, "_original_data", None) is not None else getattr(self, "data", None)
+        if data is None:
             raise RuntimeError(
                 "Original data not available for reranking. "
                 "Quantizer must expose self._original_data or self.data."
             )
-
-        prepared_candidates = []
-
-        for i in range(candidate_indices.shape[0]):
-            valid_mask = candidate_indices[i] >= 0
-            valid_indices = candidate_indices[i][valid_mask]
-            candidate_vectors = np.ascontiguousarray(original_data[valid_indices].astype(np.float32))
-            prepared_candidates.append((valid_indices, candidate_vectors))
-
-        return prepared_candidates
+        safe_I = np.where(candidate_indices >= 0, candidate_indices, 0)
+        selected = data[safe_I].astype(np.float32, copy=False)
+        return candidate_indices, selected
 
     def rerankPreparedCandidates(
         self,
         queries: np.ndarray,
-        prepared_candidates: List[Tuple[np.ndarray, np.ndarray]],
+        prepared_candidates: Tuple[np.ndarray, np.ndarray],
         nrerank: int,
         topk: int
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Rerank from previously prepared candidates using Faiss exact KNN.
+        Exact-L2 rerank on prepared (ids, vectors) arrays of shape
+        (nq, nrerank) and (nq, nrerank, d), parallelized across `nthread`.
         """
-        import faiss
-
-        nq = queries.shape[0]
-        I_reranked = np.full((nq, topk), -1, dtype=np.int64)
-        D_reranked = np.full((nq, topk), np.inf, dtype=np.float32)
-
-        for i in range(nq):
-            valid_indices, candidate_vectors = prepared_candidates[i]
-            if valid_indices.size == 0:
-                continue
-
-            query_vector = np.ascontiguousarray(queries[i:i + 1].astype(np.float32))
-            active_count = min(nrerank, valid_indices.size)
-            active_indices = valid_indices[:active_count]
-            active_vectors = candidate_vectors[:active_count]
-            distances_sq, local_indices = faiss.knn(query_vector, active_vectors, min(topk, active_count))
-
-            local_indices = local_indices[0]
-            valid_local_mask = local_indices >= 0
-            selected_indices = active_indices[local_indices[valid_local_mask]]
-            selected_distances = np.sqrt(np.maximum(distances_sq[0][valid_local_mask], 0.0)).astype(np.float32)
-            result_count = selected_indices.shape[0]
-
-            I_reranked[i, :result_count] = selected_indices
-            D_reranked[i, :result_count] = selected_distances
-
-        return I_reranked, D_reranked
+        I, selected = prepared_candidates
+        return _parallel_l2_topk(I, selected, queries, topk, _rerank_nthread(self))
 
 
 class BaseDimReduction(ABC):
