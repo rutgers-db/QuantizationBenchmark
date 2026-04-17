@@ -252,6 +252,7 @@ public:
             const PID* ids = pcluster.ids();
             for (size_t j = 0; j < pcluster.num_vec_; j++) {
                 if (ids[j] == static_cast<PID>(i)) {
+                    // compAccurateDist requires compFastDist to be called first for the
                     // containing block, so the LUT's ip_xb_qprime_ state is populated.
                     __m512 cd[2];
                     estimator.compFastDist(j / KFastScanSize, cd);

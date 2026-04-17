@@ -25,7 +25,6 @@ RUN sed -i 's/if (num_bits_ > 1) {/if (num_bits_ >= 1) {/' \
     /opt/SAQ/saqlib/quantization/caq/caq_encoder.hpp && \
     grep -q "num_bits_ >= 1" /opt/SAQ/saqlib/quantization/caq/caq_encoder.hpp
 
-
 # Install Python dependencies including pybind11
 RUN pip install --no-cache-dir \
     numpy \

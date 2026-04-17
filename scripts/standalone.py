@@ -66,10 +66,10 @@ STYLES = {
         "param_colors": {4: "#9467bd", 8: "#c5b0d5"},
     },
     "ProductQuantizationFastScanFaiss": {"alias": "PQFast", "color": "#7f7f7f"},
-    "ScalarQuatizationFaiss":           {"alias": "SQ",     "color": "#ff7f0e"},
+    "ScalarQuatizationFaiss":           {"alias": "SQ",     "color": "#08087b"},
     "OptimizedScalarQuantization":      {"alias": "OSQ",    "color": "#8c564b"},
     "RabitQLibrary":                    {"alias": "RabitQ", "color": "#d62728"},
-    "SAQ_nlist1":                       {"alias": "SAQ",    "color": "#f39c12"},
+    "SAQ":                       {"alias": "SAQ",    "color": "#066909"},
     "TurboQuant":                       {"alias": "Turbo",  "color": "#00acc1"},
 }
 
@@ -264,7 +264,7 @@ for dataset, topk_data in sorted(data.items()):
         ax.grid(True, which="both", linestyle="--", alpha=0.5)
 
         fig.tight_layout()
-        stem = os.path.join(FIGURES_DIR, f"{dataset}_top{topk}_by_compression_rate")
+        stem = os.path.join(FIGURES_DIR, f"{dataset}_top{topk}")
         save_figure(fig, stem)
         plt.close(fig)
 

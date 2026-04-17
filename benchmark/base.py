@@ -70,6 +70,61 @@ def _parallel_l2_topk(
             list(ex.map(lambda s: rerank_chunk(s, min(s + step, nq)), range(0, nq, step)))
     return out_I, out_D
 
+def _rerank_nthread(quantizer) -> int:
+    n = getattr(quantizer, "nthread", None)
+    if isinstance(n, (int, float)) and int(n) > 0:
+        return int(n)
+    return int(os.environ.get("OMP_NUM_THREADS", 0)) or (os.cpu_count() or 1)
+
+
+def _parallel_l2_topk(
+    I: np.ndarray,
+    selected: np.ndarray,
+    queries: np.ndarray,
+    topk: int,
+    nthread: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Parallel exact-L2 rerank of per-query candidate sets.
+
+    `selected` has shape (nq, nrerank, d); `I` has shape (nq, nrerank) with
+    `-1` marking invalid candidates. Returns the top-k ids and distances.
+
+    Parallelism: split the query axis into `nthread` chunks, process each
+    chunk in a worker thread, and pin the BLAS pool to 1 thread inside a
+    worker so the outer thread pool and inner BLAS pool don't oversubscribe.
+    The q·c term inside the L2 identity is a batched BLAS matmul, which
+    is the only computation worth parallelizing at this scale.
+    """
+    nq, nrerank = I.shape
+    k = min(int(topk), int(nrerank))
+    out_I = np.full((nq, topk), -1, dtype=np.int64)
+    out_D = np.full((nq, topk), np.inf, dtype=np.float32)
+    if nq == 0 or k <= 0:
+        return out_I, out_D
+
+    Q = queries if queries.dtype == np.float32 else queries.astype(np.float32, copy=False)
+
+    def rerank_chunk(start: int, end: int) -> None:
+        C = selected[start:end]
+        Qc = Q[start:end]
+        Ic = I[start:end]
+        c2 = np.einsum("ijk,ijk->ij", C, C)
+        q2 = np.einsum("ij,ij->i", Qc, Qc)[:, None]
+        qc = np.matmul(C, Qc[:, :, None])[:, :, 0]
+        D = np.sqrt(np.maximum(c2 + q2 - 2.0 * qc, 0.0)).astype(np.float32, copy=False)
+        D = np.where(Ic >= 0, D, np.inf)
+        order = np.argsort(D, axis=1)[:, :k]
+        out_I[start:end, :k] = np.take_along_axis(Ic, order, axis=1)
+        out_D[start:end, :k] = np.take_along_axis(D, order, axis=1)
+
+    workers = max(1, min(int(nthread), nq))
+    step = max(1, (nq + workers - 1) // workers)
+    with threadpool_limits(limits=1):
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            list(ex.map(lambda s: rerank_chunk(s, min(s + step, nq)), range(0, nq, step)))
+    return out_I, out_D
+
 
 class BaseQuantizer(ABC):
     """

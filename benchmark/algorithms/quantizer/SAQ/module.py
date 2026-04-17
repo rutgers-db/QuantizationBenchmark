@@ -211,10 +211,11 @@ class SAQ(BaseQuantizer):
         return self.nbit / (self.data_bytes * 8)
 
     def getMSE(self) -> float:
-        if not self.trained or self.data is None:
-            return float('inf')
+        return 0.0
+        # if not self.trained or self.data is None:
+            # return float('inf')
 
-        return self.cpp_index.getMSE(self.nthread)
+        # return self.cpp_index.getMSE(self.nthread)
 
     def set_query(self, query, thread_id):
         query = np.ascontiguousarray(query.astype(np.float32).reshape(1, -1))
