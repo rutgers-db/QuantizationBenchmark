@@ -2,6 +2,9 @@ import numpy as np
 from typing import Tuple
 import psutil
 import sys
+import os
+
+import faiss
 
 sys.path.insert(0, '/benchmark')
 from benchmark.base import BaseQuantizer
@@ -11,6 +14,10 @@ try:
 except ImportError as e:
     print(f"Warning: Could not import turbo_quant_cpp: {e}")
     turbo_quant_cpp = None
+
+
+def _max_threads() -> int:
+    return max(1, (os.cpu_count() or 1))
 
 
 class IVFTurboQuant(BaseQuantizer):
@@ -36,7 +43,7 @@ class IVFTurboQuant(BaseQuantizer):
     def __init__(self, ndim: int, bitwidth: int, data_bytes: int = 4,
                  nthread: int = 1, space: str = "l2",
                  mode: str = "mse", seed: int = 123456789,
-                 rotation_type: str = "dense",
+                 rotation_type: str = "hadamard",
                  use_data_centroid: bool = True,
                  nlist: int = 1):
         """
@@ -91,6 +98,10 @@ class IVFTurboQuant(BaseQuantizer):
     # ------------------------------------------------------------------
     def train(self, nd: int, data: np.ndarray) -> bool:
         data = np.ascontiguousarray(data, dtype=np.float32)
+        # Max out CPU threads for the Python / BLAS side; the cpp index OMP
+        # count is baked in at __init__ (it has no setter) and stays at
+        # self.nthread, which keeps query-time parallelism config-faithful.
+        faiss.omp_set_num_threads(_max_threads())
         try:
             self.cpp_index.train(data)
         except Exception as e:
@@ -106,6 +117,7 @@ class IVFTurboQuant(BaseQuantizer):
         data = np.ascontiguousarray(data, dtype=np.float32)
         self._original_data = data
         self.ndata = nd
+        faiss.omp_set_num_threads(_max_threads())
         try:
             self.cpp_index.add(data)
             self.trained = True
@@ -121,6 +133,7 @@ class IVFTurboQuant(BaseQuantizer):
               **search_params) -> Tuple[np.ndarray, np.ndarray]:
         if not self.trained:
             raise RuntimeError("Index not trained. Call fit() or train()+add() first.")
+        faiss.omp_set_num_threads(self.nthread)
         queries = np.ascontiguousarray(queries, dtype=np.float32)
         nprobe = int(search_params.get("nprobe", 1))
         nprobe = max(1, min(nprobe, self.nlist))

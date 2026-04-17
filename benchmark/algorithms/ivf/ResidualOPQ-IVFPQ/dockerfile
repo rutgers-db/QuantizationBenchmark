@@ -21,6 +21,7 @@ RUN pip install --no-cache-dir \
     h5py \
     pyyaml \
     psutil \
+    threadpoolctl \
     pybind11
 
 RUN git clone --depth 1 --branch ${FAISS_GIT_REF} https://github.com/facebookresearch/faiss.git /tmp/faiss && \

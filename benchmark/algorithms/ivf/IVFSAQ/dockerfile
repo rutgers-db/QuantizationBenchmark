@@ -19,12 +19,20 @@ RUN apt-get update && apt-get install -y \
 # Clone SAQ repository
 RUN cd /opt && git clone https://github.com/howarlii/SAQ.git
 
+# Patch CAQ encoder: allow num_bits==1 path so sign-bit codes populate base_code
+# (upstream gated with `> 1`, but packer + DP bit allocator both require the fields)
+RUN sed -i 's/if (num_bits_ > 1) {/if (num_bits_ >= 1) {/' \
+    /opt/SAQ/saqlib/quantization/caq/caq_encoder.hpp && \
+    grep -q "num_bits_ >= 1" /opt/SAQ/saqlib/quantization/caq/caq_encoder.hpp
+
+
 # Install Python dependencies including pybind11
 RUN pip install --no-cache-dir \
     numpy \
     h5py \
     pyyaml \
     psutil \
+    threadpoolctl \
     pybind11 \
     faiss-cpu
 

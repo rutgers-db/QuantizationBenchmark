@@ -3,9 +3,14 @@ import numpy as np
 from typing import Tuple
 import psutil
 import sys
+import os
 
 sys.path.insert(0, '/benchmark')
 from benchmark.base import BaseQuantizer
+
+
+def _max_threads() -> int:
+    return max(1, (os.cpu_count() or 1))
 
 
 class FaissOPQIVFPQ(BaseQuantizer):
@@ -37,8 +42,6 @@ class FaissOPQIVFPQ(BaseQuantizer):
                 f"Unsupported space '{space}'. FaissOPQIVFPQ currently supports 'l2' and 'cosine'."
             )
 
-        faiss.omp_set_num_threads(self.nthread)
-
         opq_prefix = f"OPQ{self.nsubvec}"
         if self.opq_out_dim is not None:
             opq_prefix = f"{opq_prefix}_{self.opq_out_dim}"
@@ -60,6 +63,8 @@ class FaissOPQIVFPQ(BaseQuantizer):
     def train(self, nd: int, data: np.ndarray) -> bool:
         self.ndata = int(nd)
         self.data = self._prepare_vectors(data)
+        # Max out CPU threads while learning OPQ rotation + IVF centroids + PQ codebooks.
+        faiss.omp_set_num_threads(_max_threads())
         try:
             self.index.train(self.data)
         except Exception as exc:
@@ -71,6 +76,7 @@ class FaissOPQIVFPQ(BaseQuantizer):
         self.ndata = int(nd)
         self.data = self._prepare_vectors(data)
         self._original_data = self.data
+        faiss.omp_set_num_threads(_max_threads())
         try:
             self.index.reset()
             self.index.add(self.data)
@@ -88,6 +94,7 @@ class FaissOPQIVFPQ(BaseQuantizer):
         topk: int,
         **search_params,
     ) -> Tuple[np.ndarray, np.ndarray]:
+        faiss.omp_set_num_threads(self.nthread)
         queries = self._prepare_vectors(query)
         nprobe = min(int(search_params.get("nprobe", self.nlist)), self.nlist)
         self.index_ivf.nprobe = nprobe

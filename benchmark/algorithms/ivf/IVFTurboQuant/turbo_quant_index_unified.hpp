@@ -38,8 +38,21 @@
 // Let q_eff = q−c, x_eff = x−c, with unit directions q_unit, x_unit.
 // The index approximates  s ≈ ⟨q_unit, x_unit⟩  from quantized data.
 //
-// L2 distance (bridge formula, expands (q−x)²):
-//   ‖q_eff − x_eff‖² = ‖q_eff‖² + ‖x_eff‖² − 2‖q_eff‖‖x_eff‖⟨q_unit,x_unit⟩.
+// ** Recommended: Direct L2 ADC (l2_direct=true, the default for MSE mode) **
+//   The reconstructed base vector is  x̂_eff = ‖x_eff‖ · R⁻¹[c[code_j]]_j,
+//   so  ‖q_eff − x̂_eff‖² = ‖q_eff‖² + ‖x̂_eff‖² − 2⟨q_eff, x̂_eff⟩
+//                          = ‖q_eff‖² + norm²·Σc_j² − 2·‖q_eff‖·norm·LUT_sum.
+//   norm_squares[i] stores  norm²·Σc_j²  (= ‖x̂_eff‖²) so the postprocess
+//   kernel computes the exact distance to the quantized reconstruction.
+//   Verified on SIFT-1M vs float brute-force: gap is O@100 +0.004 (int8 LUT
+//   quantization noise only), no systematic bias.
+//
+// IP→L2 bridge (legacy, l2_direct=false):
+//   ‖q_eff − x_eff‖² ≈ ‖q_eff‖² + ‖x_eff‖² − 2‖q_eff‖·norm·LUT_sum.
+//   Uses ‖x_eff‖² (true norm) instead of ‖x̂_eff‖² (reconstruction norm).
+//   Biased because MSE quantization contracts: ‖x̂_eff‖ < ‖x_eff‖. On all
+//   tested datasets the contraction bias worsens ranking vs direct L2.
+//   Disable with --no-l2-direct for ablation or reproducing old results.
 //
 // Raw IP (centroid correction restores ⟨q,x⟩ from ⟨q_eff,x_eff⟩):
 //   ⟨q,x⟩ = ⟨q_eff,x_eff⟩ + ⟨c,x⟩ + (⟨q,c⟩ − ‖c‖²)
@@ -55,8 +68,11 @@
 //   CodebookType:
 //     kGaussianLM — Pre-tabulated Lloyd–Max for N(0,1), scaled by σ = 1/√(padded_dim).
 //   Default (good recall + fast 4-bit SIMD path):
-//     bitwidth=4, kHadamard, kGaussianLM, use_data_centroid=true
+//     bitwidth=4, kHadamard, kGaussianLM, use_data_centroid=true, l2_direct=true
 //     → "nibble" path: int8 LUT + VPSHUFB shuffle.
+//     l2_direct=true is strongly recommended for L2 search (MSE mode): computes
+//     ‖q−x̂‖² exactly, outperforming the IP→L2 bridge on all tested datasets
+//     (+5–15 pp O@10 on low-dim data, zero regression on high-dim).
 //
 // CODE STRUCTURE  (bottom-up: lowest layer first, public API last)
 // ----------------------------------------------------------------
@@ -108,6 +124,7 @@ enum class SearchMetric { kInnerProduct, kL2 };
 enum class RotationType {
   kHadamard,  // structured Hadamard (V2/V3): O(d log d), pads to power-of-2
   kDense,     // Haar-random orthogonal matrix (V1): O(d²), any dimension
+  kFhtKac,    // FFHT + Kac's walk (from RaBitQ-Library): O(d log d), pads to multiple-of-64
 };
 
 enum class CodebookType {
@@ -212,6 +229,19 @@ inline std::uint64_t splitmix64(std::uint64_t& state) {
   z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
   z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
   return z ^ (z >> 31);
+}
+
+// Floor of log2(v) — largest k such that 2^k ≤ v.
+inline std::size_t floor_log2(std::size_t v) {
+  if (v == 0) return 0;
+  std::size_t r = 0;
+  while (v >>= 1) ++r;
+  return r;
+}
+
+// Round up to nearest multiple of 64 (for FhtKac SIMD alignment).
+inline std::size_t round_up_mul64(std::size_t v) {
+  return ((v + 63) / 64) * 64;
 }
 
 // Smallest power of two ≥ v (Hadamard length must be a power of two).
@@ -569,6 +599,171 @@ inline void wht_fused(const float* __restrict__ in,
 }
 #endif  // __AVX512F__
 
+// ---------------------------------------------------------------------
+// FFHT + Kac's walk rotation helpers, ported from RaBitQ-Library
+// (third_party/RaBitQ-Library/include/rabitqlib/utils/rotator.hpp).
+//
+// The signs are 4 packed Rademacher sequences (4·padded_dim/8 bytes).
+// For each of 4 rounds we: (1) XOR-flip using bit i of the sequence,
+// (2) apply FHT on the first trunc_dim coords (or last trunc_dim,
+// alternating when trunc_dim != padded_dim), (3) scale by 1/√trunc_dim.
+// When padded_dim != trunc_dim we also interleave Kac's walk butterfly
+// between the two halves. See RaBitQ docs/rotator.md for the algorithm.
+// ---------------------------------------------------------------------
+
+// XOR the sign bit of float data[i] iff flip-bit i is set. Bit i lives in
+// byte flip[i/8], bit-position (i%8). data/flip must cover `dim` floats.
+inline void fhtkac_flip_sign(const std::uint8_t* flip, float* data, std::size_t dim) {
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+  constexpr std::size_t kFloatsPerChunk = 64;
+  for (std::size_t i = 0; i < dim; i += kFloatsPerChunk) {
+    std::uint64_t mask_bits;
+    std::memcpy(&mask_bits, &flip[i / 8], sizeof(mask_bits));
+    const __mmask16 m0 = _cvtu32_mask16(static_cast<std::uint32_t>(mask_bits & 0xFFFF));
+    const __mmask16 m1 = _cvtu32_mask16(static_cast<std::uint32_t>((mask_bits >> 16) & 0xFFFF));
+    const __mmask16 m2 = _cvtu32_mask16(static_cast<std::uint32_t>((mask_bits >> 32) & 0xFFFF));
+    const __mmask16 m3 = _cvtu32_mask16(static_cast<std::uint32_t>((mask_bits >> 48) & 0xFFFF));
+    const __m512 sign_flip = _mm512_castsi512_ps(_mm512_set1_epi32(0x80000000));
+    __m512 v0 = _mm512_loadu_ps(&data[i]);
+    v0 = _mm512_mask_xor_ps(v0, m0, v0, sign_flip);
+    _mm512_storeu_ps(&data[i], v0);
+    __m512 v1 = _mm512_loadu_ps(&data[i + 16]);
+    v1 = _mm512_mask_xor_ps(v1, m1, v1, sign_flip);
+    _mm512_storeu_ps(&data[i + 16], v1);
+    __m512 v2 = _mm512_loadu_ps(&data[i + 32]);
+    v2 = _mm512_mask_xor_ps(v2, m2, v2, sign_flip);
+    _mm512_storeu_ps(&data[i + 32], v2);
+    __m512 v3 = _mm512_loadu_ps(&data[i + 48]);
+    v3 = _mm512_mask_xor_ps(v3, m3, v3, sign_flip);
+    _mm512_storeu_ps(&data[i + 48], v3);
+  }
+#elif defined(__AVX2__)
+  constexpr std::size_t kFloatsPerChunk = 32;
+  const __m256i bit_select = _mm256_setr_epi32(0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80);
+  const __m256 sign_flip = _mm256_castsi256_ps(_mm256_set1_epi32(0x80000000));
+  auto make_mask = [&](std::uint8_t byte_mask) {
+    __m256i mask_bits = _mm256_set1_epi32(byte_mask);
+    __m256i test = _mm256_and_si256(mask_bits, bit_select);
+    __m256i cmp = _mm256_cmpeq_epi32(test, bit_select);
+    return _mm256_and_ps(_mm256_castsi256_ps(cmp), sign_flip);
+  };
+  for (std::size_t i = 0; i < dim; i += kFloatsPerChunk) {
+    std::uint32_t mask_bits;
+    std::memcpy(&mask_bits, &flip[i / 8], sizeof(mask_bits));
+    for (int b = 0; b < 4; ++b) {
+      __m256 xor_mask = make_mask((mask_bits >> (b * 8)) & 0xFF);
+      __m256 v = _mm256_loadu_ps(&data[i + b * 8]);
+      v = _mm256_xor_ps(v, xor_mask);
+      _mm256_storeu_ps(&data[i + b * 8], v);
+    }
+  }
+#else
+  for (std::size_t i = 0; i < dim; ++i) {
+    const bool negate = (flip[i >> 3] >> (i & 7)) & 1u;
+    if (negate) data[i] = -data[i];
+  }
+#endif
+}
+
+// Kac's walk: in-place butterfly between the two halves. len must be even.
+inline void fhtkac_kacs_walk(float* data, std::size_t len) {
+  const std::size_t half = len / 2;
+#if defined(__AVX512F__)
+  std::size_t i = 0;
+  for (; i + 16 <= half; i += 16) {
+    __m512 x = _mm512_loadu_ps(&data[i]);
+    __m512 y = _mm512_loadu_ps(&data[i + half]);
+    _mm512_storeu_ps(&data[i],        _mm512_add_ps(x, y));
+    _mm512_storeu_ps(&data[i + half], _mm512_sub_ps(x, y));
+  }
+  for (; i < half; ++i) { float x = data[i], y = data[i + half]; data[i] = x + y; data[i + half] = x - y; }
+#else
+  for (std::size_t i = 0; i < half; ++i) {
+    float x = data[i], y = data[i + half];
+    data[i] = x + y;
+    data[i + half] = x - y;
+  }
+#endif
+}
+
+// Multiply `len` floats by scalar val.
+inline void fhtkac_vec_rescale(float* data, std::size_t len, float val) {
+#if defined(__AVX512F__)
+  const __m512 vs = _mm512_set1_ps(val);
+  std::size_t i = 0;
+  for (; i + 16 <= len; i += 16)
+    _mm512_storeu_ps(&data[i], _mm512_mul_ps(_mm512_loadu_ps(&data[i]), vs));
+  for (; i < len; ++i) data[i] *= val;
+#else
+  for (std::size_t i = 0; i < len; ++i) data[i] *= val;
+#endif
+}
+
+// In-place radix-2 FHT of length 2^log_n, stored in `data`.
+// (The RaBitQ library has specialized hand-unrolled kernels for each log_n;
+// we use the generic butterfly since this path is off the hot inner loop.)
+inline void fhtkac_fht_inplace(float* data, std::size_t log_n) {
+  const std::size_t n = std::size_t{1} << log_n;
+  for (std::size_t step = 1; step < n; step <<= 1) {
+    for (std::size_t i = 0; i < n; i += step * 2) {
+      for (std::size_t j = 0; j < step; ++j) {
+        float a = data[i + j];
+        float b = data[i + j + step];
+        data[i + j]        = a + b;
+        data[i + j + step] = a - b;
+      }
+    }
+  }
+}
+
+// Full 4-round rotation: reads `orig_dim` floats from `in`, writes
+// `padded_dim` floats to `out`. `flip` holds 4·padded_dim/8 sign bits.
+// fac = 1/√trunc_dim, where trunc_dim = 2^floor(log2(orig_dim)).
+inline void fhtkac_forward(const float* in, float* out,
+                           const std::uint8_t* flip,
+                           std::size_t orig_dim, std::size_t padded_dim,
+                           std::size_t trunc_dim, std::size_t log_trunc,
+                           float fac) {
+  std::memcpy(out, in, sizeof(float) * orig_dim);
+  std::fill(out + orig_dim, out + padded_dim, 0.0f);
+  const std::size_t stride_bytes = padded_dim / 8;
+
+  if (trunc_dim == padded_dim) {
+    for (int r = 0; r < 4; ++r) {
+      fhtkac_flip_sign(flip + r * stride_bytes, out, padded_dim);
+      fhtkac_fht_inplace(out, log_trunc);
+      fhtkac_vec_rescale(out, trunc_dim, fac);
+    }
+    return;
+  }
+
+  const std::size_t start = padded_dim - trunc_dim;
+  // round 0: FHT on first trunc_dim coords
+  fhtkac_flip_sign(flip + 0 * stride_bytes, out, padded_dim);
+  fhtkac_fht_inplace(out, log_trunc);
+  fhtkac_vec_rescale(out, trunc_dim, fac);
+  fhtkac_kacs_walk(out, padded_dim);
+  // round 1: FHT on last trunc_dim coords
+  fhtkac_flip_sign(flip + 1 * stride_bytes, out, padded_dim);
+  fhtkac_fht_inplace(out + start, log_trunc);
+  fhtkac_vec_rescale(out + start, trunc_dim, fac);
+  fhtkac_kacs_walk(out, padded_dim);
+  // round 2: first half again
+  fhtkac_flip_sign(flip + 2 * stride_bytes, out, padded_dim);
+  fhtkac_fht_inplace(out, log_trunc);
+  fhtkac_vec_rescale(out, trunc_dim, fac);
+  fhtkac_kacs_walk(out, padded_dim);
+  // round 3: last half again
+  fhtkac_flip_sign(flip + 3 * stride_bytes, out, padded_dim);
+  fhtkac_fht_inplace(out + start, log_trunc);
+  fhtkac_vec_rescale(out + start, trunc_dim, fac);
+  fhtkac_kacs_walk(out, padded_dim);
+
+  // Optional absolute-scale fix (not needed for rank-only queries, but keep
+  // for consistency with RaBitQ-Library so norms match).
+  fhtkac_vec_rescale(out, padded_dim, 0.25f);
+}
+
 // ⟨a,b⟩ with AVX-512 FMA when n is large; Θ(n) time, O(1) extra space.
 inline float dot_product(const float* a, const float* b, std::size_t n) {
   __m512 acc = _mm512_setzero_ps();
@@ -620,11 +815,19 @@ struct Transform {
   std::vector<float>        signs;       // Hadamard: dim random ±1 (float)
   std::vector<std::uint32_t> sign_masks; // Hadamard: XOR bitmasks (0x80000000 → flip)
 
+  // FhtKac state (see detail::fhtkac_forward)
+  std::vector<std::uint8_t> fhtkac_flip;   // 4·padded_dim/8 packed sign bits
+  std::size_t fhtkac_orig_dim  = 0;        // original input dim (≤ padded dim)
+  std::size_t fhtkac_trunc_dim = 0;        // 2^floor(log2(orig_dim))
+  std::size_t fhtkac_log_trunc = 0;        // log2(trunc_dim)
+  float       fhtkac_fac       = 0.0f;     // 1/√trunc_dim
+
   // Main rotation for TurboQuant: either Hadamard pipeline or dense orthogonal M.
   // Hadamard mode uses hardcoded sign tables (kRotationSignBytes) for determinism
   // and to avoid seed-dependent reproducibility issues.  To regenerate with a
   // custom seed instead: signs[i] = (splitmix64(state) & 1) ? +1.f : -1.f.
-  void generate(RotationType t, std::size_t d, std::uint64_t seed) {
+  // orig_dim is only used by kFhtKac (padded d ≥ orig_dim, both ≡ 0 mod 64).
+  void generate(RotationType t, std::size_t d, std::uint64_t seed, std::size_t orig_dim = 0) {
     type = t; dim = d; is_gaussian = false;
     if (t == RotationType::kHadamard) {
       if (d > detail::kMaxHardcodedSigns)
@@ -634,15 +837,24 @@ struct Transform {
       sign_masks.resize(d);
       detail::unpack_sign_masks(detail::kRotationSignBytes, sign_masks.data(), d);
       matrix.clear();
+      fhtkac_flip.clear();
+    } else if (t == RotationType::kFhtKac) {
+      generate_fhtkac(d, orig_dim == 0 ? d : orig_dim, seed);
+      matrix.clear();
+      signs.clear();
+      sign_masks.clear();
     } else {
       generate_dense_orthogonal(d, seed);
       signs.clear();
       sign_masks.clear();
+      fhtkac_flip.clear();
     }
   }
 
   // QJL second linear map: Hadamard+signs (structured) or full Gaussian matrix (dense IP).
-  // Hadamard mode uses hardcoded sign tables (kQjlSignBytes).
+  // Hadamard mode uses hardcoded sign tables (kQjlSignBytes).  For kFhtKac,
+  // padded_dim may not be a power of 2 (e.g. 768), so we cannot reuse the
+  // Hadamard FWHT kernel here — fall through to the dense Gaussian path.
   void generate_qjl(RotationType t, std::size_t d, std::uint64_t seed) {
     type = t; dim = d;
     if (t == RotationType::kHadamard) {
@@ -655,6 +867,7 @@ struct Transform {
       detail::unpack_sign_masks(detail::kQjlSignBytes, sign_masks.data(), d);
       matrix.clear();
     } else {
+      // Dense and FhtKac both use a full Gaussian matrix for QJL.
       is_gaussian = true;
       matrix.resize(d * d);
       std::mt19937_64 rng(seed);
@@ -662,12 +875,15 @@ struct Transform {
       for (float& v : matrix) v = gauss(rng);
       signs.clear();
       sign_masks.clear();
+      fhtkac_flip.clear();
     }
   }
 
-  // forward: y = R x (Hadamard) or y = M x (dense).  `work` is scratch for FWHT.
+  // forward: y = R x (Hadamard/FhtKac) or y = M x (dense).  `work` is scratch.
   // Hadamard path (AVX-512): fused sign-flip + FWHT + scale via wht_fused().
   // Hadamard path (scalar fallback): 3 separate loops (sign, butterfly, scale).
+  // FhtKac path: 4 rounds of (flip_sign + FHT + rescale) ± Kac's walk.
+  // (FhtKac input is `fhtkac_orig_dim` floats; output is `dim` floats.)
   void forward(const float* in, float* out, float* work) const {
     if (type == RotationType::kHadamard) {
 #if defined(__AVX512F__)
@@ -679,6 +895,11 @@ struct Transform {
       const float scale = 1.0f / std::sqrt(static_cast<float>(dim));
       for (std::size_t i = 0; i < dim; ++i) out[i] = work[i] * scale;
 #endif
+    } else if (type == RotationType::kFhtKac) {
+      detail::fhtkac_forward(in, out, fhtkac_flip.data(),
+                             fhtkac_orig_dim, dim,
+                             fhtkac_trunc_dim, fhtkac_log_trunc,
+                             fhtkac_fac);
     } else {
       const float* mat = matrix.data();
       for (std::size_t i = 0; i < dim; ++i)
@@ -686,11 +907,33 @@ struct Transform {
     }
   }
 
-  // backward: x = Rᵀ y.  For Hadamard with same scaling, forward is its own inverse.
+  // backward: x = Rᵀ y.
+  // R = (1/√n) H D  →  Rᵀ = (1/√n) D H  (apply H first, then sign-flip, then scale).
   // Dense: multiply by Mᵀ (matrix stored row-wise, so accumulate along columns).
+  // FhtKac backward is only used by reconstruct() (cold path); we compute Rᵀ
+  // column-by-column via forward(e_j) = j-th column of R, at O(d² log d) cost.
   void backward(const float* in, float* out, float* work) const {
     if (type == RotationType::kHadamard) {
-      forward(in, out, work);
+      // scalar path (backward only used in reconstruct(), not on hot query path)
+      std::copy(in, in + dim, work);
+      detail::wht_butterfly_inplace(work, dim);
+      const float scale = 1.0f / std::sqrt(static_cast<float>(dim));
+      for (std::size_t i = 0; i < dim; ++i) out[i] = signs[i] * work[i] * scale;
+    } else if (type == RotationType::kFhtKac) {
+      // Rᵀ y : compute the j-th output (j < fhtkac_orig_dim) as ⟨column_j(R), y⟩.
+      // column_j(R) = R · e_j → forward(e_j).  Brute-force but cold path only.
+      std::vector<float> ej(fhtkac_orig_dim, 0.0f);
+      std::vector<float> col(dim, 0.0f);
+      for (std::size_t j = 0; j < fhtkac_orig_dim; ++j) {
+        ej[j] = 1.0f;
+        detail::fhtkac_forward(ej.data(), col.data(), fhtkac_flip.data(),
+                               fhtkac_orig_dim, dim,
+                               fhtkac_trunc_dim, fhtkac_log_trunc,
+                               fhtkac_fac);
+        ej[j] = 0.0f;
+        out[j] = detail::dot_product(col.data(), in, dim);
+      }
+      for (std::size_t j = fhtkac_orig_dim; j < dim; ++j) out[j] = 0.0f;
     } else {
       const float* mat = matrix.data();
       for (std::size_t i = 0; i < dim; ++i) {
@@ -701,7 +944,7 @@ struct Transform {
     }
   }
 
- 
+ private:
   // Haar-random orthogonal d×d matrix: QR decomposition of i.i.d. Gaussian A = Q R,
   // then column sign fixes so the Haar measure is correct (see standard random matrix refs).
   void generate_dense_orthogonal(std::size_t d, std::uint64_t seed) {
@@ -749,6 +992,22 @@ struct Transform {
 
     matrix.resize(d * d);
     for (std::size_t i = 0; i < d * d; ++i) matrix[i] = static_cast<float>(Q[i]);
+  }
+
+  // FhtKac setup (ported from RaBitQ-Library FhtKacRotator ctor): sample
+  // 4·padded_dim/8 random bits for the 4 sign sequences, cache trunc_dim
+  // and fac=1/√trunc_dim.  padded_d must be a multiple of 64.
+  void generate_fhtkac(std::size_t padded_d, std::size_t orig_d, std::uint64_t seed) {
+    if (padded_d % 64 != 0)
+      throw std::invalid_argument("FhtKac padded_dim must be a multiple of 64");
+    fhtkac_orig_dim  = orig_d;
+    fhtkac_trunc_dim = std::size_t{1} << detail::floor_log2(orig_d);
+    fhtkac_log_trunc = detail::floor_log2(orig_d);
+    fhtkac_fac       = 1.0f / std::sqrt(static_cast<float>(fhtkac_trunc_dim));
+    fhtkac_flip.assign(4 * padded_d / 8, 0);
+    std::uint64_t state = seed ? seed : 0xC0FFEE1234567890ULL;
+    for (auto& b : fhtkac_flip)
+      b = static_cast<std::uint8_t>(detail::splitmix64(state) & 0xFFULL);
   }
 };
 
@@ -831,6 +1090,74 @@ struct Codebook {
       }
     } else {
       qjl_scale = 1.f;
+    }
+  }
+
+  // Build quad-LUT for bitwidth=1: each entry encodes the sum of four centroid-
+  // weighted scores for a consecutive dim-quad.  Nibble index c ∈ [0,16) splits
+  // as one bit per dim: c_i = (c >> i) & 1 selects centroid[c_i] ∈ {γ_0, γ_1}
+  // for dim 4d+i.  Kernel iterates padded_dim/4 times with existing
+  // score_block128_packed_avx512bw.  Requires mse_bits == 1 and padded_dim%4==0.
+  void build_quad_lut16_int8(const float* rotated_q,
+                             std::int8_t* base_i8,
+                             float& base_scale) const {
+    const std::size_t n_quads = padded_dim / 4;
+    const float gmax = max_abs;
+    // max |quad sum| = (Σ_{i=0..3} |q[4d+i]|) · gmax over quads
+    float max_quad_abs_q = 0.f;
+    for (std::size_t dq = 0; dq < n_quads; ++dq) {
+      const float s = std::abs(rotated_q[4 * dq]) + std::abs(rotated_q[4 * dq + 1]) +
+                      std::abs(rotated_q[4 * dq + 2]) + std::abs(rotated_q[4 * dq + 3]);
+      if (s > max_quad_abs_q) max_quad_abs_q = s;
+    }
+    const float quad_max = max_quad_abs_q * gmax;
+    base_scale = (quad_max > 1e-30f) ? (quad_max / 127.f) : 1.f;
+    const float base_inv = 1.f / base_scale;
+
+    for (std::size_t dq = 0; dq < n_quads; ++dq) {
+      const float q0 = rotated_q[4 * dq];
+      const float q1 = rotated_q[4 * dq + 1];
+      const float q2 = rotated_q[4 * dq + 2];
+      const float q3 = rotated_q[4 * dq + 3];
+      for (std::size_t c = 0; c < 16; ++c) {
+        const float v0 = q0 * centroids[(c >> 0) & 1];
+        const float v1 = q1 * centroids[(c >> 1) & 1];
+        const float v2 = q2 * centroids[(c >> 2) & 1];
+        const float v3 = q3 * centroids[(c >> 3) & 1];
+        base_i8[dq * 16 + c] = detail::clamp_i8(std::lround((v0 + v1 + v2 + v3) * base_inv));
+      }
+    }
+  }
+
+  // Build pair-LUT for bitwidth=2: each entry encodes the sum of two centroid-
+  // weighted scores for a consecutive dim-pair.  Nibble index c ∈ [0,16) splits
+  // as c0 = c & 3 (dim 2d), c1 = (c >> 2) & 3 (dim 2d+1).  Kernel iterates
+  // padded_dim/2 times with the existing score_block128_packed_avx512bw.
+  // Requires mse_bits == 2 and padded_dim % 2 == 0.
+  void build_pair_lut16_int8(const float* rotated_q,
+                             std::int8_t* base_i8,
+                             float& base_scale) const {
+    const std::size_t n_pairs = padded_dim / 2;
+    const float gmax = max_abs;  // max |centroid|
+    // max |pair sum| = max(|q[2d]| + |q[2d+1]|) * gmax over pairs
+    float max_pair_abs_q = 0.f;
+    for (std::size_t dp = 0; dp < n_pairs; ++dp) {
+      const float s = std::abs(rotated_q[2 * dp]) + std::abs(rotated_q[2 * dp + 1]);
+      if (s > max_pair_abs_q) max_pair_abs_q = s;
+    }
+    const float pair_max = max_pair_abs_q * gmax;
+    base_scale = (pair_max > 1e-30f) ? (pair_max / 127.f) : 1.f;
+    const float base_inv = 1.f / base_scale;
+
+    for (std::size_t dp = 0; dp < n_pairs; ++dp) {
+      const float q0 = rotated_q[2 * dp];
+      const float q1 = rotated_q[2 * dp + 1];
+      for (std::size_t c = 0; c < 16; ++c) {
+        const std::size_t c0 = c & 3;
+        const std::size_t c1 = (c >> 2) & 3;
+        const float val = q0 * centroids[c0] + q1 * centroids[c1];
+        base_i8[dp * 16 + c] = detail::clamp_i8(std::lround(val * base_inv));
+      }
     }
   }
 
@@ -1013,7 +1340,7 @@ struct Codebook {
     return out;
   }
 
- 
+ private:
 
   // Gaussian LM: thresholds = boundary_table × σ.
   void build_lm_thresholds(std::size_t bits, std::size_t d) {
@@ -1045,7 +1372,8 @@ struct Codebook {
 //   kGeneric         — full byte codes + optional sign bits (wider bitwidths)
 // =====================================================================
 struct StorageLayout {
-  enum class Path { kBigPackedNibble, kPackedNibble, kNibble, kGeneric };
+  enum class Path { kBigPackedNibble, kPairBigPackedNibble, kQuadBigPackedNibble,
+                    kPackedNibble, kNibble, kGeneric };
 
   Path        path                  = Path::kGeneric;
   std::size_t padded_dim            = 0;
@@ -1077,11 +1405,14 @@ struct StorageLayout {
   std::vector<float> norms;            // ‖x_eff‖
   std::vector<float> norm_squares;     // ‖x_eff‖²
   std::vector<float> cx_dots;          // ⟨c,x⟩ per base vector (IP centroid correction)
+  std::vector<float> xo_dots;          // ⟨x̂_unit, ō_rot⟩ per vec (RaBitQ-style correction denominator)
 
   // Effective block size for this path.
   std::size_t eff_block_size() const noexcept {
-    if (path == Path::kBigPackedNibble) return detail::kBigBlockSize;
-    if (path == Path::kPackedNibble)    return detail::kPackedBlockSize;
+    if (path == Path::kBigPackedNibble)     return detail::kBigBlockSize;
+    if (path == Path::kPairBigPackedNibble) return detail::kBigBlockSize;
+    if (path == Path::kQuadBigPackedNibble) return detail::kBigBlockSize;
+    if (path == Path::kPackedNibble)        return detail::kPackedBlockSize;
     return detail::kBlockSize;
   }
 
@@ -1101,14 +1432,51 @@ struct StorageLayout {
     const bool nibble_ok = (!force_generic && mse_bits_ >= 1 && bitwidth <= 4);
     const bool packed_ok = (nibble_ok && use_packed_nibbles_);
     // Big-packed path: AVX-512BW zmm PSHUFB, 128 lanes/block, 2.67× fewer port-5
-    // ops/lane vs block32.  MSE mode only (no QJL), flat-only (IVF not yet ported).
+    // ops/lane vs block32.  MSE mode only (no QJL); supports both flat and IVF.
 #if defined(__AVX512BW__)
-    const bool big_packed_ok = (packed_ok && mode != Mode::kInnerProduct && !ivf_active);
+    (void)ivf_active;
+    const bool big_packed_ok = (packed_ok && mode != Mode::kInnerProduct);
+    // Pair-packed path (bitwidth=2 only): two consecutive dims' 2-bit codes
+    // share one 4-bit nibble; LUT[c] pre-sums both dims' centroid scores.
+    // Halves PSHUFB ops, LUT size, and DB memory traffic vs kBigPackedNibble.
+    const bool pair_packed_ok = (big_packed_ok && bitwidth == 2 &&
+                                 mse_bits_ == 2 && (padded_dim_ % 2 == 0));
+    // Quad-packed path (bitwidth=1 only): four consecutive dims' 1-bit codes
+    // share one 4-bit nibble (c0|c1<<1|c2<<2|c3<<3); LUT[c] pre-sums four
+    // dims' ±γ scores.  Quarters PSHUFB ops & DB bandwidth vs kBigPackedNibble.
+    const bool quad_packed_ok = (big_packed_ok && bitwidth == 1 &&
+                                 mse_bits_ == 1 && (padded_dim_ % 4 == 0));
 #else
     const bool big_packed_ok = false;
+    const bool pair_packed_ok = false;
+    const bool quad_packed_ok = false;
 #endif
 
-    if (big_packed_ok) {
+    if (quad_packed_ok) {
+      // padded_dim here is the iteration count = #dim-quads; kernel loops this many times.
+      path                   = Path::kQuadBigPackedNibble;
+      padded_dim             = padded_dim_ / 4;
+      big_packed_block_stride = detail::aligned_bytes(padded_dim * detail::kBigBlockSize / 2);
+      packed_block_stride    = 0;
+      nibble_block_stride    = 0;
+      byte_code_block_stride = 0;
+      sign_block_stride      = 0;
+      lut_stride             = 0;
+      combined_code_sign     = false;
+      storage_bits           = 0;
+    } else if (pair_packed_ok) {
+      // padded_dim here is the iteration count = #dim-pairs; kernel loops this many times.
+      path                   = Path::kPairBigPackedNibble;
+      padded_dim             = padded_dim_ / 2;
+      big_packed_block_stride = detail::aligned_bytes(padded_dim * detail::kBigBlockSize / 2);
+      packed_block_stride    = 0;
+      nibble_block_stride    = 0;
+      byte_code_block_stride = 0;
+      sign_block_stride      = 0;
+      lut_stride             = 0;
+      combined_code_sign     = false;
+      storage_bits           = 0;
+    } else if (big_packed_ok) {
       path                   = Path::kBigPackedNibble;
       big_packed_block_stride = detail::aligned_bytes(padded_dim_ * detail::kBigBlockSize / 2);
       packed_block_stride    = 0;
@@ -1156,7 +1524,7 @@ struct StorageLayout {
     byte_codes.clear(); packed_signs.clear();
     gammas.clear(); residual_scales.clear();
     norms.clear(); norm_squares.clear();
-    cx_dots.clear();
+    cx_dots.clear(); xo_dots.clear();
   }
 
   // ------------------------------------------------------------------
@@ -1626,12 +1994,18 @@ struct StorageLayout {
   void postprocess_nibble(std::size_t db0, std::size_t bs,
                           float q_eff_norm, float q_eff_norm_sq,
                           float q_c_offset,
-                          const float* raw, float* scores) const {
+                          const float* raw, float* scores,
+                          const float* xo_dots_ptr = nullptr) const {
     if (bs == detail::kBlockSize) {
       const __m512 norms_v  = _mm512_loadu_ps(norms.data() + db0);
       const __m512 normsq_v = _mm512_loadu_ps(norm_squares.data() + db0);
-      const __m512 raw_v    = _mm512_loadu_ps(raw);
+      __m512 raw_v = _mm512_loadu_ps(raw);
       if constexpr (kL2) {
+        if (xo_dots_ptr != nullptr) {
+          const __m512 xo_v = _mm512_max_ps(_mm512_loadu_ps(xo_dots_ptr + db0),
+                                             _mm512_set1_ps(1e-12f));
+          raw_v = _mm512_div_ps(raw_v, xo_v);
+        }
         const __m512 cross = _mm512_mul_ps(_mm512_set1_ps(2.0f * q_eff_norm),
                                            _mm512_mul_ps(norms_v, raw_v));
         const __m512 val = _mm512_sub_ps(
@@ -1649,8 +2023,11 @@ struct StorageLayout {
     }
     for (std::size_t i = 0; i < bs; ++i) {
       if constexpr (kL2) {
+        float rv = raw[i];
+        if (xo_dots_ptr != nullptr)
+          rv /= std::max(xo_dots_ptr[db0 + i], 1e-12f);
         const float val = q_eff_norm_sq + norm_squares[db0 + i]
-                          - 2.0f * q_eff_norm * norms[db0 + i] * raw[i];
+                          - 2.0f * q_eff_norm * norms[db0 + i] * rv;
         scores[i] = -val;
       } else {
         scores[i] = q_eff_norm * norms[db0 + i] * raw[i] + cx_dots[db0 + i] + q_c_offset;
@@ -1664,14 +2041,20 @@ struct StorageLayout {
   void postprocess_packed(std::size_t db0, std::size_t bs,
                           float q_eff_norm, float q_eff_norm_sq,
                           float q_c_offset,
-                          const float* raw, float* scores) const {
+                          const float* raw, float* scores,
+                          const float* xo_dots_ptr = nullptr) const {
     if (bs == detail::kPackedBlockSize) {
       for (std::size_t half = 0; half < 2; ++half) {
         const std::size_t off = half * 16;
         const __m512 norms_v  = _mm512_loadu_ps(norms.data() + db0 + off);
         const __m512 normsq_v = _mm512_loadu_ps(norm_squares.data() + db0 + off);
-        const __m512 raw_v    = _mm512_loadu_ps(raw + off);
+        __m512 raw_v = _mm512_loadu_ps(raw + off);
         if constexpr (kL2) {
+          if (xo_dots_ptr != nullptr) {
+            const __m512 xo_v = _mm512_max_ps(_mm512_loadu_ps(xo_dots_ptr + db0 + off),
+                                               _mm512_set1_ps(1e-12f));
+            raw_v = _mm512_div_ps(raw_v, xo_v);
+          }
           const __m512 cross = _mm512_mul_ps(_mm512_set1_ps(2.0f * q_eff_norm),
                                              _mm512_mul_ps(norms_v, raw_v));
           const __m512 val = _mm512_sub_ps(
@@ -1690,8 +2073,11 @@ struct StorageLayout {
     }
     for (std::size_t i = 0; i < bs; ++i) {
       if constexpr (kL2) {
+        float rv = raw[i];
+        if (xo_dots_ptr != nullptr)
+          rv /= std::max(xo_dots_ptr[db0 + i], 1e-12f);
         const float val = q_eff_norm_sq + norm_squares[db0 + i]
-                          - 2.0f * q_eff_norm * norms[db0 + i] * raw[i];
+                          - 2.0f * q_eff_norm * norms[db0 + i] * rv;
         scores[i] = -val;
       } else {
         scores[i] = q_eff_norm * norms[db0 + i] * raw[i] + cx_dots[db0 + i] + q_c_offset;
@@ -1705,7 +2091,8 @@ struct StorageLayout {
   void postprocess_big_packed(std::size_t db0, std::size_t bs,
                               float q_eff_norm, float q_eff_norm_sq,
                               float q_c_offset,
-                              const float* raw, float* scores) const {
+                              const float* raw, float* scores,
+                              const float* xo_dots_ptr = nullptr) const {
     if (bs == detail::kBigBlockSize) {
       const __m512 two_qn = _mm512_set1_ps(2.0f * q_eff_norm);
       const __m512 qn_sq  = _mm512_set1_ps(q_eff_norm_sq);
@@ -1714,8 +2101,13 @@ struct StorageLayout {
       for (std::size_t off = 0; off < detail::kBigBlockSize; off += 16) {
         const __m512 norms_v  = _mm512_loadu_ps(norms.data() + db0 + off);
         const __m512 normsq_v = _mm512_loadu_ps(norm_squares.data() + db0 + off);
-        const __m512 raw_v    = _mm512_loadu_ps(raw + off);
+        __m512 raw_v = _mm512_loadu_ps(raw + off);
         if constexpr (kL2) {
+          if (xo_dots_ptr != nullptr) {
+            const __m512 xo_v = _mm512_max_ps(_mm512_loadu_ps(xo_dots_ptr + db0 + off),
+                                               _mm512_set1_ps(1e-12f));
+            raw_v = _mm512_div_ps(raw_v, xo_v);
+          }
           const __m512 cross = _mm512_mul_ps(two_qn, _mm512_mul_ps(norms_v, raw_v));
           const __m512 val = _mm512_sub_ps(_mm512_add_ps(qn_sq, normsq_v), cross);
           _mm512_storeu_ps(scores + off, _mm512_sub_ps(_mm512_setzero_ps(), val));
@@ -1730,8 +2122,11 @@ struct StorageLayout {
     }
     for (std::size_t i = 0; i < bs; ++i) {
       if constexpr (kL2) {
+        float rv = raw[i];
+        if (xo_dots_ptr != nullptr)
+          rv /= std::max(xo_dots_ptr[db0 + i], 1e-12f);
         const float val = q_eff_norm_sq + norm_squares[db0 + i]
-                          - 2.0f * q_eff_norm * norms[db0 + i] * raw[i];
+                          - 2.0f * q_eff_norm * norms[db0 + i] * rv;
         scores[i] = -val;
       } else {
         scores[i] = q_eff_norm * norms[db0 + i] * raw[i] + cx_dots[db0 + i] + q_c_offset;
@@ -1746,7 +2141,8 @@ struct StorageLayout {
                            float q_eff_norm, float q_eff_norm_sq,
                            float q_c_offset,
                            float* dot_scores, const float* scratch,
-                           float* scores) const {
+                           float* scores,
+                           const float* xo_dots_ptr = nullptr) const {
     if (bs == detail::kBlockSize) {
       const __m512 norms_v  = _mm512_loadu_ps(norms.data() + db0);
       const __m512 normsq_v = _mm512_loadu_ps(norm_squares.data() + db0);
@@ -1758,6 +2154,11 @@ struct StorageLayout {
         raw_v = _mm512_fmadd_ps(gc, _mm512_loadu_ps(scratch), raw_v);
       }
       if constexpr (kL2) {
+        if (xo_dots_ptr != nullptr) {
+          const __m512 xo_v = _mm512_max_ps(_mm512_loadu_ps(xo_dots_ptr + db0),
+                                             _mm512_set1_ps(1e-12f));
+          raw_v = _mm512_div_ps(raw_v, xo_v);
+        }
         const __m512 cross = _mm512_mul_ps(_mm512_set1_ps(2.0f * q_eff_norm),
                                            _mm512_mul_ps(norms_v, raw_v));
         const __m512 val = _mm512_sub_ps(
@@ -1781,6 +2182,8 @@ struct StorageLayout {
         ip += gc * scratch[i];
       }
       if constexpr (kL2) {
+        if (xo_dots_ptr != nullptr)
+          ip /= std::max(xo_dots_ptr[db0 + i], 1e-12f);
         const float val = q_eff_norm_sq + norm_squares[db0 + i]
                           - 2.0f * q_eff_norm * norms[db0 + i] * ip;
         scores[i] = -val;
@@ -1841,7 +2244,7 @@ struct KMeansIVF {
         [&](std::size_t a, std::size_t b){ return cdists[a] < cdists[b]; });
   }
 
- 
+ private:
   // K-means++ init + Lloyd iterations with AVX-512 FMA assignment.
   // Subsamples to min(n, 256*nlist) training vectors to cap cost.
   void run_kmeans(const float* data, std::size_t n, std::size_t dim, std::size_t padded_dim,
@@ -2039,6 +2442,7 @@ class TurboQuantIndex {
     std::size_t nlist  = 1;   // IVF clusters; 1 = flat (current behavior preserved)
     std::size_t nprobe = 1;   // Clusters to probe per query (clamped to nlist)
     bool l2_direct = true;    // MSE-mode L2: use ‖x̂_eff‖² (direct L2 ADC) instead of ‖x_eff‖²
+    bool use_correction = false;  // RaBitQ-style ⟨x̂,ō⟩ correction: unbiased ⟨ō,q̄⟩ estimator (L2 MSE only)
   };
 
   // Validates dim and bitwidth; sets padded_dim_ = next power of 2 for Hadamard else dim.
@@ -2051,17 +2455,19 @@ class TurboQuantIndex {
         force_generic_path_(cfg.force_generic_path),
         use_packed_nibbles_(cfg.use_packed_nibbles),
         l2_direct_(cfg.l2_direct),
+        use_correction_(cfg.use_correction),
         seed_(cfg.seed),
         num_threads_(std::max<std::size_t>(1, cfg.num_threads)) {
     if (dim_ == 0)
       throw std::invalid_argument("TurboQuantIndex: dim must be > 0");
     if (bitwidth_ == 0 || bitwidth_ > 9)
       throw std::invalid_argument("TurboQuantIndex: bitwidth must be in [1, 9]");
-    // Auto-select Hadamard when dim is a power of 2: avoids O(d³) QR decomposition.
-    if (rotation_type_ == RotationType::kDense && dim_ > 0 && (dim_ & (dim_ - 1)) == 0)
-      rotation_type_ = RotationType::kHadamard;
-    padded_dim_ = (rotation_type_ == RotationType::kHadamard)
-                  ? detail::next_pow2(dim_) : dim_;
+    if (rotation_type_ == RotationType::kHadamard)
+      padded_dim_ = detail::next_pow2(dim_);
+    else if (rotation_type_ == RotationType::kFhtKac)
+      padded_dim_ = detail::round_up_mul64(dim_);
+    else
+      padded_dim_ = dim_;
     ivf_.setup(cfg.nlist, cfg.nprobe);
   }
 
@@ -2154,12 +2560,13 @@ class TurboQuantIndex {
     mse_bits_ = (mode_ == Mode::kInnerProduct) ? (bitwidth_ - 1) : bitwidth_;
     codebook_.build(mse_bits_, padded_dim_, mode_);
 
-    // 3. Decide storage path and compute strides (IVF not yet ported to kBigPackedNibble)
+    // 3. Decide storage path and compute strides
     storage_.configure(mse_bits_, bitwidth_, force_generic_path_, use_packed_nibbles_,
                        padded_dim_, mode_, codebook_.size, ivf_.active());
 
     // 4. Generate rotation and (for IP) QJL transform
-    rotation_.generate(rotation_type_, padded_dim_, seed_);
+    // FhtKac needs the original (unpadded) dim to set trunc_dim = 2^floor(log2(orig_dim)).
+    rotation_.generate(rotation_type_, padded_dim_, seed_, dim_);
     if (mode_ == Mode::kInnerProduct)
       qjl_.generate_qjl(rotation_type_, padded_dim_, seed_ ^ 0x9e3779b97f4a7c15ULL);
 
@@ -2194,7 +2601,9 @@ class TurboQuantIndex {
     const std::size_t eff_bs    = storage_.eff_block_size();
     const std::size_t new_blocks = detail::ceil_div(ntotal_, eff_bs);
 
-    if (storage_.path == StorageLayout::Path::kBigPackedNibble) {
+    if (storage_.path == StorageLayout::Path::kBigPackedNibble ||
+        storage_.path == StorageLayout::Path::kPairBigPackedNibble ||
+        storage_.path == StorageLayout::Path::kQuadBigPackedNibble) {
       storage_.big_packed_nibbles.resize(new_blocks * storage_.big_packed_block_stride, 0);
 #ifdef __linux__
       { auto* p = storage_.big_packed_nibbles.data();
@@ -2220,6 +2629,7 @@ class TurboQuantIndex {
     storage_.norms.resize(new_blocks * eff_bs, 0.f);
     storage_.norm_squares.resize(new_blocks * eff_bs, 0.f);
     storage_.cx_dots.resize(new_blocks * eff_bs, 0.f);
+    if (use_correction_) storage_.xo_dots.resize(new_blocks * eff_bs, 0.f);
 
     const std::size_t start_block = old_total / eff_bs;
     parallel_for(start_block, new_blocks, [&](std::size_t b0, std::size_t b1) {
@@ -2296,6 +2706,14 @@ class TurboQuantIndex {
 
           encode_rotated(rotated.data(), codes.data());
 
+          // RaBitQ-style correction: ⟨x̂_unit, ō_rot⟩ = Σ_j c[codes[j]] · rotated[j]
+          if (use_correction_ && mode_ != Mode::kInnerProduct) {
+            float xo = 0.0f;
+            for (std::size_t j = 0; j < padded_dim_; ++j)
+              xo += codebook_.centroids[codes[j]] * rotated[j];
+            storage_.xo_dots[gi] = xo;
+          }
+
           // Direct L2 ADC: override ‖x_eff‖² with ‖x̂_eff‖² = norm² · Σ c[code_j]²
           // so the L2 kernel computes ‖q − x̂‖² (exact distance to reconstructed
           // point) instead of a biased estimate of ‖q − x‖².
@@ -2320,6 +2738,38 @@ class TurboQuantIndex {
                   pk[j * 64 + lane] |= code;
                 else
                   pk[j * 64 + (lane - 64)] |= (code << 4);
+              }
+              storage_.gammas[gi] = 0.0f;
+            } else if (storage_.path == StorageLayout::Path::kPairBigPackedNibble) {
+              // Bitwidth=2 pair-packed: nibble = codes[2j] | (codes[2j+1] << 2).
+              // Halves dim iterations vs kBigPackedNibble with no recall loss.
+              std::uint8_t* pk = storage_.big_packed_nibble_block_ptr(bi);
+              const std::size_t n_pairs = padded_dim_ / 2;
+              for (std::size_t jp = 0; jp < n_pairs; ++jp) {
+                const std::uint8_t c0 = static_cast<std::uint8_t>(codes[2 * jp]) & 0x03;
+                const std::uint8_t c1 = static_cast<std::uint8_t>(codes[2 * jp + 1]) & 0x03;
+                const std::uint8_t nib = static_cast<std::uint8_t>(c0 | (c1 << 2));
+                if (lane < 64)
+                  pk[jp * 64 + lane] |= nib;
+                else
+                  pk[jp * 64 + (lane - 64)] |= static_cast<std::uint8_t>(nib << 4);
+              }
+              storage_.gammas[gi] = 0.0f;
+            } else if (storage_.path == StorageLayout::Path::kQuadBigPackedNibble) {
+              // Bitwidth=1 quad-packed: nibble = c0 | c1<<1 | c2<<2 | c3<<3.
+              // Quarters dim iterations vs kBigPackedNibble with no recall loss.
+              std::uint8_t* pk = storage_.big_packed_nibble_block_ptr(bi);
+              const std::size_t n_quads = padded_dim_ / 4;
+              for (std::size_t jq = 0; jq < n_quads; ++jq) {
+                const std::uint8_t c0 = static_cast<std::uint8_t>(codes[4 * jq])     & 0x01;
+                const std::uint8_t c1 = static_cast<std::uint8_t>(codes[4 * jq + 1]) & 0x01;
+                const std::uint8_t c2 = static_cast<std::uint8_t>(codes[4 * jq + 2]) & 0x01;
+                const std::uint8_t c3 = static_cast<std::uint8_t>(codes[4 * jq + 3]) & 0x01;
+                const std::uint8_t nib = static_cast<std::uint8_t>(c0 | (c1 << 1) | (c2 << 2) | (c3 << 3));
+                if (lane < 64)
+                  pk[jq * 64 + lane] |= nib;
+                else
+                  pk[jq * 64 + (lane - 64)] |= static_cast<std::uint8_t>(nib << 4);
               }
               storage_.gammas[gi] = 0.0f;
             } else if (storage_.path == StorageLayout::Path::kPackedNibble) {
@@ -2406,6 +2856,16 @@ class TurboQuantIndex {
 
     // IVF path: coarse cluster search + per-cluster fine scan
     if (ivf_.active()) {
+#if defined(__AVX512BW__)
+      if (storage_.path == StorageLayout::Path::kBigPackedNibble ||
+          storage_.path == StorageLayout::Path::kPairBigPackedNibble ||
+          storage_.path == StorageLayout::Path::kQuadBigPackedNibble) {
+        // MSE mode only (configure() never selects big-packed for IP mode)
+        if (metric == SearchMetric::kL2) query_ivf_big_packed_impl<true>(nq, x, k, distances, labels);
+        else                              query_ivf_big_packed_impl<false>(nq, x, k, distances, labels);
+        return;
+      }
+#endif
       if (storage_.path == StorageLayout::Path::kPackedNibble) {
         if (mode_ == Mode::kInnerProduct) {
           if (metric == SearchMetric::kL2) query_ivf_packed_impl<true, true>(nq, x, k, distances, labels);
@@ -2434,7 +2894,9 @@ class TurboQuantIndex {
       return;
     }
 
-    if (storage_.path == StorageLayout::Path::kBigPackedNibble) {
+    if (storage_.path == StorageLayout::Path::kBigPackedNibble ||
+        storage_.path == StorageLayout::Path::kPairBigPackedNibble ||
+        storage_.path == StorageLayout::Path::kQuadBigPackedNibble) {
       // MSE mode only (configure() never selects kBigPackedNibble for IP mode)
       if (metric == SearchMetric::kL2) query_big_packed_impl<true>(nq, x, k, distances, labels);
       else                              query_big_packed_impl<false>(nq, x, k, distances, labels);
@@ -2612,6 +3074,7 @@ class TurboQuantIndex {
   bool          force_generic_path_ = false;
   bool          use_packed_nibbles_ = true;
   bool          l2_direct_          = false;
+  bool          use_correction_     = false;
   std::uint64_t seed_        = 0;
   std::size_t   num_threads_ = 1;
   std::size_t   ntotal_      = 0;
@@ -2757,6 +3220,14 @@ class TurboQuantIndex {
     rotation_.forward(unit.data(), rotated.data(), work.data());
     encode_rotated(rotated.data(), codes.data());
 
+    // RaBitQ-style correction: ⟨x̂_unit, ō_rot⟩ = Σ_j c[codes[j]] · rotated[j]
+    if (use_correction_ && mode_ != Mode::kInnerProduct) {
+      float xo = 0.0f;
+      for (std::size_t j = 0; j < padded_dim_; ++j)
+        xo += codebook_.centroids[codes[j]] * rotated[j];
+      storage_.xo_dots[gi] = xo;
+    }
+
     // Direct L2 ADC: override ‖x_eff‖² with ‖x̂_eff‖² = norm² · Σ c[code_j]²
     if (l2_direct_ && mode_ != Mode::kInnerProduct) {
       float uhat_sq = 0.0f;
@@ -2768,7 +3239,39 @@ class TurboQuantIndex {
     }
 
     if (mode_ != Mode::kInnerProduct) {
-      if (storage_.path == StorageLayout::Path::kPackedNibble) {
+      if (storage_.path == StorageLayout::Path::kBigPackedNibble) {
+        std::uint8_t* pk = storage_.big_packed_nibble_block_ptr(bi);
+        for (std::size_t j = 0; j < padded_dim_; ++j) {
+          const std::uint8_t code = static_cast<std::uint8_t>(codes[j]) & 0x0f;
+          if (lane < 64) pk[j * 64 + lane]        |= code;
+          else           pk[j * 64 + (lane - 64)] |= (code << 4);
+        }
+        storage_.gammas[gi] = 0.0f;
+      } else if (storage_.path == StorageLayout::Path::kPairBigPackedNibble) {
+        std::uint8_t* pk = storage_.big_packed_nibble_block_ptr(bi);
+        const std::size_t n_pairs = padded_dim_ / 2;
+        for (std::size_t jp = 0; jp < n_pairs; ++jp) {
+          const std::uint8_t c0 = static_cast<std::uint8_t>(codes[2 * jp])     & 0x03;
+          const std::uint8_t c1 = static_cast<std::uint8_t>(codes[2 * jp + 1]) & 0x03;
+          const std::uint8_t nib = static_cast<std::uint8_t>(c0 | (c1 << 2));
+          if (lane < 64) pk[jp * 64 + lane]        |= nib;
+          else           pk[jp * 64 + (lane - 64)] |= static_cast<std::uint8_t>(nib << 4);
+        }
+        storage_.gammas[gi] = 0.0f;
+      } else if (storage_.path == StorageLayout::Path::kQuadBigPackedNibble) {
+        std::uint8_t* pk = storage_.big_packed_nibble_block_ptr(bi);
+        const std::size_t n_quads = padded_dim_ / 4;
+        for (std::size_t jq = 0; jq < n_quads; ++jq) {
+          const std::uint8_t c0 = static_cast<std::uint8_t>(codes[4 * jq])     & 0x01;
+          const std::uint8_t c1 = static_cast<std::uint8_t>(codes[4 * jq + 1]) & 0x01;
+          const std::uint8_t c2 = static_cast<std::uint8_t>(codes[4 * jq + 2]) & 0x01;
+          const std::uint8_t c3 = static_cast<std::uint8_t>(codes[4 * jq + 3]) & 0x01;
+          const std::uint8_t nib = static_cast<std::uint8_t>(c0 | (c1 << 1) | (c2 << 2) | (c3 << 3));
+          if (lane < 64) pk[jq * 64 + lane]        |= nib;
+          else           pk[jq * 64 + (lane - 64)] |= static_cast<std::uint8_t>(nib << 4);
+        }
+        storage_.gammas[gi] = 0.0f;
+      } else if (storage_.path == StorageLayout::Path::kPackedNibble) {
         std::uint8_t* pk = storage_.packed_nibble_block_ptr(bi);
         for (std::size_t j = 0; j < padded_dim_; ++j) {
           const std::uint8_t code = static_cast<std::uint8_t>(codes[j]) & 0x0f;
@@ -2882,7 +3385,8 @@ class TurboQuantIndex {
                                       base_scale, qjl_scale_v, bs, raw_scores);
 
           storage_.postprocess_nibble<kL2>(db0, bs, q_en, q_en_sq, q_c_offset,
-                                           raw_scores, cand_scores);
+                                           raw_scores, cand_scores,
+                                           use_correction_ ? storage_.xo_dots.data() : nullptr);
 
           for (std::size_t i = 0; i < bs; ++i)
             detail::heap_push_or_replace(heap, heap_size, k, cand_scores[i],
@@ -2989,7 +3493,8 @@ class TurboQuantIndex {
                 storage_.gammas.data() + db0,
                 bscales[qb], qscales[qb], bs, raw_s[qb]);
             storage_.postprocess_packed<kL2>(db0, bs,
-                q_ens[qb], q_en_sqs[qb], q_c_offs[qb], raw_s[qb], cand_s[qb]);
+                q_ens[qb], q_en_sqs[qb], q_c_offs[qb], raw_s[qb], cand_s[qb],
+                use_correction_ ? storage_.xo_dots.data() : nullptr);
             detail::flush_candidates_to_heap(
                 cand_s[qb], bs, db0, heaps[qb], hsizes[qb], k);
           }
@@ -3028,7 +3533,9 @@ class TurboQuantIndex {
       std::vector<float> rotated(padded_dim_);
       std::vector<float> work(padded_dim_);
 
-      const std::size_t lut_stride = padded_dim_ * 16;
+      const bool pair_path = (storage_.path == StorageLayout::Path::kPairBigPackedNibble);
+      const bool quad_path = (storage_.path == StorageLayout::Path::kQuadBigPackedNibble);
+      const std::size_t lut_stride = storage_.padded_dim * 16;
       std::vector<std::int8_t> batch_base(kBatchQ * lut_stride);
       alignas(64) float raw_s [kBatchQ][kBigBlockSize];
       alignas(64) float cand_s[kBatchQ][kBigBlockSize];
@@ -3050,9 +3557,19 @@ class TurboQuantIndex {
           q_c_offs[qb] = (kL2 || !use_data_centroid_) ? 0.0f : (q_dot_c - c_norm_sq_);
           rotation_.forward(q_unit.data(), rotated.data(), work.data());
           bscales[qb] = 1.0f;
-          codebook_.build_lut16_int8(rotated.data(), nullptr,
-                                     batch_base.data() + qb * lut_stride,
-                                     nullptr, bscales[qb], qjl_scale_unused);
+          if (quad_path) {
+            codebook_.build_quad_lut16_int8(rotated.data(),
+                                            batch_base.data() + qb * lut_stride,
+                                            bscales[qb]);
+          } else if (pair_path) {
+            codebook_.build_pair_lut16_int8(rotated.data(),
+                                            batch_base.data() + qb * lut_stride,
+                                            bscales[qb]);
+          } else {
+            codebook_.build_lut16_int8(rotated.data(), nullptr,
+                                       batch_base.data() + qb * lut_stride,
+                                       nullptr, bscales[qb], qjl_scale_unused);
+          }
           hsizes[qb] = 0;
         }
 
@@ -3075,7 +3592,8 @@ class TurboQuantIndex {
                 batch_base.data() + qb * lut_stride,
                 bscales[qb], bs, raw_s[qb]);
             storage_.postprocess_big_packed<kL2>(db0, bs,
-                q_ens[qb], q_en_sqs[qb], q_c_offs[qb], raw_s[qb], cand_s[qb]);
+                q_ens[qb], q_en_sqs[qb], q_c_offs[qb], raw_s[qb], cand_s[qb],
+                use_correction_ ? storage_.xo_dots.data() : nullptr);
             detail::flush_candidates_to_heap(
                 cand_s[qb], bs, db0, heaps[qb], hsizes[qb], k);
           }
@@ -3140,12 +3658,14 @@ class TurboQuantIndex {
             storage_.score_generic_code_sign_block(bi, bs, lut.data(), projected.data(),
                                                    dot_scores, scratch_scores);
             storage_.postprocess_generic<true, kL2>(db0, bs, q_en, q_en_sq, q_c_offset,
-                                                    dot_scores, scratch_scores, cand_scores);
+                                                    dot_scores, scratch_scores, cand_scores,
+                                                    use_correction_ ? storage_.xo_dots.data() : nullptr);
           } else {
             std::fill(dot_scores, dot_scores + bs, 0.0f);
             storage_.score_generic_code_block(bi, bs, lut.data(), dot_scores);
             storage_.postprocess_generic<false, kL2>(db0, bs, q_en, q_en_sq, q_c_offset,
-                                                     dot_scores, nullptr, cand_scores);
+                                                     dot_scores, nullptr, cand_scores,
+                                                     use_correction_ ? storage_.xo_dots.data() : nullptr);
           }
 
           for (std::size_t i = 0; i < bs; ++i)
@@ -3208,7 +3728,16 @@ class TurboQuantIndex {
     const std::size_t total_blocks = total_slots / eff_bs;
 
     ntotal_ = n;
-    if (storage_.path == StorageLayout::Path::kPackedNibble) {
+    if (storage_.path == StorageLayout::Path::kBigPackedNibble ||
+        storage_.path == StorageLayout::Path::kPairBigPackedNibble ||
+        storage_.path == StorageLayout::Path::kQuadBigPackedNibble) {
+      storage_.big_packed_nibbles.assign(total_blocks * storage_.big_packed_block_stride, 0);
+#ifdef __linux__
+      { auto* p = storage_.big_packed_nibbles.data();
+        if (p) madvise(p, storage_.big_packed_nibbles.size(), MADV_HUGEPAGE); }
+#endif
+      storage_.gammas.assign(total_slots, 0.f);
+    } else if (storage_.path == StorageLayout::Path::kPackedNibble) {
       storage_.packed_nibbles.assign(total_blocks * storage_.packed_block_stride, 0);
       storage_.gammas.assign(total_slots, 0.f);
     } else if (storage_.path == StorageLayout::Path::kNibble) {
@@ -3223,6 +3752,7 @@ class TurboQuantIndex {
     storage_.norms.assign(total_slots, 0.f);
     storage_.norm_squares.assign(total_slots, 0.f);
     storage_.cx_dots.assign(total_slots, 0.f);  // IVF uses cluster-relative centering; correction is 0
+    if (use_correction_) storage_.xo_dots.assign(total_slots, 0.f);
 
     // Fill ivf_.ids: storage-slot → original add-order index
     ivf_.ids.assign(total_slots, -1);
@@ -3256,6 +3786,188 @@ class TurboQuantIndex {
       }
     });
   }
+
+#if defined(__AVX512BW__)
+  // ------------------------------------------------------------------
+  // query_ivf_big_packed_impl — IVF query for 128-lane AVX-512BW big-packed path
+  // with Q-batching per cluster.
+  //
+  // Parallelism is over queries so each thread owns a disjoint query range and
+  // its per-query heaps are lock-free.  Within a thread:
+  //   1. coarse-search all owned queries;
+  //   2. invert: per visited cluster, collect the list of owning queries;
+  //   3. for each visited cluster, build all its queries' residual LUTs, then
+  //      scan the cluster's blocks *once*, scoring each block for every query
+  //      that probes this cluster before advancing.
+  //
+  // Amortizes DB block reads across queries sharing a cluster: with nq=10k,
+  // T=8, nprobe=10, nlist=1024, avg ~12 queries/cluster/thread → ~12× less
+  // DRAM / L3 traffic for the big-packed codes vs the naive per-query loop.
+  // MSE mode only (no QJL).
+  // ------------------------------------------------------------------
+  template <bool kL2>
+  void query_ivf_big_packed_impl(std::size_t nq, const float* x, std::size_t k,
+                                  float* distances, idx_t* labels) const {
+    parallel_for(0, nq, [&](std::size_t q0, std::size_t q1) {
+      const std::size_t tnq = q1 - q0;
+      if (tnq == 0) return;
+
+      const bool pair_path = (storage_.path == StorageLayout::Path::kPairBigPackedNibble);
+      const bool quad_path = (storage_.path == StorageLayout::Path::kQuadBigPackedNibble);
+      const std::size_t lut_stride = storage_.padded_dim * 16;
+
+      std::vector<float> q_r(padded_dim_, 0.0f);
+      std::vector<float> q_r_unit(padded_dim_, 0.0f);
+      std::vector<float> q_r_rot(padded_dim_);
+      std::vector<float> work(padded_dim_);
+      std::vector<float>       cdists(ivf_.nlist);
+      std::vector<std::size_t> probe_order_buf(ivf_.nlist);
+
+      // Phase 1: coarse search — store each query's nprobe cluster ids in a flat
+      // row-major [tnq × nprobe] buffer.
+      std::vector<std::uint32_t> probe_lists(tnq * ivf_.nprobe);
+      for (std::size_t qi = q0; qi < q1; ++qi) {
+        ivf_.coarse_search(x + qi * dim_, dim_, padded_dim_, cdists, probe_order_buf);
+        std::uint32_t* dst = probe_lists.data() + (qi - q0) * ivf_.nprobe;
+        for (std::size_t p = 0; p < ivf_.nprobe; ++p)
+          dst[p] = static_cast<std::uint32_t>(probe_order_buf[p]);
+      }
+
+      // Phase 2: invert — cluster → list of local query indices (0..tnq-1) that probe it.
+      std::vector<std::vector<std::uint32_t>> cq(ivf_.nlist);
+      for (std::size_t lq = 0; lq < tnq; ++lq) {
+        const std::uint32_t* src = probe_lists.data() + lq * ivf_.nprobe;
+        for (std::size_t p = 0; p < ivf_.nprobe; ++p) {
+          const std::uint32_t c = src[p];
+          if (ivf_.list_size[c] > 0) cq[c].push_back(static_cast<std::uint32_t>(lq));
+        }
+      }
+
+      // Per-query persistent heap (one per owned query).
+      std::vector<std::vector<detail::HeapEntry>> heaps(tnq, std::vector<detail::HeapEntry>(k));
+      std::vector<std::size_t> hsizes(tnq, 0);
+
+      // Reusable per-cluster buffers.
+      std::vector<std::int8_t> batch_luts;
+      std::vector<float>       q_ens;
+      std::vector<float>       q_en_sqs;
+      std::vector<float>       bscales;
+
+      alignas(64) float raw_scores [kBigBlockSize];
+      alignas(64) float cand_scores[kBigBlockSize];
+
+      // Phase 3: scan each visited cluster once, Q-batched.
+      for (std::size_t c = 0; c < ivf_.nlist; ++c) {
+        const std::size_t nqc = cq[c].size();
+        if (nqc == 0 || ivf_.list_size[c] == 0) continue;
+
+        const float* ck_c = ivf_.centroids.data() + c * padded_dim_;
+
+        // Build one LUT per (query, cluster) pair.
+        if (batch_luts.size() < nqc * lut_stride) batch_luts.resize(nqc * lut_stride);
+        q_ens.resize(nqc);
+        q_en_sqs.resize(nqc);
+        bscales.resize(nqc);
+        std::memset(batch_luts.data(), 0, nqc * lut_stride);
+
+        for (std::size_t bi = 0; bi < nqc; ++bi) {
+          const std::size_t lq  = cq[c][bi];
+          const std::size_t qi  = q0 + lq;
+          const float*      qp  = x + qi * dim_;
+
+          float q_r_norm_sq = 0.0f;
+          for (std::size_t j = 0; j < dim_; ++j) {
+            const float v = qp[j] - ck_c[j];
+            q_r[j] = v; q_r_norm_sq += v * v;
+          }
+          const float q_r_norm = std::sqrt(q_r_norm_sq);
+          if (q_r_norm > 0.0f) {
+            const float inv = 1.0f / q_r_norm;
+            for (std::size_t j = 0; j < dim_; ++j) q_r_unit[j] = q_r[j] * inv;
+          } else {
+            std::fill(q_r_unit.begin(), q_r_unit.begin() + dim_, 0.0f);
+          }
+          rotation_.forward(q_r_unit.data(), q_r_rot.data(), work.data());
+
+          float qjl_scale_unused = 1.0f;
+          std::int8_t* lut_ptr = batch_luts.data() + bi * lut_stride;
+          if (quad_path) {
+            codebook_.build_quad_lut16_int8(q_r_rot.data(), lut_ptr, bscales[bi]);
+          } else if (pair_path) {
+            codebook_.build_pair_lut16_int8(q_r_rot.data(), lut_ptr, bscales[bi]);
+          } else {
+            codebook_.build_lut16_int8(q_r_rot.data(), nullptr,
+                                       lut_ptr, nullptr,
+                                       bscales[bi], qjl_scale_unused);
+          }
+          q_ens[bi]    = q_r_norm;
+          q_en_sqs[bi] = q_r_norm_sq;
+        }
+
+        // Scan this cluster's blocks once; for each block, score every owning query.
+        const std::size_t cl_start = ivf_.list_start[c];
+        const std::size_t cl_end   = cl_start + ivf_.list_size[c];
+        const std::size_t start_bi = cl_start / kBigBlockSize;
+        const std::size_t end_bi   = detail::ceil_div(cl_end, kBigBlockSize);
+
+        for (std::size_t block_bi = start_bi; block_bi < end_bi; ++block_bi) {
+          const std::size_t db0     = block_bi * kBigBlockSize;
+          const std::size_t real_bs = std::min<std::size_t>(kBigBlockSize, cl_end - db0);
+
+          if (block_bi + 1 < end_bi) {
+            const std::uint8_t* nxt = storage_.big_packed_nibble_block_ptr(block_bi + 1);
+            for (std::size_t off = 0; off < storage_.big_packed_block_stride; off += 64)
+              _mm_prefetch(reinterpret_cast<const char*>(nxt + off), _MM_HINT_T0);
+            _mm_prefetch(reinterpret_cast<const char*>(
+                storage_.norms.data() + db0 + kBigBlockSize), _MM_HINT_T0);
+            _mm_prefetch(reinterpret_cast<const char*>(
+                storage_.norm_squares.data() + db0 + kBigBlockSize), _MM_HINT_T0);
+          }
+
+          const std::uint8_t* blk = storage_.big_packed_nibble_block_ptr(block_bi);
+
+          for (std::size_t bi = 0; bi < nqc; ++bi) {
+            const std::size_t lq = cq[c][bi];
+
+            // Always run the full 128-lane SIMD kernel (storage is zero-padded);
+            // the scalar tail path is ~4× slower for partial trailing clusters.
+            storage_.score_block128_packed_avx512bw(
+                blk, batch_luts.data() + bi * lut_stride,
+                bscales[bi], kBigBlockSize, raw_scores);
+
+            storage_.postprocess_big_packed<kL2>(
+                db0, kBigBlockSize, q_ens[bi], q_en_sqs[bi], 0.0f,
+                raw_scores, cand_scores,
+                use_correction_ ? storage_.xo_dots.data() : nullptr);
+
+            if (real_bs == kBigBlockSize) {
+              detail::flush_candidates_to_heap(cand_scores, kBigBlockSize, db0,
+                                                heaps[lq], hsizes[lq], k);
+            } else {
+              for (std::size_t i = 0; i < real_bs; ++i)
+                detail::heap_push_or_replace(heaps[lq], hsizes[lq], k,
+                                              cand_scores[i],
+                                              static_cast<idx_t>(db0 + i));
+            }
+          }
+        }
+      }
+
+      // Drain heaps to output.
+      for (std::size_t lq = 0; lq < tnq; ++lq) {
+        const std::size_t qi      = q0 + lq;
+        const std::size_t hs      = hsizes[lq];
+        std::sort(heaps[lq].begin(), heaps[lq].begin() + static_cast<std::ptrdiff_t>(hs),
+                  [](const detail::HeapEntry& a, const detail::HeapEntry& b){ return a.score > b.score; });
+        const std::size_t out_base = qi * k;
+        for (std::size_t r = 0; r < hs; ++r) {
+          distances[out_base + r] = kL2 ? -heaps[lq][r].score : heaps[lq][r].score;
+          labels[out_base + r]    = ivf_.ids[heaps[lq][r].label];
+        }
+      }
+    });
+  }
+#endif  // __AVX512BW__
 
   // ------------------------------------------------------------------
   // query_ivf_packed_impl — IVF query for packed-nibble (block-32) path.
@@ -3347,7 +4059,8 @@ class TurboQuantIndex {
                                           base_scale, qjl_scale_v, bs, raw_scores);
 
             storage_.postprocess_packed<kL2>(db0, bs, q_r_norm, q_r_norm_sq, 0.0f,
-                                             raw_scores, cand_scores);
+                                             raw_scores, cand_scores,
+                                             use_correction_ ? storage_.xo_dots.data() : nullptr);
 
             for (std::size_t i = 0; i < bs; ++i)
               detail::heap_push_or_replace(heap, heap_size, k, cand_scores[i],
@@ -3431,7 +4144,8 @@ class TurboQuantIndex {
                                         storage_.gammas.data() + db0,
                                         base_scale, qjl_scale_v, bs, raw_scores);
             storage_.postprocess_nibble<kL2>(db0, bs, q_r_norm, q_r_norm_sq, 0.0f,
-                                             raw_scores, cand_scores);
+                                             raw_scores, cand_scores,
+                                             use_correction_ ? storage_.xo_dots.data() : nullptr);
             for (std::size_t i = 0; i < bs; ++i)
               detail::heap_push_or_replace(heap, heap_size, k, cand_scores[i],
                                            static_cast<idx_t>(db0 + i));
@@ -3508,12 +4222,14 @@ class TurboQuantIndex {
               storage_.score_generic_code_sign_block(bi, bs, lut.data(), projected.data(),
                                                      dot_scores, scratch_scores);
               storage_.postprocess_generic<true, kL2>(db0, bs, q_r_norm, q_r_norm_sq, 0.0f,
-                                                      dot_scores, scratch_scores, cand_scores);
+                                                      dot_scores, scratch_scores, cand_scores,
+                                                      use_correction_ ? storage_.xo_dots.data() : nullptr);
             } else {
               std::fill(dot_scores, dot_scores + bs, 0.0f);
               storage_.score_generic_code_block(bi, bs, lut.data(), dot_scores);
               storage_.postprocess_generic<false, kL2>(db0, bs, q_r_norm, q_r_norm_sq, 0.0f,
-                                                       dot_scores, nullptr, cand_scores);
+                                                       dot_scores, nullptr, cand_scores,
+                                                       use_correction_ ? storage_.xo_dots.data() : nullptr);
             }
             for (std::size_t i = 0; i < bs; ++i)
               detail::heap_push_or_replace(heap, heap_size, k, cand_scores[i],
