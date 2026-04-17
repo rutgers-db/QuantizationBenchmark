@@ -47,7 +47,7 @@ RECALL_MIN = 0
 # weight = display units per tick interval.
 # More precise (higher recall) segments get larger weight → wider visual spacing.
 X_BREAKS = [
-    (0.0,  0.90, 0.10,  1.0),
+    (0.0,  0.90, 0.10,  0.8),
     (0.90, 0.98, 0.02,  1.25),
     (0.98, 1.0,  0.005, 1.5),
 ]
@@ -292,7 +292,7 @@ algo_rates   = {}
 
 for dataset, topk_data in sorted(data.items()):
     for topk, algo_data in sorted(topk_data.items()):
-        fig, ax = plt.subplots(figsize=(9, 6))
+        fig, ax = plt.subplots(figsize=(5, 4))
 
         # Collect all delta-QPS and display-x values across all rates
         all_disp_x = []
@@ -396,7 +396,7 @@ for dataset, topk_data in sorted(data.items()):
         plt.close(fig)
 
         # ── Absolute rerank QPS figure (same x-axis, log y) ──────────
-        fig2, ax2 = plt.subplots(figsize=(9, 6))
+        fig2, ax2 = plt.subplots(figsize=(5, 4))
 
         all_disp_x2 = []
         for algo, rate_map in sorted(algo_data.items()):

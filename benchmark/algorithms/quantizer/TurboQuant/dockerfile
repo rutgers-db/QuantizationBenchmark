@@ -17,7 +17,8 @@ RUN pip install --no-cache-dir \
     pyyaml \
     psutil \
     pybind11 \
-    faiss-cpu
+    faiss-cpu \
+    threadpoolctl
 
 # Copy the benchmark framework
 COPY benchmark/ /benchmark/
