@@ -11,7 +11,7 @@ plot. Each plotted series is defined by:
 
 Then run:
 
-python scripts/plot_distribution_shift.py --output /tmp/distribution_shift.png
+python scripts/plot_distribution_shift.py --output /tmp/distribution_shift.pdf
 """
 
 from __future__ import annotations
@@ -22,9 +22,17 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
-
+import matplotlib
 import matplotlib.pyplot as plt
 
+matplotlib.rcParams.update({
+    "font.size": 14,
+    "axes.labelsize": 16,
+    "axes.titlesize": 18,
+    "legend.fontsize": 12,
+    "xtick.labelsize": 14,
+    "ytick.labelsize": 14,
+})
 
 @dataclass
 class SeriesSpec:
@@ -34,7 +42,6 @@ class SeriesSpec:
     color: str | None = None
     marker: str = "o"
     linestyle: str = "-"
-
 
 DEFAULT_SERIES_SPECS: List[Dict[str, Any]] = [
     {
@@ -211,7 +218,208 @@ DEFAULT_SERIES_SPECS: List[Dict[str, Any]] = [
         "color": "#00acc1",
         "marker": "H",
     },
+    {
+        "label": "SAQ",
+        "file": "benchmark/results/distribution_shift/gist-960-euclidean_SAQ.json",
+        "filters": {
+            "quantizer": "SAQ",
+            "search_params.topk": 100,
+            "quantizer_config.build_params.nbit": 4,
+            "quantizer_config.build_params.space": "l2",
+        },
+        "color": "#f39c12",
+        "marker": "8",
+    },
 ]
+# DEFAULT_SERIES_SPECS: List[Dict[str, Any]] = [
+#     {
+#         "label": "RabitQ",
+#         "file": "benchmark/results/distribution_shift/sift-128-euclidean_ExtendedRabitQNTU_nlist1.json",
+#         "filters": {
+#             "quantizer": "ExtendedRabitQNTU",
+#             "search_params.topk": 100,
+#             "search_params.nprobe": 1,
+#             "quantizer_config.build_params.nlist": 1,
+#             "quantizer_config.build_params.nbit": 4,
+#             "quantizer_config.build_params.high_acc_flag": [False, True],
+#         },
+#         "color": "#1f77b4",
+#         "marker": "o",
+#     },
+#     # {
+#     #     "label": "LSQFaiss",
+#     #     "file": "benchmark/results/distribution_shift/sift-128-euclidean_LSQFaiss.json",
+#     #     "filters": {
+#     #         "quantizer": "LSQFaiss",
+#     #         "search_params.topk": 100,
+#     #         "quantizer_config.build_params.nbit": 8,
+#     #         "quantizer_config.build_params.nsubvec": 32,
+#     #         "quantizer_config.build_params.space": "l2",
+#     #     },
+#     #     "color": "#ff7f0e",
+#     #     "marker": "s",
+#     # },
+#     {
+#         "label": "OPQ",
+#         "file": "benchmark/results/distribution_shift/sift-128-euclidean_OptimizedProductQuantizationFaiss.json",
+#         "filters": {
+#             "quantizer": "OptimizedProductQuantizationFaiss",
+#             "search_params.topk": 100,
+#             "quantizer_config.build_params.nbit": 8,
+#             "quantizer_config.build_params.nsubvec": 64,
+#             "quantizer_config.build_params.niter": 400,
+#             "quantizer_config.build_params.space": "l2",
+#         },
+#         "color": "#2ca02c",
+#         "marker": "^",
+#     },
+#     {
+#         "label": "OSQ",
+#         "file": "benchmark/results/distribution_shift/sift-128-euclidean_OptimizedScalarQuantization.json",
+#         "filters": {
+#             "quantizer": "OptimizedScalarQuantization",
+#             "search_params.topk": 100,
+#             "quantizer_config.build_params.nbit": 4,
+#             "quantizer_config.build_params.space": "l2",
+#         },
+#         "color": "#d62728",
+#         "marker": "D",
+#     },
+#     # {
+#     #     "label": "PLSQ",
+#     #     "file": "benchmark/results/distribution_shift/sift-128-euclidean_PLSQFaiss.json",
+#     #     "filters": {
+#     #         "quantizer": "PLSQFaiss",
+#     #         "search_params.topk": 100,
+#     #         "quantizer_config.build_params.nbit": 8,
+#     #         "quantizer_config.build_params.nsubvec": 8,
+#     #         "quantizer_config.build_params.nsplits": 4,
+#     #         "quantizer_config.build_params.space": "l2",
+#     #     },
+#     #     "color": "#9467bd",
+#     #     "marker": "P",
+#     # },
+#     # {
+#     #     "label": "PRQ",
+#     #     "file": "benchmark/results/distribution_shift/sift-128-euclidean_PRQFaiss.json",
+#     #     "filters": {
+#     #         "quantizer": "PRQFaiss",
+#     #         "search_params.topk": 100,
+#     #         "quantizer_config.build_params.nbit": 8,
+#     #         "quantizer_config.build_params.nsubvec": 8,
+#     #         "quantizer_config.build_params.nsplits": 4,
+#     #         "quantizer_config.build_params.space": "l2",
+#     #     },
+#     #     "color": "#8c564b",
+#     #     "marker": "X",
+#     # },
+#     {
+#         "label": "PQ",
+#         "file": "benchmark/results/distribution_shift/sift-128-euclidean_ProductQuantizationFaiss.json",
+#         "filters": {
+#             "quantizer": "ProductQuantizationFaiss",
+#             "search_params.topk": 100,
+#             "quantizer_config.build_params.nbit": 8,
+#             "quantizer_config.build_params.nsubvec": 64,
+#             "quantizer_config.build_params.space": "l2",
+#         },
+#         "color": "#e377c2",
+#         "marker": "<",
+#     },
+#     # {
+#     #     "label": "PQFastScanFaiss",
+#     #     "file": "benchmark/results/distribution_shift/sift-128-euclidean_ProductQuantizationFastScanFaiss.json",
+#     #     "filters": {
+#     #         "quantizer": "ProductQuantizationFastScanFaiss",
+#     #         "search_params.topk": 100,
+#     #         "quantizer_config.build_params.nbit": 4,
+#     #         "quantizer_config.build_params.nsubvec": 32,
+#     #         "quantizer_config.build_params.space": "l2",
+#     #     },
+#     #     "color": "#7f7f7f",
+#     #     "marker": ">",
+#     # },
+#     # {
+#     #     "label": "RabitQ",
+#     #     "file": "benchmark/results/distribution_shift/sift-128-euclidean_RabitQ.json",
+#     #     "filters": {
+#     #         "quantizer": "RabitQ",
+#     #         "search_params.topk": 100,
+#     #         "search_params.nprobe": 10,
+#     #         "quantizer_config.build_params.nlist": 256,
+#     #         "quantizer_config.build_params.space": "l2",
+#     #     },
+#     #     "color": "#bcbd22",
+#     #     "marker": "h",
+#     # },
+#     # {
+#     #     "label": "RQ",
+#     #     "file": "benchmark/results/distribution_shift/sift-128-euclidean_ResidualQuantizationFaiss.json",
+#     #     "filters": {
+#     #         "quantizer": "ResidualQuantizationFaiss",
+#     #         "search_params.topk": 100,
+#     #         "quantizer_config.build_params.nbit": 8,
+#     #         "quantizer_config.build_params.nsubvec": 32,
+#     #         "quantizer_config.build_params.max_beam_size": 10,
+#     #         "quantizer_config.build_params.space": "l2",
+#     #     },
+#     #     "color": "#aec7e8",
+#     #     "marker": "*",
+#     # },
+#     {
+#         "label": "SQ",
+#         "file": "benchmark/results/distribution_shift/sift-128-euclidean_ScalarQuatizationFaiss.json",
+#         "filters": {
+#             "quantizer": "ScalarQuatizationFaiss",
+#             "search_params.topk": 100,
+#             "quantizer_config.build_params.nbit": 4,
+#             "quantizer_config.build_params.space": "l2",
+#         },
+#         "color": "#ff9896",
+#         "marker": "p",
+#     },
+#     # {
+#     #     "label": "VAQ",
+#     #     "file": "benchmark/results/distribution_shift/sift-128-euclidean_VAQ.json",
+#     #     "filters": {
+#     #         "quantizer": "VAQ",
+#     #         "search_params.topk": 100,
+#     #         "quantizer_config.build_params.bit_budget": 256,
+#     #         "quantizer_config.build_params.max_bits": 6,
+#     #         "quantizer_config.build_params.min_bits": 1,
+#     #         "quantizer_config.build_params.search_method": "SORT",
+#     #         "quantizer_config.build_params.subspace_num": 64,
+#     #         "quantizer_config.build_params.var_explained": 1.0,
+#     #     },
+#     #     "color": "#98df8a",
+#     #     "marker": "d",
+#     # },
+#     {
+#         "label": "TurboQuant",
+#         "file": "benchmark/results/distribution_shift/sift-128-euclidean_TurboQuant.json",
+#         "filters": {
+#             "quantizer": "TurboQuant",
+#             "search_params.topk": 100,
+#             "quantizer_config.build_params.bitwidth": 4,
+#             "quantizer_config.build_params.space": "l2",
+#         },
+#         "color": "#00acc1",
+#         "marker": "H",
+#     },
+#     {
+#         "label": "SAQ",
+#         "file": "benchmark/results/distribution_shift/sift-128-euclidean_SAQ.json",
+#         "filters": {
+#             "quantizer": "SAQ",
+#             "search_params.topk": 100,
+#             "quantizer_config.build_params.nbit": 4,
+#             "quantizer_config.build_params.space": "l2",
+#         },
+#         "color": "#f39c12",
+#         "marker": "8",
+#     },
+# ]
+
 
 
 def _build_series_specs(raw_specs: Sequence[Mapping[str, Any]]) -> List[SeriesSpec]:
@@ -333,14 +541,72 @@ def _load_points(spec: SeriesSpec) -> List[tuple[float, float]]:
     return points
 
 
-def _plot_series(series_specs: Iterable[SeriesSpec], output_path: Path | None, title: str | None) -> None:
-    fig, ax = plt.subplots(figsize=(11, 6.5))
+def _default_legend_output_path(output_path: Path) -> Path:
+    return output_path.with_name(f"{output_path.stem}_legend.pdf")
 
+
+def _save_legend_pdf(handles: Sequence[Any], labels: Sequence[str], legend_output_path: Path) -> None:
+    if not handles or not labels:
+        return
+
+    legend_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fig_leg = plt.figure()
+    legend = fig_leg.legend(
+        handles=handles,
+        loc="center",
+        ncol=7,
+        frameon=False,
+        fontsize=12
+    )
+    fig_leg.canvas.draw()
+    bbox = legend.get_window_extent().transformed(fig_leg.dpi_scale_trans.inverted())
+    fig_leg.savefig(legend_output_path, bbox_inches=bbox, pad_inches=0)
+
+    # num_items = len(labels)
+    # legend_width = 7.0
+    # legend_fig, legend_ax = plt.subplots(figsize=(legend_width, 1.0))
+    # legend_ax.axis("off")
+    # legend_fig.legend(
+    #     handles,
+    #     labels,
+    #     loc="center",
+    #     ncol=num_items,
+    #     frameon=False,
+    #     fontsize=9,
+    #     handlelength=2.2,
+    #     columnspacing=1.2,
+    # )
+    # legend_fig.savefig(legend_output_path, dpi=200, bbox_inches="tight", format="pdf")
+    plt.close(fig_leg)
+    print(f"Saved legend to {legend_output_path}")
+
+
+def _print_recall_ratio(label: str, recalls: Sequence[float]) -> None:
+    max_recall = max(recalls)
+    min_recall = min(recalls)
+    ratio = float("inf") if min_recall == 0 else max_recall / min_recall
+    print(
+        f"{label}: max/min recall = {ratio:.6g} "
+        f"(max={max_recall:.6g}, min={min_recall:.6g})"
+    )
+
+
+def _plot_series(
+    series_specs: Iterable[SeriesSpec],
+    output_path: Path | None,
+    legend_output_path: Path | None,
+) -> None:
+    fig, ax = plt.subplots(figsize=(5, 4))
+
+    handles: List[Any] = []
+    labels: List[str] = []
     for spec in series_specs:
         points = _load_points(spec)
         x_values = [point[0] for point in points]
         y_values = [point[1] for point in points]
-        ax.plot(
+        _print_recall_ratio(spec.label, y_values)
+        (line,) = ax.plot(
             x_values,
             y_values,
             label=spec.label,
@@ -350,21 +616,27 @@ def _plot_series(series_specs: Iterable[SeriesSpec], output_path: Path | None, t
             linewidth=1.8,
             markersize=6,
         )
+        handles.append(line)
+        labels.append(spec.label)
 
-    ax.set_xlabel("JS divergence")
-    ax.set_ylabel("Recall")
-    if title:
-        ax.set_title(title)
+    ax.set_xlabel("JS divergence", fontsize=18)
+    ax.set_ylabel("Recall", fontsize=18)
     ax.grid(True, linestyle="--", alpha=0.35)
-    ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False, fontsize=9)
     fig.tight_layout()
+
+    if legend_output_path is None and output_path is not None:
+        legend_output_path = _default_legend_output_path(output_path)
+    if legend_output_path is not None:
+        _save_legend_pdf(handles, labels, legend_output_path)
 
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(output_path, dpi=200, bbox_inches="tight",format='pdf')
+        fig.savefig(output_path, dpi=200, bbox_inches="tight", format="pdf")
         print(f"Saved plot to {output_path}")
     else:
         plt.show()
+
+    plt.close(fig)
 
 
 def main() -> int:
@@ -377,14 +649,14 @@ def main() -> int:
         help="Optional output image path. If omitted, the plot is shown interactively.",
     )
     parser.add_argument(
-        "--title",
-        default="Distribution Shift: JS Divergence vs Recall",
-        help="Plot title.",
+        "--legend-output",
+        type=Path,
+        help="Optional standalone legend PDF path. Defaults to '<output stem>_legend.pdf' when --output is set.",
     )
     args = parser.parse_args()
 
     series_specs = _build_series_specs(DEFAULT_SERIES_SPECS)
-    _plot_series(series_specs, args.output, args.title)
+    _plot_series(series_specs, args.output, args.legend_output)
     return 0
 
 
