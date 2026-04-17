@@ -1,4 +1,5 @@
 import numpy as np
+from contextlib import nullcontext
 from typing import Tuple
 import psutil
 import sys
@@ -7,12 +8,35 @@ import faiss
 
 sys.path.insert(0, '/benchmark')
 from benchmark.base import BaseQuantizer
+from benchmark.ivf_centroid_cache import (
+    data_fingerprint,
+    load_npz,
+    save_npz,
+)
+
+try:
+    from threadpoolctl import threadpool_limits
+except ImportError:
+    threadpool_limits = None
 
 try:
     import saq_cpp
 except ImportError as e:
     print(f"Warning: Could not import saq_cpp: {e}")
     saq_cpp = None
+
+
+def _max_threads() -> int:
+    return max(1, (os.cpu_count() or 1))
+
+
+def _lift_blas(n: int):
+    # docker_runner pins OPENBLAS/MKL/OMP to config.yaml nthread, which throttles
+    # PCA GEMM, eigh, and faiss flat search during build. Lift the BLAS pool for
+    # the build phase so it matches the SAQ C++ thread pool.
+    if threadpool_limits is None:
+        return nullcontext()
+    return threadpool_limits(limits=n)
 
 
 class IVFSAQ(BaseQuantizer):
@@ -49,8 +73,6 @@ class IVFSAQ(BaseQuantizer):
         # Coarse quantizer
         self.coarse_quantizer = None
         self.coarse_index = None
-
-        faiss.omp_set_num_threads(nthread)
 
         if saq_cpp is None:
             raise RuntimeError(
@@ -101,38 +123,73 @@ class IVFSAQ(BaseQuantizer):
     def train(self, nd: int, data: np.ndarray) -> bool:
         """Learn PCA rotation and coarse centroids from training data."""
         try:
-            train_data = np.ascontiguousarray(data.astype(np.float32))
+            # Max out CPU threads for PCA + k-means. Lift BLAS pool too — the
+            # docker entrypoint pins OPENBLAS/MKL to nthread, which throttles
+            # PCA GEMM/eigh and faiss flat search.
+            nt = _max_threads()
+            faiss.omp_set_num_threads(nt)
+            with _lift_blas(nt):
+                train_data = np.ascontiguousarray(data.astype(np.float32))
 
-            # Step 1: Compute PCA
-            self._compute_pca(train_data)
+                fp = data_fingerprint(train_data)
+                # SAQ centroids live in PCA-rotated space and are not interchangeable
+                # with the shared raw-space coarse cache. Cache PCA + centroids
+                # together under an SAQ-specific key so multiple nbit runs over the
+                # same data and nlist reuse the same training output.
+                saq_key = f"saq_pca_{fp}_nlist{self.nlist}_d{self.ndim}"
+                cached = load_npz(saq_key)
+                if (
+                    cached is not None
+                    and cached.get("pca_matrix") is not None
+                    and cached.get("data_mean") is not None
+                    and cached.get("eigenvalues") is not None
+                    and cached.get("coarse_quantizer") is not None
+                    and cached["pca_matrix"].shape == (self.ndim, self.ndim)
+                    and cached["coarse_quantizer"].shape == (self.nlist, self.ndim)
+                ):
+                    self.pca_matrix = np.ascontiguousarray(cached["pca_matrix"].astype(np.float32))
+                    self.data_mean = np.ascontiguousarray(cached["data_mean"].astype(np.float32))
+                    self.eigenvalues = np.ascontiguousarray(cached["eigenvalues"].astype(np.float32))
+                    self.coarse_quantizer = np.ascontiguousarray(cached["coarse_quantizer"].astype(np.float32))
+                else:
+                    # Step 1: Compute PCA
+                    self._compute_pca(train_data)
 
-            # Step 2: Transform training data to PCA space
-            data_pca = self._apply_pca(train_data)
+                    # Step 2: Transform training data to PCA space
+                    data_pca = self._apply_pca(train_data)
 
-            # Step 3: Run k-means on PCA-transformed data
-            if self.nlist == 1:
-                self.coarse_quantizer = np.ascontiguousarray(
-                    data_pca.mean(axis=0, keepdims=True).astype(np.float32)
-                )
-            else:
-                kmeans = faiss.Kmeans(
-                    d=self.ndim,
-                    k=self.nlist,
-                    niter=25,
-                    verbose=False,
-                    seed=1234,
-                )
-                kmeans.train(data_pca)
-                self.coarse_quantizer = np.ascontiguousarray(
-                    kmeans.centroids.astype(np.float32)
-                )
+                    # Step 3: Run k-means on PCA-transformed data
+                    if self.nlist == 1:
+                        self.coarse_quantizer = np.ascontiguousarray(
+                            data_pca.mean(axis=0, keepdims=True).astype(np.float32)
+                        )
+                    else:
+                        kmeans = faiss.Kmeans(
+                            d=self.ndim,
+                            k=self.nlist,
+                            niter=25,
+                            verbose=False,
+                            seed=1234,
+                        )
+                        kmeans.train(data_pca)
+                        self.coarse_quantizer = np.ascontiguousarray(
+                            kmeans.centroids.astype(np.float32)
+                        )
 
-            # Step 4: Build coarse index for cluster assignment
-            self.coarse_index = faiss.IndexFlatL2(self.ndim)
-            self.coarse_index.add(self.coarse_quantizer)
+                    save_npz(
+                        saq_key,
+                        pca_matrix=self.pca_matrix,
+                        data_mean=self.data_mean,
+                        eigenvalues=self.eigenvalues,
+                        coarse_quantizer=self.coarse_quantizer,
+                    )
 
-            self.trained = False
-            return True
+                # Step 4: Build coarse index for cluster assignment
+                self.coarse_index = faiss.IndexFlatL2(self.ndim)
+                self.coarse_index.add(self.coarse_quantizer)
+
+                self.trained = False
+                return True
         except Exception as e:
             print(f"Training error: {e}")
             import traceback
@@ -145,25 +202,29 @@ class IVFSAQ(BaseQuantizer):
             raise RuntimeError("Index not trained. Call train() first.")
 
         try:
-            self.data = np.ascontiguousarray(data.astype(np.float32))
-            self._original_data = self.data
-            self.ndata = nd
+            nt = _max_threads()
+            faiss.omp_set_num_threads(nt)
+            with _lift_blas(nt):
+                self.data = np.ascontiguousarray(data.astype(np.float32))
+                self._original_data = self.data
+                self.ndata = nd
 
-            # Apply PCA transformation
-            data_pca = self._apply_pca(self.data)
+                # Apply PCA transformation
+                data_pca = self._apply_pca(self.data)
 
-            # Assign clusters
-            _, assignments = self.coarse_index.search(data_pca, 1)
-            cluster_ids = np.ascontiguousarray(assignments.reshape(-1).astype(np.uint32))
+                # Assign clusters
+                _, assignments = self.coarse_index.search(data_pca, 1)
+                cluster_ids = np.ascontiguousarray(assignments.reshape(-1).astype(np.uint32))
 
-            # Build C++ index with variance information
-            self.cpp_index.build(
-                data_pca,
-                self.coarse_quantizer,
-                cluster_ids,
-                self.eigenvalues,
-                self.nthread,
-            )
+                # Build C++ index with variance information — the saq binding takes
+                # num_threads per-call, so use max threads here regardless of nthread.
+                self.cpp_index.build(
+                    data_pca,
+                    self.coarse_quantizer,
+                    cluster_ids,
+                    self.eigenvalues,
+                    nt,
+                )
 
             self.trained = True
             return True
@@ -177,6 +238,8 @@ class IVFSAQ(BaseQuantizer):
         if not self.trained:
             raise RuntimeError("Index not trained. Call fit() first.")
 
+        # Query runs with the configured thread count.
+        faiss.omp_set_num_threads(self.nthread)
         queries = np.ascontiguousarray(queries.astype(np.float32))
 
         # Apply PCA transformation to queries

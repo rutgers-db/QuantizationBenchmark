@@ -1,0 +1,89 @@
+sift-128-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 128
+    nthread: 16
+    space: "l2"
+  build:
+    nsubvec: [32, 128]
+    nbit: [4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [10, 20, 30, 50, 75, 100]
+      nrerank: [200, 300, 500, 1000]
+
+gist-960-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 960
+    nthread: 16
+    space: "l2"
+  build:
+    nsubvec: [240]
+    nbit: [4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [10, 20, 30, 50, 75, 100]
+      nrerank: [200, 300, 500, 1000]
+
+audio-128-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 128
+    nthread: 16
+    space: "l2"
+  build:
+    nsubvec: [32, 128]
+    nbit: [4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [10, 20, 30, 50, 75, 100]
+      nrerank: [200, 300, 500, 1000]
+
+video-1024-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 1024
+    nthread: 16
+    space: "l2"
+  build:
+    nsubvec: [256, 1024]
+    nbit: [4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [10, 20, 30, 50, 75, 100]
+      nrerank: [200, 300, 500, 1000]
+
+text2image-200-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 200
+    nthread: 16
+    space: "l2"
+  build:
+    nsubvec: [50,200]
+    nbit: [4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [10, 20, 30, 50, 75, 100]
+      nrerank: [200, 300, 500, 1000]
+
+paper-200-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 200
+    nthread: 16
+    space: "l2"
+  build:
+    nsubvec: [50]
+    nbit: [4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [10, 20, 30, 50, 75, 100]
+      nrerank: [200, 300, 500, 1000]

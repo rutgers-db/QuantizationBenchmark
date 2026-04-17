@@ -2,11 +2,16 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DATASET="${1:-sift-128-euclidean}"
+DATASET="${1:-gist-960-euclidean}"
 RESULTS_DIR="${RESULTS_DIR:-$REPO_ROOT/benchmark/results/distribution_shift}"
 QUANTIZER_DIR="${QUANTIZER_DIR:-$REPO_ROOT/benchmark/algorithms/quantizer}"
 LOG_DIR="${LOG_DIR:-$REPO_ROOT/logs/distribution_shift}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
+
+# ================= 设置排除列表 =================
+# 在这里填入你不想运行的算法名称，用空格分隔
+EXCLUDE_ALGOS=("LSQFaiss" "ProductQuantizationFastScanFaiss" "VAQ" "PLSQFaiss" "PRQFaiss" "ResidualQuantizationFaiss")
+# ===============================================
 
 mkdir -p "$LOG_DIR"
 
@@ -19,6 +24,17 @@ mapfile -t DONE_ALGOS < <(
 
 missing_algos=()
 for algo in "${ALL_ALGOS[@]}"; do
+  # 1. 检查是否在排除列表中
+  is_excluded=0
+  for ex in "${EXCLUDE_ALGOS[@]:-}"; do
+    if [[ "$algo" == "$ex" ]]; then
+      is_excluded=1
+      break
+    fi
+  done
+  [[ "$is_excluded" -eq 1 ]] && continue
+
+  # 2. 检查是否已经运行过
   found=0
   for done in "${DONE_ALGOS[@]:-}"; do
     if [[ "$algo" == "$done" ]]; then
@@ -26,18 +42,20 @@ for algo in "${ALL_ALGOS[@]}"; do
       break
     fi
   done
+  
   if [[ "$found" -eq 0 ]]; then
     missing_algos+=("$algo")
   fi
 done
 
 if [[ ${#missing_algos[@]} -eq 0 ]]; then
-  echo "No missing distribution-shift quantizer runs found for dataset '$DATASET'."
+  echo "No missing (and non-excluded) distribution-shift quantizer runs found for dataset '$DATASET'."
   exit 0
 fi
 
 echo "Dataset: $DATASET"
-echo "Missing quantizer algorithms: ${missing_algos[*]}"
+echo "Excluded algorithms: ${EXCLUDE_ALGOS[*]}"
+echo "Missing quantizer algorithms to run: ${missing_algos[*]}"
 echo
 
 for algo in "${missing_algos[@]}"; do
@@ -70,4 +88,4 @@ for algo in "${missing_algos[@]}"; do
 
 done
 
-echo "All missing quantizer distribution-shift runs completed for dataset '$DATASET'."
+echo "All tasks completed for dataset '$DATASET'."

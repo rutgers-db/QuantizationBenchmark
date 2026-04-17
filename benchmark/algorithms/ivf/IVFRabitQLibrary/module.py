@@ -7,6 +7,12 @@ import faiss
 
 sys.path.insert(0, '/benchmark')
 from benchmark.base import BaseQuantizer
+from benchmark.ivf_centroid_cache import (
+    data_fingerprint,
+    coarse_key,
+    load_centroids,
+    save_centroids,
+)
 
 # Import the C++ module
 try:
@@ -14,6 +20,10 @@ try:
 except ImportError as e:
     print(f"Warning: Could not import rabitqlib_cpp: {e}")
     rabitqlib_cpp = None
+
+
+def _max_threads() -> int:
+    return max(1, (os.cpu_count() or 1))
 
 
 class IVFRabitQLibrary(BaseQuantizer):
@@ -42,9 +52,8 @@ class IVFRabitQLibrary(BaseQuantizer):
         self.nlist = nlist
         self.data_bytes = data_bytes
         self.bits = nbit
-        self.nthread = nthread
+        self.nthread = int(nthread)
         self.space = space
-        faiss.omp_set_num_threads(self.nthread)
         self.data = None
         self.ndata = 0
         self.trained = False
@@ -68,6 +77,9 @@ class IVFRabitQLibrary(BaseQuantizer):
     def train(self, nd: int, data: np.ndarray) -> bool:
         """Learn IVF centroids on the given training sample."""
         try:
+            # Max out CPU threads for k-means training.
+            faiss.omp_set_num_threads(_max_threads())
+
             train_data = np.ascontiguousarray(data, dtype=np.float32)
 
             if self.nlist == 1:
@@ -75,16 +87,22 @@ class IVFRabitQLibrary(BaseQuantizer):
                     train_data.mean(axis=0, keepdims=True).astype(np.float32)
                 )
             else:
-                faiss.omp_set_num_threads(self.nthread)
-                kmeans = faiss.Kmeans(
-                    d=self.ndim,
-                    k=self.nlist,
-                    niter=25,
-                    verbose=False,
-                    seed=1234,
-                )
-                kmeans.train(train_data)
-                centroids = np.ascontiguousarray(kmeans.centroids.astype(np.float32))
+                fp = data_fingerprint(train_data)
+                ckey = coarse_key(fp, self.nlist, "l2")
+                cached = load_centroids(ckey)
+                if cached is not None and cached.shape == (self.nlist, self.ndim):
+                    centroids = np.ascontiguousarray(cached.astype(np.float32))
+                else:
+                    kmeans = faiss.Kmeans(
+                        d=self.ndim,
+                        k=self.nlist,
+                        niter=25,
+                        verbose=False,
+                        seed=1234,
+                    )
+                    kmeans.train(train_data)
+                    centroids = np.ascontiguousarray(kmeans.centroids.astype(np.float32))
+                    save_centroids(ckey, centroids)
 
             self._trained_centroids = centroids
             self.coarse_index = faiss.IndexFlatL2(self.ndim)
@@ -107,6 +125,7 @@ class IVFRabitQLibrary(BaseQuantizer):
             raise RuntimeError("Index not trained. Call train() first.")
 
         try:
+            faiss.omp_set_num_threads(_max_threads())
             self.data = np.ascontiguousarray(data, dtype=np.float32)
             self._original_data = self.data
             self.ndata = nd
@@ -117,6 +136,11 @@ class IVFRabitQLibrary(BaseQuantizer):
 
             metric_str = "ip" if self.space == "ip" else "l2"
 
+            # The rabitqlib C++ index bakes the thread count in at construction
+            # time (used by both .construct() and .search_batch()) and exposes
+            # no runtime setter, so we pass self.nthread here to keep query
+            # parallelism aligned with the config. The k-means centroid training
+            # above already runs with all CPU threads via faiss.omp_set_num_threads.
             self.index = rabitqlib_cpp.IVF(
                 nd,
                 self.ndim,
@@ -142,6 +166,7 @@ class IVFRabitQLibrary(BaseQuantizer):
 
 
     def query(self, nq: int, queries: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
+        faiss.omp_set_num_threads(self.nthread)
         """
         Search for the top-k nearest neighbors for each query.
 
