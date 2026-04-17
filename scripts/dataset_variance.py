@@ -142,6 +142,28 @@ def compute_s_rad(data: np.ndarray, mean: np.ndarray) -> float:
     return var_sq / (e_sq ** 2)
 
 
+def compute_variance_entropy(variance: np.ndarray) -> float:
+    """
+    Compute the normalized entropy of the per-dimension variance distribution.
+
+    p_i = var_i / sum(var),  H = -sum(p_i * log(p_i)),  result = H / log(D)
+
+    Result in [0, 1]: 1 means variance is perfectly uniform across dimensions;
+    0 means all variance concentrated in a single dimension.
+
+    Args:
+        variance: Per-dimension variances, shape (d,)
+
+    Returns:
+        Normalized variance entropy H / log(D)
+    """
+    d = len(variance)
+    p = variance / variance.sum()
+    p = np.maximum(p, 1e-300)          # avoid log(0)
+    H = -float(np.sum(p * np.log(p)))
+    return H / np.log(d)
+
+
 def compute_pca_dim(eigvals: np.ndarray, threshold: float = 0.99) -> int:
     """
     Find the minimum number of PCA dimensions needed to explain at least
@@ -355,6 +377,9 @@ def analyze_dataset(dataset_name: str) -> dict:
     pca_dim_95 = compute_pca_dim(eigvals_corr, threshold=0.95)
     pca_dim_99 = compute_pca_dim(eigvals_corr, threshold=0.99)
 
+    print(f"       Computing variance entropy ...")
+    var_entropy = compute_variance_entropy(variance)
+
     print(f"       Computing S_iso and S_rad ...")
     s_iso = compute_s_iso(cov)
     # S_rad * d: for an isotropic Gaussian this equals 2 (chi-squared identity)
@@ -389,6 +414,7 @@ def analyze_dataset(dataset_name: str) -> dict:
 
     print(f"       dtype                          = {point_type}")
     print(f"       PCA dims 90/95/99% var         = {pca_dim_90} / {pca_dim_95} / {pca_dim_99}  (out of {dimension})")
+    print(f"       Var entropy H/logD             = {var_entropy:.6f}")
     print(f"       S_iso                          = {s_iso:.6f}")
     print(f"       S_rad·d (Gaussian=2)           = {s_rad:.6f}")
     print(f"       ||x-μ|| q99/q90                = {norm_q99_q90:.4f}")
@@ -418,6 +444,7 @@ def analyze_dataset(dataset_name: str) -> dict:
         "pca_dim_90":     pca_dim_90,
         "pca_dim_95":     pca_dim_95,
         "pca_dim_99":     pca_dim_99,
+        "var_entropy":    var_entropy,
         "s_iso":          s_iso,
         "s_rad":          s_rad,
         "norm_q99_q90":   norm_q99_q90,
@@ -469,7 +496,7 @@ def _save_table_figure(rows: list) -> None:
         "dataset",
         "n_train", "dimension", "point_type",
         "pca_dim_90", "pca_dim_95", "pca_dim_99",
-        "s_iso", "s_rad", "norm_q99_q90",
+        "var_entropy", "s_iso", "s_rad", "norm_q99_q90",
         *lid_keys,
         "mean_diff_l2", "cov_diff_rel",
         "mmd2_train_test", "mmd2_train_split", "mmd2_ratio",
@@ -478,7 +505,7 @@ def _save_table_figure(rows: list) -> None:
         "Dataset",
         "N", "D", "DType",
         "PCA90", "PCA95", "PCA99",
-        "S_iso", "S_rad·d", "q99/q90",
+        "H/logD", "S_iso", "S_rad·d", "q99/q90",
         *lid_headers,
         "|Δμ|₂", "|ΔΣ|rel",
         "MMD²(tr,te)", "MMD²(split)", "MMD ratio",
@@ -543,6 +570,7 @@ if __name__ == "__main__":
             "pca_dim_90":       results["pca_dim_90"],
             "pca_dim_95":       results["pca_dim_95"],
             "pca_dim_99":       results["pca_dim_99"],
+            "var_entropy":       results["var_entropy"],
             "s_iso":            results["s_iso"],
             "s_rad":            results["s_rad"],
             "norm_q99_q90":     results["norm_q99_q90"],
