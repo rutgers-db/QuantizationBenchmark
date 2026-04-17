@@ -292,7 +292,7 @@ algo_rates   = {}
 
 for dataset, topk_data in sorted(data.items()):
     for topk, algo_data in sorted(topk_data.items()):
-        fig, ax = plt.subplots(figsize=(5, 4))
+        fig, ax = plt.subplots(figsize=(4.4, 4))
 
         # Collect all delta-QPS and display-x values across all rates
         all_disp_x = []
@@ -396,7 +396,7 @@ for dataset, topk_data in sorted(data.items()):
         plt.close(fig)
 
         # ── Absolute rerank QPS figure (same x-axis, log y) ──────────
-        fig2, ax2 = plt.subplots(figsize=(5, 4))
+        fig2, ax2 = plt.subplots(figsize=(4.4, 4))
 
         all_disp_x2 = []
         for algo, rate_map in sorted(algo_data.items()):

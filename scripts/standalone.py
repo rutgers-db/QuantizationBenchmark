@@ -196,7 +196,7 @@ algo_rates   = {}   # leg_key -> set of rates that actually have data
 
 for dataset, topk_data in sorted(data.items()):
     for topk, algo_data in sorted(topk_data.items()):
-        fig, ax = plt.subplots(figsize=(5, 4))
+        fig, ax = plt.subplots(figsize=(4.4, 4))
 
         # Collect QPS of all points that will be drawn
         plotted_qps = [
