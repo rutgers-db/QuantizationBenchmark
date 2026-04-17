@@ -272,7 +272,7 @@ PYBIND11_MODULE(turbo_quant_cpp, m) {
            py::arg("mode")              = 0,          // 0 = kMSE
            py::arg("num_threads")       = 1,
            py::arg("seed")              = 123456789ULL,
-           py::arg("rotation_type")     = 1,          // 1 = kDense
+           py::arg("rotation_type")     = 0,          // 0 = kHadamard
            py::arg("use_data_centroid") = true,
            py::arg("nlist")             = 1,
            py::arg("nprobe")            = 1)

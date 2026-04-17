@@ -2057,9 +2057,6 @@ class TurboQuantIndex {
       throw std::invalid_argument("TurboQuantIndex: dim must be > 0");
     if (bitwidth_ == 0 || bitwidth_ > 9)
       throw std::invalid_argument("TurboQuantIndex: bitwidth must be in [1, 9]");
-    // Auto-select Hadamard when dim is a power of 2: avoids O(d³) QR decomposition.
-    if (rotation_type_ == RotationType::kDense && dim_ > 0 && (dim_ & (dim_ - 1)) == 0)
-      rotation_type_ = RotationType::kHadamard;
     padded_dim_ = (rotation_type_ == RotationType::kHadamard)
                   ? detail::next_pow2(dim_) : dim_;
     ivf_.setup(cfg.nlist, cfg.nprobe);

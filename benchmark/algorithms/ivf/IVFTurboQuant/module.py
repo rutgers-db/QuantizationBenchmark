@@ -36,7 +36,7 @@ class IVFTurboQuant(BaseQuantizer):
     def __init__(self, ndim: int, bitwidth: int, data_bytes: int = 4,
                  nthread: int = 1, space: str = "l2",
                  mode: str = "mse", seed: int = 123456789,
-                 rotation_type: str = "dense",
+                 rotation_type: str = "hadamard",
                  use_data_centroid: bool = True,
                  nlist: int = 1):
         """
