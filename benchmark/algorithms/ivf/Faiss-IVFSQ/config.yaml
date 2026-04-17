@@ -7,18 +7,12 @@ sift-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [4, 6, 8]  # Bits per component for scalar quantization
-    nlist: [1024, 2048, 4096, 8192]  # Number of IVF clusters
+    nbit: [4]  # Bits per component for scalar quantization
+    nlist: [1024, 4096]  # Number of IVF clusters
   search:
-    - topk: 10
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nprobe: [10, 20, 30, 50, 75, 100]
+      nrerank: [200, 300, 500, 1000]
 
 gist-960-euclidean:
   common:
@@ -27,18 +21,12 @@ gist-960-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [4, 6, 8]  # Bits per component for scalar quantization
-    nlist: [1024, 2048, 4096, 8192]  # Number of IVF clusters
+    nbit: [4]  # Bits per component for scalar quantization
+    nlist: [1024, 4096]  # Number of IVF clusters
   search:
-    - topk: 10
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nprobe: [10, 20, 30, 50, 75, 100]
+      nrerank: [200, 300, 500, 1000]
 
 audio-128-euclidean:
   common:
@@ -47,18 +35,12 @@ audio-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [4, 6, 8]  # Bits per component for scalar quantization
-    nlist: [1024, 2048, 4096, 8192]  # Number of IVF clusters
+    nbit: [4]  # Bits per component for scalar quantization
+    nlist: [1024, 4096]  # Number of IVF clusters
   search:
-    - topk: 10
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nprobe: [10, 20, 30, 50, 75, 100]
+      nrerank: [200, 300, 500, 1000]
 
 video-1024-euclidean:
   common:
@@ -67,18 +49,12 @@ video-1024-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [4, 6, 8]  # Bits per component for scalar quantization
-    nlist: [1024, 2048, 4096, 8192]  # Number of IVF clusters
+    nbit: [4]  # Bits per component for scalar quantization
+    nlist: [1024, 4096]  # Number of IVF clusters
   search:
-    - topk: 10
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nprobe: [10, 20, 30, 50, 75, 100]
+      nrerank: [200, 300, 500, 1000]
 
 text2image-200-euclidean:
   common:
@@ -87,18 +63,12 @@ text2image-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [4, 6, 8]  # Bits per component for scalar quantization
-    nlist: [1024, 2048, 4096, 8192]  # Number of IVF clusters
+    nbit: [4]  # Bits per component for scalar quantization
+    nlist: [1024, 4096]  # Number of IVF clusters
   search:
-    - topk: 10
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nprobe: [10, 20, 30, 50, 75, 100]
+      nrerank: [200, 300, 500, 1000]
 
 paper-200-euclidean:
   common:
@@ -107,15 +77,9 @@ paper-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [4, 6, 8]  # Bits per component for scalar quantization
-    nlist: [1024, 2048, 4096, 8192]  # Number of IVF clusters
+    nbit: [4]  # Bits per component for scalar quantization
+    nlist: [1024, 4096]  # Number of IVF clusters
   search:
-    - topk: 10
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
     - topk: 100
-      nprobe: [10, 20, 30, 40, 50, 75, 100]
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nprobe: [10, 20, 30, 50, 75, 100]
+      nrerank: [200, 300, 500, 1000]

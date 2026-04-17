@@ -10,11 +10,7 @@ sift-128-euclidean:
     max_beam_size: [10]
   search:
     - topk: 100
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 10
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nrerank: [200, 300, 500, 800, 1000]
 
 gist-960-euclidean:
   common:
@@ -23,13 +19,65 @@ gist-960-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsubvec: [480]
-    nbit: [8]
-    max_beam_size: [40]
+    nsubvec: [16, 32, 64]
+    nbit: [4, 8]
+    max_beam_size: [5, 10]
   search:
     - topk: 100
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 10
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
-    - topk: 50
-      nrerank: [100, 200, 300, 400, 500, 1000, 1500, 2500]
+      nrerank: [200, 300, 500, 800, 1000]
+
+audio-128-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 128
+    nthread: 16
+    space: "l2"
+  build:
+    nsubvec: [16, 32, 64]
+    nbit: [4, 8]
+    max_beam_size: [5, 10]
+  search:
+    - topk: 100
+      nrerank: [200, 300, 500, 800, 1000]
+
+video-1024-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 1024
+    nthread: 16
+    space: "l2"
+  build:
+    nsubvec: [32, 64, 128, 256, 512]
+    nbit: [4, 8]
+    max_beam_size: [5, 10]
+  search:
+    - topk: 100
+      nrerank: [200, 300, 500, 800, 1000]
+
+text2image-200-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 200
+    nthread: 16
+    space: "l2"
+  build:
+    nsubvec: [25, 50, 100]
+    nbit: [4, 8]
+    max_beam_size: [5, 10]
+  search:
+    - topk: 100
+      nrerank: [200, 300, 500, 800, 1000]
+
+paper-200-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 200
+    nthread: 16
+    space: "l2"
+  build:
+    nsubvec: [25, 50, 100]
+    nbit: [4, 8]
+    max_beam_size: [5, 10]
+  search:
+    - topk: 100
+      nrerank: [200, 300, 500, 800, 1000]

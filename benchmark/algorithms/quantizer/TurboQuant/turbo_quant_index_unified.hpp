@@ -34,13 +34,18 @@
 //
 // SEARCH MATH (why norms appear in query())
 // -----------------------------------------
-// Let q_eff, x_eff be centred (or raw) query and database vectors, with
-// unit directions q_unit, x_unit. The index approximates
-//   s ≈ ⟨q_unit, x_unit⟩
-// from quantized data. True dot product:
-//   ⟨q_eff, x_eff⟩ = ‖q_eff‖ · ‖x_eff‖ · ⟨q_unit, x_unit⟩.
+// Let c = data centroid (zero if use_data_centroid=false).
+// Let q_eff = q−c, x_eff = x−c, with unit directions q_unit, x_unit.
+// The index approximates  s ≈ ⟨q_unit, x_unit⟩  from quantized data.
+//
 // L2 distance (bridge formula, expands (q−x)²):
-//   ‖q_eff − x_eff‖² = ‖q_eff‖² + ‖x_eff‖² − 2‖q_eff‖‖x_eff‖⟨q_unit, x_unit⟩.
+//   ‖q_eff − x_eff‖² = ‖q_eff‖² + ‖x_eff‖² − 2‖q_eff‖‖x_eff‖⟨q_unit,x_unit⟩.
+//
+// Raw IP (centroid correction restores ⟨q,x⟩ from ⟨q_eff,x_eff⟩):
+//   ⟨q,x⟩ = ⟨q_eff,x_eff⟩ + ⟨c,x⟩ + (⟨q,c⟩ − ‖c‖²)
+//          = ‖q_eff‖·‖x_eff‖·⟨q_unit,x_unit⟩ + ⟨c,x⟩ + (⟨q,c⟩ − ‖c‖²)
+// ⟨c,x⟩ is precomputed per base vector in cx_dots[].
+// (⟨q,c⟩ − ‖c‖²) is a per-query constant computed once in prepare_query().
 //
 // CONFIG PRESETS
 // --------------
@@ -86,6 +91,9 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+#ifdef __linux__
+#  include <sys/mman.h>
+#endif
 
 namespace turboquant {
 
@@ -114,38 +122,84 @@ namespace detail {
 // SIMD block sizes and SIMD accumulator drain interval (implementation constants)
 inline constexpr std::size_t kBlockSize       = 16;   // 16 lanes per block (nibble path)
 inline constexpr std::size_t kPackedBlockSize = 32;   // 32 lanes per block (packed path)
+inline constexpr std::size_t kBigBlockSize    = 128;  // 128 lanes per block (AVX-512BW big-packed path)
 inline constexpr std::size_t kRowAlignment    = 64;   // cache-line alignment for SIMD loads
-inline constexpr std::size_t kDrainInterval   = 128;  // drain int16→int32 every 128 dims
+inline constexpr std::size_t kDrainInterval   = 256;  // drain int16→int32 every 256 dims (safe: 256*127=32512 < INT16_MAX=32767)
 inline constexpr float       kQjlScale        = 1.2533141373155001f;  // sqrt(π/2)
 
 // ------------------------------------------------------------------
 // Min-heap for top-k results
-// rank_key = negated-L2 or dot-product (max-heap on rank_key = keep best)
+// score = heap ordering key: dot-product for IP, negated-L2 for L2
+//         (max-heap on score = keep best; caller negates L2 score at output)
 // ------------------------------------------------------------------
-struct HeapEntry { float rank_key, value; std::int64_t label; };
+struct HeapEntry { float score; std::int64_t label; };
 
 inline void heap_sift_up(HeapEntry* h, std::size_t idx) {
   while (idx > 0) {
     std::size_t p = (idx - 1) >> 1;
-    if (h[p].rank_key <= h[idx].rank_key) break;
+    if (h[p].score <= h[idx].score) break;
     std::swap(h[p], h[idx]); idx = p;
   }
 }
 inline void heap_sift_down(HeapEntry* h, std::size_t size, std::size_t idx) {
   while (true) {
     std::size_t s = idx, l = 2 * idx + 1, r = l + 1;
-    if (l < size && h[l].rank_key < h[s].rank_key) s = l;
-    if (r < size && h[r].rank_key < h[s].rank_key) s = r;
+    if (l < size && h[l].score < h[s].score) s = l;
+    if (r < size && h[r].score < h[s].score) s = r;
     if (s == idx) break;
     std::swap(h[idx], h[s]); idx = s;
   }
 }
 inline void heap_push_or_replace(std::vector<HeapEntry>& heap, std::size_t& hs,
-                                  std::size_t k, float rk, float v, std::int64_t lab) {
+                                  std::size_t k, float score, std::int64_t lab) {
   if (k == 0) return;
-  if (hs < k) { heap[hs] = {rk, v, lab}; heap_sift_up(heap.data(), hs); ++hs; return; }
-  if (rk <= heap[0].rank_key) return;
-  heap[0] = {rk, v, lab}; heap_sift_down(heap.data(), hs, 0);
+  if (hs < k) { heap[hs] = {score, lab}; heap_sift_up(heap.data(), hs); ++hs; return; }
+  if (score <= heap[0].score) return;
+  heap[0] = {score, lab}; heap_sift_down(heap.data(), hs, 0);
+}
+
+// ------------------------------------------------------------------
+// flush_candidates_to_heap — SIMD threshold pre-filter for heap insertion.
+//
+// When the heap is full (hs == k), reads heap[0].score once as a threshold,
+// then uses AVX-512 to compare 16 scores at a time.  Only elements beating
+// the threshold proceed to heap_push_or_replace (correct: that call re-checks
+// the current heap[0] so no false negatives are possible; threshold can only
+// rise within the block).
+//
+// For SIFT-1M k=100 block128 (128 elements/block), in steady state <0.02
+// elements/block beat the threshold → eliminates ~99% of heap call overhead.
+// ------------------------------------------------------------------
+inline void flush_candidates_to_heap(
+    const float* __restrict__ scores, std::size_t bs, std::size_t db0,
+    std::vector<HeapEntry>& heap, std::size_t& hs, std::size_t k) {
+  if (hs < k) {
+    for (std::size_t i = 0; i < bs; ++i)
+      heap_push_or_replace(heap, hs, k, scores[i], static_cast<std::int64_t>(db0 + i));
+    return;
+  }
+#if defined(__AVX512F__)
+  const float threshold = heap[0].score;
+  const __m512 thresh_v = _mm512_set1_ps(threshold);
+  const std::size_t full = bs & ~std::size_t{15};
+  for (std::size_t off = 0; off < full; off += 16) {
+    __mmask16 mask = _mm512_cmp_ps_mask(
+        _mm512_loadu_ps(scores + off), thresh_v, _CMP_GT_OQ);
+    while (mask) {
+      const int bit = __builtin_ctz(static_cast<unsigned>(mask));
+      mask &= static_cast<__mmask16>(mask - 1u);
+      heap_push_or_replace(heap, hs, k, scores[off + bit],
+                           static_cast<std::int64_t>(db0 + off + bit));
+    }
+  }
+  for (std::size_t i = full; i < bs; ++i)
+    if (scores[i] > threshold)
+      heap_push_or_replace(heap, hs, k, scores[i],
+                           static_cast<std::int64_t>(db0 + i));
+#else
+  for (std::size_t i = 0; i < bs; ++i)
+    heap_push_or_replace(heap, hs, k, scores[i], static_cast<std::int64_t>(db0 + i));
+#endif
 }
 
 // ------------------------------------------------------------------
@@ -178,10 +232,231 @@ inline std::size_t aligned_bytes(std::size_t bytes) {
 inline std::size_t ceil_div(std::size_t a, std::size_t b) { return (a + b - 1) / b; }
 
 // ------------------------------------------------------------------
+// Hardcoded sign vectors for SRHT (signs ⊙ WHT)
+// ------------------------------------------------------------------
+// These replace the runtime splitmix64 generation.  They are equivalent to
+// generating signs with splitmix64 from seed=123456789 (rotation) and
+// seed=123456789^0x9e3779b97f4a7c15 (QJL).  If you need custom signs,
+// generate them the same way: signs[i] = (splitmix64(state)&1) ? +1 : -1.
+// Packed as bits: bit=1 → +1.0f, bit=0 → −1.0f.
+// 1024 bytes = 8192 signs — enough for padded_dim up to 8192.
+inline constexpr std::size_t kMaxHardcodedSigns = 8192;
+
+inline constexpr std::uint8_t kRotationSignBytes[1024] = {
+    0x1d, 0x77, 0xc4, 0x09, 0x19, 0xd1, 0x11, 0xd5, 0x4b, 0x85, 0x0b, 0x07, 0x0c, 0xed, 0x46, 0x48,
+    0x89, 0x02, 0x95, 0xf6, 0xfc, 0x32, 0x53, 0xf4, 0x71, 0x6a, 0x1a, 0xbd, 0xdb, 0x82, 0xa3, 0xac,
+    0x6e, 0x09, 0xbf, 0x8a, 0x01, 0x04, 0x58, 0x0c, 0x82, 0x15, 0xe1, 0xe0, 0x1b, 0x71, 0x78, 0x07,
+    0x85, 0xb4, 0xd3, 0xd9, 0x22, 0xe1, 0xf8, 0x25, 0x9f, 0xcb, 0x9f, 0x51, 0xaf, 0x07, 0xbd, 0xdf,
+    0x13, 0x51, 0xea, 0x08, 0x63, 0x20, 0xd0, 0x2a, 0xfd, 0x84, 0xd6, 0x22, 0xfc, 0xbd, 0x21, 0x38,
+    0x58, 0xb3, 0x15, 0xc4, 0xe8, 0x25, 0x45, 0x1e, 0xd9, 0xa0, 0xb3, 0x87, 0xc4, 0x4a, 0xc5, 0x0c,
+    0x3a, 0x88, 0x63, 0xe6, 0x37, 0xe8, 0x74, 0x40, 0xcb, 0x3d, 0xed, 0x7a, 0xb5, 0xf2, 0x7d, 0x79,
+    0x02, 0x48, 0xc3, 0x95, 0x4b, 0x72, 0x1f, 0x9f, 0xf3, 0x19, 0x10, 0x00, 0x9f, 0x27, 0x06, 0xe3,
+    0x2f, 0x26, 0xf7, 0x3c, 0x5a, 0xd2, 0xd1, 0x0f, 0x08, 0x42, 0xcc, 0x94, 0x5e, 0x8a, 0x8f, 0x51,
+    0xe3, 0x4a, 0x57, 0x55, 0xf6, 0x8c, 0x56, 0x0f, 0x77, 0x45, 0x9a, 0x90, 0xa1, 0xb1, 0x06, 0x47,
+    0x74, 0x89, 0x90, 0xad, 0x74, 0xfd, 0x88, 0xe7, 0x04, 0x37, 0x24, 0xbf, 0xbe, 0x13, 0xff, 0xa8,
+    0x4d, 0xbc, 0xbd, 0x0b, 0xf2, 0x29, 0xeb, 0x30, 0x4e, 0x73, 0xaf, 0x4d, 0x4c, 0x19, 0xa1, 0x96,
+    0xd6, 0xd0, 0x95, 0xd3, 0x2f, 0x9a, 0x02, 0x4d, 0xb6, 0xaa, 0x5f, 0x90, 0xf6, 0xb7, 0x4e, 0x96,
+    0x20, 0xea, 0xb4, 0xa2, 0xc0, 0x33, 0x98, 0xc2, 0x22, 0x29, 0x3a, 0xe8, 0x94, 0xf1, 0x09, 0xcf,
+    0x28, 0xd4, 0xa3, 0x0a, 0xe8, 0xda, 0x1f, 0xe4, 0x01, 0x39, 0xeb, 0xde, 0xc1, 0xea, 0xec, 0x54,
+    0xc4, 0x84, 0x01, 0xf2, 0x0f, 0xe6, 0x22, 0x47, 0x94, 0xbc, 0x6d, 0x58, 0x91, 0x38, 0x24, 0x95,
+    0x48, 0xcd, 0x1c, 0xfb, 0x92, 0xa9, 0xf9, 0xba, 0x0a, 0x6e, 0xab, 0xd6, 0xe3, 0xf4, 0xad, 0x15,
+    0x4f, 0x2a, 0x3d, 0x42, 0xba, 0xcb, 0x2c, 0x52, 0xfe, 0x65, 0xf2, 0x55, 0x66, 0xa7, 0x15, 0x37,
+    0xb4, 0x7c, 0x9e, 0x2c, 0xc3, 0x4a, 0x8f, 0xfc, 0x24, 0x97, 0x88, 0x97, 0x29, 0xdc, 0xba, 0x68,
+    0xb0, 0xea, 0xe8, 0xa3, 0x6b, 0x9f, 0x71, 0x15, 0x7c, 0xc1, 0x3e, 0xe6, 0xac, 0x3a, 0x04, 0x8d,
+    0xe5, 0x20, 0x28, 0x29, 0x5b, 0x0e, 0xd0, 0xfe, 0x51, 0x32, 0xee, 0x80, 0x5c, 0x3f, 0x2f, 0x8a,
+    0x10, 0xf5, 0x9e, 0x51, 0x00, 0x5c, 0xe0, 0x9b, 0x7c, 0x38, 0x54, 0xef, 0x83, 0x94, 0x94, 0x14,
+    0xd2, 0xbe, 0x35, 0x60, 0x87, 0x49, 0xb2, 0x2c, 0xea, 0x66, 0x60, 0xfc, 0x11, 0x94, 0xb6, 0x15,
+    0x7b, 0x6f, 0xc8, 0x07, 0xa2, 0x0e, 0xe4, 0xdb, 0x26, 0x49, 0x43, 0xd9, 0xd2, 0x13, 0x98, 0x87,
+    0xec, 0x6f, 0xa9, 0x60, 0x76, 0xcc, 0x86, 0xf7, 0x18, 0x2f, 0xb0, 0xfc, 0x73, 0xb4, 0x08, 0x68,
+    0xe3, 0xa8, 0x73, 0xea, 0x6f, 0xa8, 0x75, 0x7a, 0x49, 0x3d, 0x91, 0x1f, 0xde, 0xa6, 0xb6, 0x39,
+    0x40, 0x2d, 0xb5, 0xfa, 0x4f, 0x79, 0x4c, 0x43, 0xff, 0x80, 0xf0, 0x36, 0x8b, 0xe5, 0x51, 0x2a,
+    0xc8, 0x80, 0xfc, 0xf2, 0x9c, 0x8e, 0xe2, 0xe0, 0x66, 0xf4, 0x75, 0x53, 0x0f, 0x70, 0xab, 0xeb,
+    0xb5, 0x3a, 0x14, 0xd7, 0x6f, 0xae, 0x3e, 0x77, 0x29, 0x28, 0x73, 0x3a, 0x29, 0x7f, 0x90, 0x46,
+    0x1c, 0x3b, 0x1c, 0xa8, 0xe9, 0x57, 0xe9, 0x12, 0x1a, 0x80, 0x6c, 0xcf, 0x12, 0x0a, 0x41, 0x63,
+    0x0e, 0xb8, 0xb3, 0x2f, 0xe1, 0xeb, 0xb2, 0x3c, 0x0c, 0x0a, 0xe9, 0xd3, 0xf1, 0xbf, 0x51, 0xc2,
+    0x67, 0x30, 0xf7, 0x98, 0x96, 0x4b, 0xa2, 0x21, 0xd5, 0xdc, 0x04, 0xfd, 0x3d, 0x86, 0xe6, 0xa9,
+    0xc7, 0x9a, 0x9d, 0x59, 0x0c, 0x3b, 0x56, 0x7f, 0x8b, 0x17, 0x71, 0x23, 0xdb, 0xda, 0xc4, 0x1d,
+    0xc1, 0x8d, 0x23, 0x83, 0x8c, 0xcc, 0xe4, 0x81, 0x76, 0x42, 0xcd, 0x53, 0x36, 0x2a, 0xb9, 0x00,
+    0xdc, 0xca, 0x0b, 0x88, 0x30, 0x66, 0x86, 0x40, 0x98, 0x8f, 0xd1, 0x2b, 0x3b, 0x74, 0xf6, 0x21,
+    0xcc, 0xf3, 0xc1, 0x68, 0x77, 0x4b, 0x13, 0xe9, 0xcc, 0xee, 0x66, 0xe6, 0xa7, 0x71, 0x79, 0xc8,
+    0x00, 0x91, 0x77, 0x43, 0x12, 0x43, 0x6a, 0x15, 0xb7, 0xe7, 0x42, 0xe0, 0xd3, 0xac, 0xca, 0x7f,
+    0xbc, 0x35, 0xf6, 0xa4, 0x09, 0x09, 0x85, 0xc7, 0xae, 0x94, 0x21, 0x2e, 0xec, 0x7f, 0x6a, 0xcf,
+    0xce, 0x46, 0xc0, 0x0a, 0xb1, 0x77, 0x26, 0xb7, 0x4e, 0x24, 0x5a, 0x46, 0x76, 0x6c, 0xcb, 0x3d,
+    0x1c, 0x2b, 0xda, 0x59, 0xb3, 0xe4, 0x56, 0x9d, 0xa8, 0x18, 0x2f, 0x4d, 0xa4, 0x3d, 0xd2, 0x8c,
+    0x93, 0xf1, 0x21, 0x38, 0xc1, 0x8b, 0xf6, 0x7a, 0xc4, 0x0b, 0x4f, 0x2f, 0x02, 0x1b, 0x92, 0x12,
+    0x86, 0x18, 0xfd, 0xac, 0x07, 0xa4, 0x1f, 0xb8, 0xe2, 0xf3, 0xf6, 0x98, 0x4a, 0xce, 0xaa, 0x33,
+    0x12, 0x71, 0x06, 0x4f, 0x84, 0xb6, 0x75, 0x8c, 0x05, 0x20, 0x84, 0x5b, 0xa2, 0x5b, 0xc0, 0x88,
+    0x43, 0x30, 0xab, 0x73, 0x86, 0xde, 0x2d, 0x18, 0x8b, 0x33, 0x9a, 0x37, 0x83, 0x60, 0x16, 0x03,
+    0xd8, 0xce, 0x4e, 0x97, 0x71, 0x0a, 0x7f, 0x4a, 0x59, 0x0d, 0x82, 0x4a, 0x0d, 0x57, 0xc8, 0xf4,
+    0x3c, 0x7e, 0xf3, 0x2d, 0xdb, 0x8b, 0x20, 0x96, 0x3a, 0x28, 0x9c, 0x13, 0x12, 0x92, 0x76, 0x51,
+    0xe2, 0x1b, 0x95, 0xc1, 0x3b, 0xbe, 0x48, 0xb7, 0xb3, 0x9b, 0xf4, 0x6f, 0x0e, 0xc8, 0xe5, 0x62,
+    0xde, 0x46, 0x68, 0x3e, 0x97, 0x7c, 0x14, 0xea, 0x0f, 0xb1, 0x7b, 0x49, 0xd1, 0x04, 0xd8, 0xc6,
+    0x9e, 0x67, 0x07, 0xbe, 0xdd, 0xf7, 0xb8, 0x54, 0x59, 0x2b, 0x1e, 0x47, 0x59, 0x31, 0xc2, 0x02,
+    0xbd, 0xd0, 0xc2, 0x8b, 0xf0, 0xda, 0x33, 0x70, 0x2d, 0x4b, 0xff, 0xb9, 0xed, 0x8c, 0x68, 0x64,
+    0x96, 0x4c, 0x0b, 0xd3, 0xca, 0x8a, 0xdd, 0x07, 0xcc, 0xbf, 0xa5, 0x68, 0xe0, 0x04, 0xe2, 0x64,
+    0xb9, 0x08, 0xa9, 0x36, 0x9a, 0x3e, 0x69, 0xae, 0x49, 0x16, 0x18, 0xec, 0x40, 0xc8, 0x8e, 0xfe,
+    0x14, 0x66, 0x39, 0xfe, 0xf1, 0x07, 0x7c, 0x36, 0xa5, 0x4e, 0x6f, 0x75, 0xef, 0x9d, 0xb8, 0x8c,
+    0x41, 0x2d, 0x1c, 0x6e, 0xab, 0x0b, 0x54, 0x36, 0x3d, 0x8b, 0xcc, 0xc9, 0x0b, 0x0e, 0xca, 0xd6,
+    0x59, 0x42, 0xf7, 0x27, 0xb3, 0xc5, 0x0a, 0x83, 0xa7, 0x66, 0xb5, 0x86, 0xb8, 0xe6, 0x28, 0xa7,
+    0x1d, 0x12, 0xa5, 0x46, 0x2e, 0x65, 0xc6, 0x8d, 0x9c, 0x49, 0xc8, 0x54, 0xfc, 0x1f, 0xe3, 0xb7,
+    0xc6, 0x14, 0x5c, 0x04, 0x87, 0xb1, 0x11, 0x5c, 0xbb, 0xcc, 0x2e, 0xbc, 0x6a, 0x79, 0xa4, 0x43,
+    0xfd, 0x04, 0x51, 0x35, 0xd9, 0xce, 0xd8, 0x1a, 0x6d, 0x7d, 0x09, 0x95, 0x15, 0xe0, 0x62, 0xa5,
+    0x8a, 0xc3, 0x29, 0x59, 0x55, 0xd7, 0xe9, 0x3b, 0xb0, 0x49, 0xd9, 0x05, 0xf3, 0x50, 0x60, 0x9b,
+    0x39, 0x2c, 0x64, 0x29, 0xee, 0x89, 0x7f, 0x0c, 0x77, 0x8d, 0x78, 0xa9, 0x95, 0xa5, 0x58, 0x35,
+    0xc6, 0x12, 0x84, 0x0d, 0xbe, 0x7a, 0x9c, 0x0b, 0x12, 0xa7, 0x4a, 0xff, 0x13, 0xcd, 0x25, 0xa6,
+    0x8f, 0xe3, 0x17, 0x08, 0x4c, 0x89, 0x79, 0x10, 0x69, 0x90, 0xe7, 0x58, 0x4d, 0xeb, 0xfa, 0x6a,
+    0x31, 0x4f, 0x33, 0x90, 0x77, 0x6f, 0xd1, 0x9c, 0x94, 0x7f, 0xb1, 0x01, 0x29, 0x5b, 0x3a, 0x8b,
+    0x59, 0x5d, 0xc6, 0x69, 0xdd, 0x59, 0x1e, 0xd0, 0x4d, 0x0f, 0xe2, 0x88, 0x41, 0x42, 0xb5, 0x8c,
+};
+
+inline constexpr std::uint8_t kQjlSignBytes[1024] = {
+    0x12, 0x2a, 0xf8, 0x16, 0x2f, 0x0e, 0x8c, 0x94, 0x8a, 0x2f, 0xe9, 0xa0, 0xbc, 0x25, 0x6a, 0x2b,
+    0xc4, 0xb8, 0xea, 0x5b, 0x83, 0x67, 0x5c, 0xf0, 0x0b, 0x81, 0xd3, 0xe0, 0x43, 0x0a, 0x6a, 0x69,
+    0xbb, 0x48, 0x95, 0x70, 0xd6, 0xfc, 0x5e, 0x04, 0x03, 0x7e, 0x21, 0x22, 0x93, 0x07, 0xe0, 0xa6,
+    0x21, 0xac, 0x90, 0x73, 0xe4, 0x0e, 0xfa, 0x6e, 0x1e, 0x1d, 0xa1, 0x35, 0xae, 0x1e, 0xa4, 0x72,
+    0x4c, 0xea, 0xc0, 0x1d, 0x20, 0x43, 0xb2, 0x70, 0xb8, 0x55, 0x98, 0x8a, 0x91, 0xf1, 0xe4, 0xdc,
+    0x55, 0x3b, 0xaa, 0x6f, 0x7b, 0x8a, 0x38, 0xf0, 0x90, 0x2c, 0xb2, 0x3c, 0xd7, 0x26, 0x5d, 0x14,
+    0x99, 0x7f, 0xa3, 0xa3, 0x0c, 0xd1, 0xc3, 0x17, 0x24, 0x28, 0x31, 0x7e, 0x7f, 0x3a, 0xac, 0xb8,
+    0x54, 0xf8, 0x85, 0x49, 0xbd, 0x90, 0xfe, 0xef, 0xd9, 0x6c, 0xb0, 0x03, 0x04, 0x8d, 0xec, 0xbe,
+    0x2c, 0x14, 0xa2, 0x68, 0x9e, 0xe0, 0xb4, 0x27, 0x6b, 0xc0, 0x8e, 0xaf, 0x22, 0x2c, 0x66, 0xff,
+    0xc0, 0x0c, 0x98, 0xa7, 0x6f, 0xa4, 0xad, 0x20, 0x66, 0xbf, 0x65, 0x87, 0xd1, 0x84, 0x6b, 0x1a,
+    0x6d, 0xa9, 0x53, 0xb4, 0x1f, 0x62, 0x59, 0x7c, 0x0f, 0xe9, 0x78, 0xc5, 0x68, 0x51, 0x6d, 0xc8,
+    0x2b, 0x77, 0x71, 0x04, 0xbc, 0xf1, 0x5b, 0xa2, 0xcb, 0x84, 0x5b, 0xdf, 0x87, 0xaf, 0x67, 0x50,
+    0x39, 0xa6, 0x69, 0x65, 0x61, 0x05, 0x72, 0x0a, 0x8e, 0x8b, 0x46, 0x2c, 0x4d, 0xc3, 0x37, 0x19,
+    0x96, 0x5a, 0xce, 0x88, 0x0b, 0x5d, 0xab, 0x1d, 0xb6, 0x2e, 0x85, 0x38, 0x08, 0xa5, 0x5b, 0x42,
+    0xe3, 0xe4, 0x7c, 0x9b, 0xa7, 0xd0, 0x86, 0xfa, 0x5f, 0x6a, 0x4b, 0x54, 0x84, 0x9d, 0x67, 0x8b,
+    0x40, 0xf0, 0x23, 0x57, 0x67, 0x70, 0x11, 0xf2, 0x34, 0x51, 0x59, 0xb5, 0x50, 0x82, 0xc6, 0x44,
+    0xc2, 0x1a, 0xab, 0x6e, 0x59, 0xb4, 0x83, 0xc9, 0xab, 0xd9, 0x93, 0xc5, 0x8b, 0x65, 0x4b, 0x41,
+    0xab, 0x0f, 0x87, 0xbd, 0x9e, 0xaa, 0xfb, 0x4c, 0xdc, 0x73, 0x22, 0x6e, 0x15, 0x38, 0x98, 0xab,
+    0xb9, 0x5f, 0x8c, 0xef, 0x9e, 0xd7, 0x69, 0xcd, 0x00, 0xa0, 0xfb, 0x4f, 0xb7, 0xc6, 0xaf, 0xbc,
+    0xb9, 0xd8, 0x3a, 0x57, 0xc6, 0xc7, 0x9b, 0xea, 0x96, 0xfb, 0x46, 0xb1, 0x5d, 0x4e, 0x96, 0x9d,
+    0x58, 0x39, 0x1b, 0xbc, 0xdf, 0xbb, 0x0a, 0xa5, 0xe1, 0x07, 0x75, 0x2c, 0x33, 0xbe, 0x7f, 0xe7,
+    0x9b, 0x5d, 0x48, 0x48, 0x58, 0x8d, 0x6b, 0xc7, 0xd0, 0x22, 0x37, 0xc9, 0xcf, 0x99, 0x25, 0x7f,
+    0x5f, 0x77, 0x11, 0x02, 0xde, 0x0e, 0x94, 0xcd, 0x19, 0xf0, 0x78, 0x24, 0x2e, 0xf8, 0x75, 0x7f,
+    0x3f, 0xad, 0x17, 0xcd, 0xb7, 0xc5, 0x3f, 0x95, 0x73, 0xd3, 0xd6, 0x97, 0x11, 0x39, 0xa2, 0x1f,
+    0xc9, 0x64, 0x26, 0x16, 0x75, 0x08, 0x7f, 0xd5, 0xac, 0xd3, 0xe6, 0xcb, 0x4c, 0xe2, 0xd3, 0x70,
+    0xe9, 0xa8, 0x6b, 0x9e, 0x68, 0xef, 0xe0, 0x97, 0x0f, 0x67, 0x79, 0xdc, 0x50, 0xc8, 0xe6, 0x08,
+    0x32, 0x4f, 0x4b, 0xed, 0x7f, 0xff, 0xa2, 0x43, 0x2d, 0xcc, 0x41, 0xb8, 0x6a, 0x8d, 0x24, 0x9a,
+    0x4e, 0x69, 0x63, 0x47, 0x38, 0x9f, 0x23, 0xaa, 0x62, 0x98, 0x15, 0x03, 0xd8, 0xf4, 0x84, 0xcf,
+    0x88, 0xd2, 0xfb, 0x18, 0x36, 0xc7, 0x60, 0x72, 0xca, 0xce, 0xfa, 0x90, 0x13, 0xe8, 0xc2, 0x1b,
+    0xdf, 0xd8, 0x52, 0x8a, 0xe8, 0x2d, 0xb6, 0x59, 0x44, 0x48, 0x4d, 0x20, 0x7e, 0x45, 0xf4, 0x16,
+    0x4d, 0x20, 0x70, 0x01, 0x9c, 0xc3, 0xa5, 0x46, 0x58, 0xf1, 0xdc, 0xf3, 0xae, 0xd8, 0xc9, 0xc4,
+    0xe6, 0xb4, 0xb0, 0xe8, 0x4d, 0x6d, 0xd3, 0x5a, 0x00, 0x1d, 0x60, 0x03, 0xa1, 0x20, 0x4f, 0x4c,
+    0xd4, 0x72, 0xfe, 0x19, 0xdf, 0x6a, 0xb0, 0x22, 0xbd, 0x18, 0x6e, 0xdc, 0x19, 0xf2, 0x2f, 0x4e,
+    0xfa, 0x87, 0x64, 0x3b, 0xde, 0xe5, 0x29, 0xd0, 0x50, 0x87, 0x43, 0x55, 0x1e, 0x30, 0x4b, 0x6d,
+    0x88, 0x8d, 0xea, 0xc4, 0xd2, 0x5e, 0x05, 0x12, 0x1d, 0xf6, 0xec, 0x5a, 0x2b, 0xed, 0x4e, 0xef,
+    0x6a, 0xd9, 0xd2, 0xed, 0xf6, 0x3d, 0x18, 0xc7, 0x2c, 0xda, 0xa6, 0x3c, 0x21, 0x8f, 0xc3, 0xde,
+    0x11, 0x0b, 0xfd, 0x43, 0x49, 0x1c, 0x93, 0x67, 0x05, 0xd6, 0x13, 0x6f, 0xee, 0xa8, 0x66, 0x57,
+    0x37, 0x82, 0x0d, 0x4b, 0xf8, 0x19, 0x96, 0xf3, 0x99, 0x88, 0xf3, 0x2e, 0x24, 0xb4, 0x9d, 0x7d,
+    0x3c, 0xcf, 0x72, 0xe3, 0x19, 0xae, 0xfe, 0x1d, 0x55, 0xea, 0xbb, 0x32, 0x8c, 0xf0, 0x81, 0x45,
+    0xea, 0xd2, 0xf4, 0x79, 0xa7, 0xed, 0x35, 0x57, 0x3e, 0x81, 0x17, 0x94, 0x69, 0xcf, 0xd1, 0xed,
+    0x70, 0x45, 0x91, 0x39, 0x9c, 0x36, 0x30, 0xf4, 0x25, 0x99, 0x4e, 0x77, 0x94, 0xfc, 0x55, 0xb2,
+    0x77, 0x26, 0xdc, 0x5a, 0xdf, 0xd4, 0x4d, 0xc8, 0x1b, 0x58, 0x34, 0xe2, 0xf0, 0x2f, 0x3e, 0xc5,
+    0x80, 0x39, 0xb5, 0xee, 0x32, 0x53, 0x5e, 0xa6, 0xdb, 0xc1, 0x55, 0x70, 0x7c, 0xab, 0xf1, 0x8a,
+    0x77, 0x93, 0x6d, 0xb3, 0x75, 0x1b, 0x59, 0x5c, 0x1c, 0xf5, 0xd6, 0x22, 0x6c, 0xb0, 0x34, 0xa3,
+    0x5c, 0xf7, 0x2c, 0x6a, 0x5c, 0x16, 0x44, 0x29, 0xfd, 0x3c, 0x10, 0xf2, 0x0b, 0x68, 0x9d, 0x9a,
+    0x0c, 0x38, 0xac, 0x60, 0x9e, 0x73, 0xb2, 0x9e, 0x05, 0xf2, 0xd5, 0x4c, 0xa1, 0x35, 0xa4, 0x61,
+    0xcf, 0x66, 0x2c, 0xb8, 0xbe, 0x5c, 0xfc, 0x17, 0xe8, 0x58, 0xd6, 0x2c, 0x35, 0x8e, 0xb5, 0xe0,
+    0x4b, 0xc5, 0xc2, 0xfd, 0xad, 0x26, 0x87, 0x2e, 0x0e, 0x96, 0x60, 0x13, 0x04, 0xbd, 0x55, 0x1e,
+    0xa7, 0x05, 0x6e, 0x78, 0xbd, 0xc6, 0x62, 0xbd, 0xcd, 0xbb, 0xa7, 0x58, 0xa4, 0x9e, 0xb2, 0x6d,
+    0xa3, 0x50, 0x7f, 0x17, 0xde, 0x80, 0x85, 0x07, 0xb1, 0x69, 0x0a, 0x0b, 0x49, 0xa4, 0x98, 0x24,
+    0x88, 0x66, 0xfe, 0x69, 0xd9, 0x25, 0x3a, 0x71, 0xbf, 0xb2, 0xa4, 0x2a, 0xbf, 0x19, 0x16, 0xc9,
+    0x27, 0x53, 0x34, 0x22, 0xf9, 0x29, 0xfd, 0xa4, 0x52, 0xf6, 0x34, 0x19, 0x69, 0x64, 0xf0, 0xe5,
+    0x9e, 0xf9, 0x18, 0xa2, 0x1a, 0x89, 0x2a, 0xa5, 0x4d, 0x6e, 0x3d, 0x97, 0x87, 0xfd, 0x55, 0xd6,
+    0x76, 0x26, 0x8b, 0x61, 0xe4, 0x4e, 0x61, 0x43, 0xba, 0x90, 0x23, 0xae, 0x40, 0xef, 0xa2, 0x8a,
+    0x80, 0xbe, 0xd5, 0xa5, 0xb1, 0x62, 0xf9, 0xbc, 0xd5, 0x67, 0x0a, 0x7b, 0xca, 0xd5, 0x58, 0xe9,
+    0xa1, 0x51, 0xf0, 0x05, 0x7f, 0x1a, 0xac, 0x39, 0x1a, 0x62, 0x42, 0xbd, 0x4e, 0x12, 0x79, 0x3c,
+    0x98, 0x14, 0x2c, 0xe5, 0x5d, 0x12, 0x7f, 0x18, 0x0f, 0xc3, 0xe3, 0xc6, 0xbe, 0x82, 0x07, 0x12,
+    0xd4, 0x29, 0x08, 0x0a, 0x2b, 0x19, 0xe6, 0xd8, 0x41, 0x23, 0x17, 0x8f, 0x92, 0x3e, 0x2a, 0x30,
+    0x30, 0x2f, 0x03, 0xa6, 0xd4, 0x8c, 0x53, 0x92, 0xc9, 0x43, 0xc8, 0xca, 0xa9, 0x72, 0x3d, 0xdb,
+    0x70, 0x58, 0xdf, 0x9c, 0x89, 0xe0, 0x04, 0x0c, 0xf6, 0xa4, 0xd4, 0x22, 0x53, 0xe7, 0x8e, 0xb1,
+    0x4f, 0xba, 0x0b, 0x83, 0x98, 0xe8, 0x76, 0x3a, 0xe1, 0x8c, 0x57, 0x1a, 0xa1, 0xd6, 0x5b, 0x3e,
+    0xd7, 0x32, 0x4f, 0x44, 0x59, 0xad, 0x60, 0xc3, 0x95, 0x83, 0xf8, 0x23, 0xf7, 0x96, 0x77, 0x5a,
+    0x9d, 0xfc, 0xe2, 0x06, 0xfa, 0x50, 0x84, 0x3d, 0xc7, 0x9a, 0xd4, 0x06, 0xf8, 0x2a, 0x39, 0xc1,
+    0xc3, 0xdf, 0x86, 0xd3, 0x0a, 0xff, 0x4d, 0x73, 0x81, 0x9b, 0x97, 0xdc, 0xcd, 0xcd, 0xd2, 0xe0,
+};
+
+// Unpack bit-packed sign bytes into a float array of ±1.0f.
+inline void unpack_signs(const std::uint8_t* bytes, float* out, std::size_t n) {
+  for (std::size_t i = 0; i < n; ++i)
+    out[i] = ((bytes[i >> 3] >> (i & 7)) & 1) ? 1.0f : -1.0f;
+}
+
+// Unpack bit-packed sign bytes into a uint32_t XOR-mask array.
+// mask[i] = 0x80000000 means flip the sign bit (i.e. sign == -1);
+//           0x00000000 means no flip (sign == +1).
+// This allows sign application via a single VXORPS instead of VMULPS.
+inline void unpack_sign_masks(const std::uint8_t* bytes, std::uint32_t* out, std::size_t n) {
+  for (std::size_t i = 0; i < n; ++i)
+    out[i] = ((bytes[i >> 3] >> (i & 7)) & 1) ? 0u : 0x80000000u;
+}
+
+// ------------------------------------------------------------------
 // SIMD linear algebra
 // ------------------------------------------------------------------
 // In-place Walsh–Hadamard transform on length d (power of two): O(d log d) butterflies.
 // Pairwise: (a,b) → (a+b, a−b); composes to orthogonal Hadamard up to scaling.
+//
+// AVX-512 fast path (d >= 16): fuses step=1,2,4,8 in-register per 16-float block,
+// then vectorises large steps.  4–6× faster than scalar for d ∈ [128, 2048].
+#if defined(__AVX512F__)
+inline void wht_butterfly_inplace(float* x, std::size_t d) {
+  if (d < 16) {
+    // Scalar fallback for very small d
+    for (std::size_t step = 1; step < d; step <<= 1)
+      for (std::size_t i = 0; i < d; i += step * 2)
+        for (std::size_t j = i; j < i + step; ++j) {
+          const float a = x[j], b = x[j + step];
+          x[j] = a + b; x[j + step] = a - b;
+        }
+    return;
+  }
+  // Phase 1: fused in-register butterfly for step = 1, 2, 4, 8.
+  // Each 16-float block is independent at these steps, so we load once,
+  // do all four levels in registers, and store once.
+  for (std::size_t i = 0; i < d; i += 16) {
+    __m512 v = _mm512_loadu_ps(x + i);
+    // step=1: butterfly pairs (0,1),(2,3),...  within each 128-bit lane
+    {
+      __m512 lo = _mm512_permute_ps(v, 0xA0);  // [a,a,c,c] per lane
+      __m512 hi = _mm512_permute_ps(v, 0xF5);  // [b,b,d,d] per lane
+      v = _mm512_mask_blend_ps(0xAAAA, _mm512_add_ps(lo, hi),
+                                        _mm512_sub_ps(lo, hi));
+    }
+    // step=2: pairs (0,2),(1,3),...  within each 128-bit lane
+    {
+      __m512 lo = _mm512_permute_ps(v, 0x44);  // [a,b,a,b] per lane
+      __m512 hi = _mm512_permute_ps(v, 0xEE);  // [c,d,c,d] per lane
+      v = _mm512_mask_blend_ps(0xCCCC, _mm512_add_ps(lo, hi),
+                                        _mm512_sub_ps(lo, hi));
+    }
+    // step=4: pairs across 128-bit lanes within each 256-bit half
+    {
+      __m512 lo = _mm512_shuffle_f32x4(v, v, 0xA0); // [L0,L0,L2,L2]
+      __m512 hi = _mm512_shuffle_f32x4(v, v, 0xF5); // [L1,L1,L3,L3]
+      v = _mm512_mask_blend_ps(0xF0F0, _mm512_add_ps(lo, hi),
+                                        _mm512_sub_ps(lo, hi));
+    }
+    // step=8: pairs across 256-bit halves
+    {
+      __m512 lo = _mm512_shuffle_f32x4(v, v, 0x44); // [L0,L1,L0,L1]
+      __m512 hi = _mm512_shuffle_f32x4(v, v, 0xEE); // [L2,L3,L2,L3]
+      v = _mm512_mask_blend_ps(0xFF00, _mm512_add_ps(lo, hi),
+                                        _mm512_sub_ps(lo, hi));
+    }
+    _mm512_storeu_ps(x + i, v);
+  }
+  // Phase 2: large steps (16, 32, ...) — direct SIMD, 16 butterflies per iteration.
+  for (std::size_t step = 16; step < d; step <<= 1)
+    for (std::size_t i = 0; i < d; i += step * 2)
+      for (std::size_t j = i; j < i + step; j += 16) {
+        __m512 a = _mm512_loadu_ps(x + j);
+        __m512 b = _mm512_loadu_ps(x + j + step);
+        _mm512_storeu_ps(x + j,        _mm512_add_ps(a, b));
+        _mm512_storeu_ps(x + j + step, _mm512_sub_ps(a, b));
+      }
+}
+#else
 inline void wht_butterfly_inplace(float* x, std::size_t d) {
   for (std::size_t step = 1; step < d; step <<= 1)
     for (std::size_t i = 0; i < d; i += step * 2)
@@ -190,6 +465,109 @@ inline void wht_butterfly_inplace(float* x, std::size_t d) {
         x[j] = a + b; x[j + step] = a - b;
       }
 }
+#endif
+
+// Fused Hadamard forward pass: sign-flip + FWHT + scale, 3 loops → 1 function.
+//
+// Combines three separate passes from Transform::forward() into one:
+//   1. Apply sign flip (XOR-mask on load, eliminating a separate multiply loop)
+//   2. Walsh–Hadamard butterflies (unchanged logic from wht_butterfly_inplace)
+//   3. 1/√d scale (fused into the final butterfly store, eliminating a separate loop)
+//
+// Memory traffic: 2 passes (one read of 'in', one write to 'out') instead of 6
+// (read+write for each of the 3 separate loops).  For d ∈ [128, 4096] this saves
+// 4 full passes over the data compared to the 3-loop scalar formulation.
+//
+// Only defined when __AVX512F__ is available (sign XOR uses _mm512_xor_si512).
+// The non-AVX512 path in Transform::forward() keeps the original 3-loop form.
+#if defined(__AVX512F__)
+inline void wht_fused(const float* __restrict__ in,
+                      const std::uint32_t* __restrict__ sign_masks,
+                      float* __restrict__ work,
+                      float* __restrict__ out,
+                      std::size_t d, float scale) {
+  if (d < 16) {
+    // Scalar fallback for very small d
+    for (std::size_t i = 0; i < d; ++i)
+      work[i] = (sign_masks[i] ? -in[i] : in[i]);
+    for (std::size_t step = 1; step < d; step <<= 1)
+      for (std::size_t i = 0; i < d; i += step * 2)
+        for (std::size_t j = i; j < i + step; ++j) {
+          const float a = work[j], b = work[j + step];
+          work[j] = a + b; work[j + step] = a - b;
+        }
+    for (std::size_t i = 0; i < d; ++i) out[i] = work[i] * scale;
+    return;
+  }
+
+  // Phase 1: fused sign-flip-on-load + in-register butterfly for step = 1,2,4,8.
+  // Each 16-float block is independent at these steps: XOR the sign mask as data
+  // is loaded, then perform all four butterfly levels in registers, store to work.
+  for (std::size_t i = 0; i < d; i += 16) {
+    __m512i smask = _mm512_loadu_si512(
+        reinterpret_cast<const __m512i*>(sign_masks + i));
+    __m512 v = _mm512_castsi512_ps(
+        _mm512_xor_si512(smask, _mm512_castps_si512(_mm512_loadu_ps(in + i))));
+    // step=1: butterfly pairs (0,1),(2,3),...
+    {
+      __m512 lo = _mm512_permute_ps(v, 0xA0);
+      __m512 hi = _mm512_permute_ps(v, 0xF5);
+      v = _mm512_mask_blend_ps(0xAAAA, _mm512_add_ps(lo, hi),
+                                       _mm512_sub_ps(lo, hi));
+    }
+    // step=2: butterfly pairs (0,2),(1,3),...
+    {
+      __m512 lo = _mm512_permute_ps(v, 0x44);
+      __m512 hi = _mm512_permute_ps(v, 0xEE);
+      v = _mm512_mask_blend_ps(0xCCCC, _mm512_add_ps(lo, hi),
+                                       _mm512_sub_ps(lo, hi));
+    }
+    // step=4: across 128-bit lanes within each 256-bit half
+    {
+      __m512 lo = _mm512_shuffle_f32x4(v, v, 0xA0);
+      __m512 hi = _mm512_shuffle_f32x4(v, v, 0xF5);
+      v = _mm512_mask_blend_ps(0xF0F0, _mm512_add_ps(lo, hi),
+                                       _mm512_sub_ps(lo, hi));
+    }
+    // step=8: across 256-bit halves
+    {
+      __m512 lo = _mm512_shuffle_f32x4(v, v, 0x44);
+      __m512 hi = _mm512_shuffle_f32x4(v, v, 0xEE);
+      v = _mm512_mask_blend_ps(0xFF00, _mm512_add_ps(lo, hi),
+                                       _mm512_sub_ps(lo, hi));
+    }
+    _mm512_storeu_ps(work + i, v);
+  }
+
+  // Phase 2: large steps (16, 32, ..., d/2).  Direct SIMD, 16 butterflies per iter.
+  // The final step (step == d/2) writes to 'out' with scale fused in, eliminating
+  // the separate scale loop.  For d == 16, Phase 2 is skipped and we fall through
+  // to a direct scaled copy below.
+  const __m512 sv = _mm512_set1_ps(scale);
+  if (d == 16) {
+    // Only one 16-float block — work already has the result of Phase 1.
+    // There are no large-step butterflies; just scale and copy to out.
+    _mm512_storeu_ps(out, _mm512_mul_ps(_mm512_loadu_ps(work), sv));
+    return;
+  }
+  for (std::size_t step = 16; step < d; step <<= 1) {
+    const bool is_last = (step == (d >> 1));
+    for (std::size_t i = 0; i < d; i += step * 2) {
+      for (std::size_t j = i; j < i + step; j += 16) {
+        __m512 a = _mm512_loadu_ps(work + j);
+        __m512 b = _mm512_loadu_ps(work + j + step);
+        if (is_last) {
+          _mm512_storeu_ps(out + j,        _mm512_mul_ps(_mm512_add_ps(a, b), sv));
+          _mm512_storeu_ps(out + j + step, _mm512_mul_ps(_mm512_sub_ps(a, b), sv));
+        } else {
+          _mm512_storeu_ps(work + j,        _mm512_add_ps(a, b));
+          _mm512_storeu_ps(work + j + step, _mm512_sub_ps(a, b));
+        }
+      }
+    }
+  }
+}
+#endif  // __AVX512F__
 
 // ⟨a,b⟩ with AVX-512 FMA when n is large; Θ(n) time, O(1) extra space.
 inline float dot_product(const float* a, const float* b, std::size_t n) {
@@ -238,33 +616,43 @@ struct Transform {
   std::size_t  dim         = 0;
   bool         is_gaussian = false;  // true for Dense QJL (random Gaussian, not orthogonal)
 
-  std::vector<float> matrix;  // Dense: dim×dim, row-major
-  std::vector<float> signs;   // Hadamard: dim random ±1
+  std::vector<float>        matrix;      // Dense: dim×dim, row-major
+  std::vector<float>        signs;       // Hadamard: dim random ±1 (float)
+  std::vector<std::uint32_t> sign_masks; // Hadamard: XOR bitmasks (0x80000000 → flip)
 
   // Main rotation for TurboQuant: either Hadamard pipeline or dense orthogonal M.
+  // Hadamard mode uses hardcoded sign tables (kRotationSignBytes) for determinism
+  // and to avoid seed-dependent reproducibility issues.  To regenerate with a
+  // custom seed instead: signs[i] = (splitmix64(state) & 1) ? +1.f : -1.f.
   void generate(RotationType t, std::size_t d, std::uint64_t seed) {
     type = t; dim = d; is_gaussian = false;
     if (t == RotationType::kHadamard) {
+      if (d > detail::kMaxHardcodedSigns)
+        throw std::invalid_argument("Hadamard dim exceeds hardcoded sign table size (max 8192)");
       signs.resize(d);
-      std::uint64_t state = seed;
-      for (std::size_t i = 0; i < d; ++i)
-        signs[i] = (detail::splitmix64(state) & 1) ? 1.0f : -1.0f;
+      detail::unpack_signs(detail::kRotationSignBytes, signs.data(), d);
+      sign_masks.resize(d);
+      detail::unpack_sign_masks(detail::kRotationSignBytes, sign_masks.data(), d);
       matrix.clear();
     } else {
       generate_dense_orthogonal(d, seed);
       signs.clear();
+      sign_masks.clear();
     }
   }
 
   // QJL second linear map: Hadamard+signs (structured) or full Gaussian matrix (dense IP).
+  // Hadamard mode uses hardcoded sign tables (kQjlSignBytes).
   void generate_qjl(RotationType t, std::size_t d, std::uint64_t seed) {
     type = t; dim = d;
     if (t == RotationType::kHadamard) {
       is_gaussian = false;
+      if (d > detail::kMaxHardcodedSigns)
+        throw std::invalid_argument("Hadamard dim exceeds hardcoded sign table size (max 8192)");
       signs.resize(d);
-      std::uint64_t state = seed;
-      for (std::size_t i = 0; i < d; ++i)
-        signs[i] = (detail::splitmix64(state) & 1) ? 1.0f : -1.0f;
+      detail::unpack_signs(detail::kQjlSignBytes, signs.data(), d);
+      sign_masks.resize(d);
+      detail::unpack_sign_masks(detail::kQjlSignBytes, sign_masks.data(), d);
       matrix.clear();
     } else {
       is_gaussian = true;
@@ -273,16 +661,24 @@ struct Transform {
       std::normal_distribution<float> gauss(0.0f, 1.0f);
       for (float& v : matrix) v = gauss(rng);
       signs.clear();
+      sign_masks.clear();
     }
   }
 
   // forward: y = R x (Hadamard) or y = M x (dense).  `work` is scratch for FWHT.
+  // Hadamard path (AVX-512): fused sign-flip + FWHT + scale via wht_fused().
+  // Hadamard path (scalar fallback): 3 separate loops (sign, butterfly, scale).
   void forward(const float* in, float* out, float* work) const {
     if (type == RotationType::kHadamard) {
+#if defined(__AVX512F__)
+      detail::wht_fused(in, sign_masks.data(), work, out, dim,
+                        1.0f / std::sqrt(static_cast<float>(dim)));
+#else
       for (std::size_t i = 0; i < dim; ++i) work[i] = signs[i] * in[i];
       detail::wht_butterfly_inplace(work, dim);
       const float scale = 1.0f / std::sqrt(static_cast<float>(dim));
       for (std::size_t i = 0; i < dim; ++i) out[i] = work[i] * scale;
+#endif
     } else {
       const float* mat = matrix.data();
       for (std::size_t i = 0; i < dim; ++i)
@@ -305,7 +701,7 @@ struct Transform {
     }
   }
 
- private:
+ 
   // Haar-random orthogonal d×d matrix: QR decomposition of i.i.d. Gaussian A = Q R,
   // then column sign fixes so the Haar measure is correct (see standard random matrix refs).
   void generate_dense_orthogonal(std::size_t d, std::uint64_t seed) {
@@ -617,7 +1013,7 @@ struct Codebook {
     return out;
   }
 
- private:
+ 
 
   // Gaussian LM: thresholds = boundary_table × σ.
   void build_lm_thresholds(std::size_t bits, std::size_t d) {
@@ -642,13 +1038,14 @@ struct Codebook {
 // gammas, residual scales).  Also implements the hot-path scoring and
 // postprocessing methods that operate on those buffers.
 //
-// Three storage paths (decided at train() time):
-//   kPackedNibble — 2 nibbles/byte, block-32 VPSHUFB (fastest, bitwidth ≤ 4)
-//   kNibble       — 1 nibble/byte,  block-16 VPSHUFB (bitwidth ≤ 4, fallback)
-//   kGeneric      — full byte codes + optional sign bits (wider bitwidths)
+// Four storage paths (decided at train() time):
+//   kBigPackedNibble — 2 nibbles/byte, block-128 zmm VPSHUFB (AVX-512BW, MSE mode only)
+//   kPackedNibble    — 2 nibbles/byte, block-32 xmm VPSHUFB (fastest fallback, bitwidth ≤ 4)
+//   kNibble          — 1 nibble/byte,  block-16 VPSHUFB (bitwidth ≤ 4, fallback)
+//   kGeneric         — full byte codes + optional sign bits (wider bitwidths)
 // =====================================================================
 struct StorageLayout {
-  enum class Path { kPackedNibble, kNibble, kGeneric };
+  enum class Path { kBigPackedNibble, kPackedNibble, kNibble, kGeneric };
 
   Path        path                  = Path::kGeneric;
   std::size_t padded_dim            = 0;
@@ -656,6 +1053,7 @@ struct StorageLayout {
   std::size_t codebook_size         = 0;
 
   // Strides (bytes per block for each buffer type; 0 if not active)
+  std::size_t big_packed_block_stride = 0;
   std::size_t packed_block_stride   = 0;
   std::size_t nibble_block_stride   = 0;
   std::size_t byte_code_block_stride = 0;
@@ -667,8 +1065,9 @@ struct StorageLayout {
   std::size_t storage_bits          = 0;
 
   // Compressed DB buffers
-  std::vector<std::uint8_t> nibbles;          // kNibble path
-  std::vector<std::uint8_t> packed_nibbles;   // kPackedNibble path
+  std::vector<std::uint8_t> nibbles;              // kNibble path
+  std::vector<std::uint8_t> packed_nibbles;       // kPackedNibble path
+  std::vector<std::uint8_t> big_packed_nibbles;   // kBigPackedNibble path (AVX-512BW)
   std::vector<std::uint8_t> byte_codes;       // kGeneric path
   std::vector<std::uint8_t> packed_signs;     // kGeneric IP path (separate sign bits)
 
@@ -677,10 +1076,13 @@ struct StorageLayout {
   std::vector<float> residual_scales;  // γ × coeff × ‖x_eff‖ (generic IP path)
   std::vector<float> norms;            // ‖x_eff‖
   std::vector<float> norm_squares;     // ‖x_eff‖²
+  std::vector<float> cx_dots;          // ⟨c,x⟩ per base vector (IP centroid correction)
 
   // Effective block size for this path.
   std::size_t eff_block_size() const noexcept {
-    return (path == Path::kPackedNibble) ? detail::kPackedBlockSize : detail::kBlockSize;
+    if (path == Path::kBigPackedNibble) return detail::kBigBlockSize;
+    if (path == Path::kPackedNibble)    return detail::kPackedBlockSize;
+    return detail::kBlockSize;
   }
 
   // ------------------------------------------------------------------
@@ -689,7 +1091,7 @@ struct StorageLayout {
   // ------------------------------------------------------------------
   void configure(std::size_t mse_bits_, std::size_t bitwidth, bool force_generic,
                  bool use_packed_nibbles_, std::size_t padded_dim_, Mode mode,
-                 std::size_t codebook_size_) {
+                 std::size_t codebook_size_, bool ivf_active = false) {
     padded_dim    = padded_dim_;
     mse_bits      = mse_bits_;
     codebook_size = codebook_size_;
@@ -698,8 +1100,25 @@ struct StorageLayout {
     // mse_bits == 0 (1-bit IP, no MSE codes) is degenerate — skip.
     const bool nibble_ok = (!force_generic && mse_bits_ >= 1 && bitwidth <= 4);
     const bool packed_ok = (nibble_ok && use_packed_nibbles_);
+    // Big-packed path: AVX-512BW zmm PSHUFB, 128 lanes/block, 2.67× fewer port-5
+    // ops/lane vs block32.  MSE mode only (no QJL), flat-only (IVF not yet ported).
+#if defined(__AVX512BW__)
+    const bool big_packed_ok = (packed_ok && mode != Mode::kInnerProduct && !ivf_active);
+#else
+    const bool big_packed_ok = false;
+#endif
 
-    if (packed_ok) {
+    if (big_packed_ok) {
+      path                   = Path::kBigPackedNibble;
+      big_packed_block_stride = detail::aligned_bytes(padded_dim_ * detail::kBigBlockSize / 2);
+      packed_block_stride    = 0;
+      nibble_block_stride    = 0;
+      byte_code_block_stride = 0;
+      sign_block_stride      = 0;
+      lut_stride             = 0;
+      combined_code_sign     = false;
+      storage_bits           = 0;
+    } else if (packed_ok) {
       path                  = Path::kPackedNibble;
       packed_block_stride   = detail::aligned_bytes(padded_dim_ * detail::kPackedBlockSize / 2);
       nibble_block_stride   = 0;
@@ -733,10 +1152,11 @@ struct StorageLayout {
   }
 
   void clear_buffers() {
-    nibbles.clear(); packed_nibbles.clear();
+    nibbles.clear(); packed_nibbles.clear(); big_packed_nibbles.clear();
     byte_codes.clear(); packed_signs.clear();
     gammas.clear(); residual_scales.clear();
     norms.clear(); norm_squares.clear();
+    cx_dots.clear();
   }
 
   // ------------------------------------------------------------------
@@ -754,6 +1174,13 @@ struct StorageLayout {
   }
   const std::uint8_t* packed_nibble_block_ptr(std::size_t block) const {
     return packed_nibbles.data() + block * packed_block_stride;
+  }
+
+  std::uint8_t* big_packed_nibble_block_ptr(std::size_t block) {
+    return big_packed_nibbles.data() + block * big_packed_block_stride;
+  }
+  const std::uint8_t* big_packed_nibble_block_ptr(std::size_t block) const {
+    return big_packed_nibbles.data() + block * big_packed_block_stride;
   }
 
   std::uint8_t* byte_code_dim_ptr(std::size_t block, std::size_t d) {
@@ -932,6 +1359,130 @@ struct StorageLayout {
   }
 
   // ------------------------------------------------------------------
+  // score_block128_packed_avx512bw — block-128 packed scoring via zmm VPSHUFB.
+  //
+  // Storage layout (128 lanes, 2 nibbles/byte):
+  //   At dim d, bytes [d*64 .. d*64+63]: low nibble = lane c (c<64),
+  //                                      high nibble = lane c+64.
+  //
+  // Kernel: broadcast 16-byte LUT to all 4 zmm lanes, load 64 DB bytes,
+  // extract lo/hi nibbles, two zmm VPSHUFB → 128 int8 scores per dim.
+  // Port-5 cost: 2 zmm PSHUFB + 4 zmm cvtepi8 = 6 ops / 128 lanes
+  //              vs. 4 ops / 32 lanes for block32 → 2.67× fewer port-5 ops/lane.
+  //
+  // MSE scores only (no QJL).  Requires AVX-512BW.
+  // ------------------------------------------------------------------
+#if defined(__AVX512BW__)
+  void score_block128_packed_avx512bw(const std::uint8_t* packed,
+                                      const std::int8_t* base_i8,
+                                      float base_scale,
+                                      std::size_t bs, float* scores) const {
+    if (bs == detail::kBigBlockSize) {
+      const __m512i lo_mask = _mm512_set1_epi8(static_cast<char>(0x0f));
+      // 4 zmm int16 accumulators: acc_0=lanes 0..31, acc_1=32..63,
+      //                            acc_2=64..95,      acc_3=96..127
+      __m512i b_acc16_0 = _mm512_setzero_si512();
+      __m512i b_acc16_1 = _mm512_setzero_si512();
+      __m512i b_acc16_2 = _mm512_setzero_si512();
+      __m512i b_acc16_3 = _mm512_setzero_si512();
+      // 8 zmm int32 drain accumulators (two per int16 acc: lo/hi 16-lane halves)
+      __m512i b_acc32_0a = _mm512_setzero_si512();  // lanes   0..15
+      __m512i b_acc32_0b = _mm512_setzero_si512();  // lanes  16..31
+      __m512i b_acc32_1a = _mm512_setzero_si512();  // lanes  32..47
+      __m512i b_acc32_1b = _mm512_setzero_si512();  // lanes  48..63
+      __m512i b_acc32_2a = _mm512_setzero_si512();  // lanes  64..79
+      __m512i b_acc32_2b = _mm512_setzero_si512();  // lanes  80..95
+      __m512i b_acc32_3a = _mm512_setzero_si512();  // lanes  96..111
+      __m512i b_acc32_3b = _mm512_setzero_si512();  // lanes 112..127
+
+      for (std::size_t d = 0; d < padded_dim; ++d) {
+        // Broadcast 16-byte LUT row to all 4 zmm 128-bit lanes
+        const __m512i blut_z = _mm512_broadcast_i32x4(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(base_i8 + d * 16)));
+        // Load 64 packed bytes (= 128 nibbles: lo=lanes 0..63, hi=lanes 64..127)
+        const __m512i pk = _mm512_loadu_si512(
+            reinterpret_cast<const __m512i*>(packed + d * 64));
+        const __m512i lo = _mm512_and_si512(pk, lo_mask);
+        const __m512i hi = _mm512_and_si512(_mm512_srli_epi16(pk, 4), lo_mask);
+        // zmm VPSHUFB: 64 LUT lookups per call (vs. 16 per xmm call in block32)
+        const __m512i s_lo = _mm512_shuffle_epi8(blut_z, lo);  // int8 scores, lanes 0..63
+        const __m512i s_hi = _mm512_shuffle_epi8(blut_z, hi);  // int8 scores, lanes 64..127
+        // Sign-extend int8 → int16 and accumulate (4 calls, each 32 bytes → 32 int16)
+        b_acc16_0 = _mm512_add_epi16(b_acc16_0,
+            _mm512_cvtepi8_epi16(_mm512_castsi512_si256(s_lo)));
+        b_acc16_1 = _mm512_add_epi16(b_acc16_1,
+            _mm512_cvtepi8_epi16(_mm512_extracti64x4_epi64(s_lo, 1)));
+        b_acc16_2 = _mm512_add_epi16(b_acc16_2,
+            _mm512_cvtepi8_epi16(_mm512_castsi512_si256(s_hi)));
+        b_acc16_3 = _mm512_add_epi16(b_acc16_3,
+            _mm512_cvtepi8_epi16(_mm512_extracti64x4_epi64(s_hi, 1)));
+        // Drain int16 → int32 every kDrainInterval dims (safe: 256*127=32512 < INT16_MAX)
+        if ((d & (detail::kDrainInterval - 1)) == (detail::kDrainInterval - 1)) {
+          b_acc32_0a = _mm512_add_epi32(b_acc32_0a,
+              _mm512_cvtepi16_epi32(_mm512_castsi512_si256(b_acc16_0)));
+          b_acc32_0b = _mm512_add_epi32(b_acc32_0b,
+              _mm512_cvtepi16_epi32(_mm512_extracti64x4_epi64(b_acc16_0, 1)));
+          b_acc32_1a = _mm512_add_epi32(b_acc32_1a,
+              _mm512_cvtepi16_epi32(_mm512_castsi512_si256(b_acc16_1)));
+          b_acc32_1b = _mm512_add_epi32(b_acc32_1b,
+              _mm512_cvtepi16_epi32(_mm512_extracti64x4_epi64(b_acc16_1, 1)));
+          b_acc32_2a = _mm512_add_epi32(b_acc32_2a,
+              _mm512_cvtepi16_epi32(_mm512_castsi512_si256(b_acc16_2)));
+          b_acc32_2b = _mm512_add_epi32(b_acc32_2b,
+              _mm512_cvtepi16_epi32(_mm512_extracti64x4_epi64(b_acc16_2, 1)));
+          b_acc32_3a = _mm512_add_epi32(b_acc32_3a,
+              _mm512_cvtepi16_epi32(_mm512_castsi512_si256(b_acc16_3)));
+          b_acc32_3b = _mm512_add_epi32(b_acc32_3b,
+              _mm512_cvtepi16_epi32(_mm512_extracti64x4_epi64(b_acc16_3, 1)));
+          b_acc16_0 = _mm512_setzero_si512();
+          b_acc16_1 = _mm512_setzero_si512();
+          b_acc16_2 = _mm512_setzero_si512();
+          b_acc16_3 = _mm512_setzero_si512();
+        }
+      }
+      // Final drain of remaining int16 accumulator state
+      b_acc32_0a = _mm512_add_epi32(b_acc32_0a,
+          _mm512_cvtepi16_epi32(_mm512_castsi512_si256(b_acc16_0)));
+      b_acc32_0b = _mm512_add_epi32(b_acc32_0b,
+          _mm512_cvtepi16_epi32(_mm512_extracti64x4_epi64(b_acc16_0, 1)));
+      b_acc32_1a = _mm512_add_epi32(b_acc32_1a,
+          _mm512_cvtepi16_epi32(_mm512_castsi512_si256(b_acc16_1)));
+      b_acc32_1b = _mm512_add_epi32(b_acc32_1b,
+          _mm512_cvtepi16_epi32(_mm512_extracti64x4_epi64(b_acc16_1, 1)));
+      b_acc32_2a = _mm512_add_epi32(b_acc32_2a,
+          _mm512_cvtepi16_epi32(_mm512_castsi512_si256(b_acc16_2)));
+      b_acc32_2b = _mm512_add_epi32(b_acc32_2b,
+          _mm512_cvtepi16_epi32(_mm512_extracti64x4_epi64(b_acc16_2, 1)));
+      b_acc32_3a = _mm512_add_epi32(b_acc32_3a,
+          _mm512_cvtepi16_epi32(_mm512_castsi512_si256(b_acc16_3)));
+      b_acc32_3b = _mm512_add_epi32(b_acc32_3b,
+          _mm512_cvtepi16_epi32(_mm512_extracti64x4_epi64(b_acc16_3, 1)));
+      // Convert int32 → float, scale, store 128 scores
+      const __m512 sc = _mm512_set1_ps(base_scale);
+      _mm512_storeu_ps(scores,       _mm512_mul_ps(sc, _mm512_cvtepi32_ps(b_acc32_0a)));
+      _mm512_storeu_ps(scores +  16, _mm512_mul_ps(sc, _mm512_cvtepi32_ps(b_acc32_0b)));
+      _mm512_storeu_ps(scores +  32, _mm512_mul_ps(sc, _mm512_cvtepi32_ps(b_acc32_1a)));
+      _mm512_storeu_ps(scores +  48, _mm512_mul_ps(sc, _mm512_cvtepi32_ps(b_acc32_1b)));
+      _mm512_storeu_ps(scores +  64, _mm512_mul_ps(sc, _mm512_cvtepi32_ps(b_acc32_2a)));
+      _mm512_storeu_ps(scores +  80, _mm512_mul_ps(sc, _mm512_cvtepi32_ps(b_acc32_2b)));
+      _mm512_storeu_ps(scores +  96, _mm512_mul_ps(sc, _mm512_cvtepi32_ps(b_acc32_3a)));
+      _mm512_storeu_ps(scores + 112, _mm512_mul_ps(sc, _mm512_cvtepi32_ps(b_acc32_3b)));
+      return;
+    }
+    // Scalar tail for partial block (bs < 128)
+    for (std::size_t c = 0; c < bs; ++c) {
+      float bsum = 0.f;
+      for (std::size_t d = 0; d < padded_dim; ++d) {
+        const std::uint8_t raw = packed[d * 64 + (c < 64 ? c : c - 64)];
+        const std::uint8_t nib = (c < 64) ? (raw & 0x0f) : (raw >> 4);
+        bsum += static_cast<float>(base_i8[d * 16 + nib]);
+      }
+      scores[c] = bsum * base_scale;
+    }
+  }
+#endif  // __AVX512BW__
+
+  // ------------------------------------------------------------------
   // score_generic_code_block — float LUT gather for MSE codes only.
   // out[i] += Σ_j lut[j, code_{j,i}] for bs vectors in block bi.
   // ------------------------------------------------------------------
@@ -1066,30 +1617,33 @@ struct StorageLayout {
   // raw[i] ≈ ⟨q_unit, x_unit_i⟩ (from quantized score / scales).
   // dot ≈ ‖q_eff‖ · ‖x_eff_i‖ · raw  ≈ ⟨q_eff, x_eff_i⟩.
   // L2: ‖q_eff − x_eff_i‖² = ‖q_eff‖² + ‖x_eff_i‖² − 2·dot.
-  // rank_keys: negate L2 for max-heap (smaller distance → better rank).
+  // scores: negated L2 (or raw dot) for max-heap (smaller distance → better rank).
   // ------------------------------------------------------------------
 
   // Nibble / packed path postprocess (shared formula).
+  // q_c_offset = ⟨q,c⟩ − ‖c‖² (per-query constant for IP centroid correction; 0 otherwise).
   template <bool kL2>
   void postprocess_nibble(std::size_t db0, std::size_t bs,
                           float q_eff_norm, float q_eff_norm_sq,
-                          const float* raw, float* values, float* rank_keys) const {
+                          float q_c_offset,
+                          const float* raw, float* scores) const {
     if (bs == detail::kBlockSize) {
       const __m512 norms_v  = _mm512_loadu_ps(norms.data() + db0);
       const __m512 normsq_v = _mm512_loadu_ps(norm_squares.data() + db0);
-      const __m512 score    = _mm512_loadu_ps(raw);
+      const __m512 raw_v    = _mm512_loadu_ps(raw);
       if constexpr (kL2) {
         const __m512 cross = _mm512_mul_ps(_mm512_set1_ps(2.0f * q_eff_norm),
-                                           _mm512_mul_ps(norms_v, score));
+                                           _mm512_mul_ps(norms_v, raw_v));
         const __m512 val = _mm512_sub_ps(
             _mm512_add_ps(_mm512_set1_ps(q_eff_norm_sq), normsq_v), cross);
-        _mm512_storeu_ps(values, val);
-        _mm512_storeu_ps(rank_keys, _mm512_sub_ps(_mm512_setzero_ps(), val));
+        _mm512_storeu_ps(scores, _mm512_sub_ps(_mm512_setzero_ps(), val));
       } else {
+        // ⟨q,x⟩ = ‖q_eff‖·‖x_eff‖·⟨q_unit,x_unit⟩  +  ⟨c,x⟩  +  (⟨q,c⟩ − ‖c‖²)
         const __m512 dot = _mm512_mul_ps(_mm512_set1_ps(q_eff_norm),
-                                         _mm512_mul_ps(norms_v, score));
-        _mm512_storeu_ps(values, dot);
-        _mm512_storeu_ps(rank_keys, dot);
+                                         _mm512_mul_ps(norms_v, raw_v));
+        const __m512 cx_bias = _mm512_add_ps(_mm512_loadu_ps(cx_dots.data() + db0),
+                                              _mm512_set1_ps(q_c_offset));
+        _mm512_storeu_ps(scores, _mm512_add_ps(dot, cx_bias));
       }
       return;
     }
@@ -1097,37 +1651,39 @@ struct StorageLayout {
       if constexpr (kL2) {
         const float val = q_eff_norm_sq + norm_squares[db0 + i]
                           - 2.0f * q_eff_norm * norms[db0 + i] * raw[i];
-        values[i] = val; rank_keys[i] = -val;
+        scores[i] = -val;
       } else {
-        const float dot = q_eff_norm * norms[db0 + i] * raw[i];
-        values[i] = dot; rank_keys[i] = dot;
+        scores[i] = q_eff_norm * norms[db0 + i] * raw[i] + cx_dots[db0 + i] + q_c_offset;
       }
     }
   }
 
   // Packed path postprocess: same formulas, two AVX-512 halves of 32 vectors.
+  // q_c_offset = ⟨q,c⟩ − ‖c‖² (per-query constant for IP centroid correction; 0 otherwise).
   template <bool kL2>
   void postprocess_packed(std::size_t db0, std::size_t bs,
                           float q_eff_norm, float q_eff_norm_sq,
-                          const float* raw, float* values, float* rank_keys) const {
+                          float q_c_offset,
+                          const float* raw, float* scores) const {
     if (bs == detail::kPackedBlockSize) {
       for (std::size_t half = 0; half < 2; ++half) {
         const std::size_t off = half * 16;
         const __m512 norms_v  = _mm512_loadu_ps(norms.data() + db0 + off);
         const __m512 normsq_v = _mm512_loadu_ps(norm_squares.data() + db0 + off);
-        const __m512 score    = _mm512_loadu_ps(raw + off);
+        const __m512 raw_v    = _mm512_loadu_ps(raw + off);
         if constexpr (kL2) {
           const __m512 cross = _mm512_mul_ps(_mm512_set1_ps(2.0f * q_eff_norm),
-                                             _mm512_mul_ps(norms_v, score));
+                                             _mm512_mul_ps(norms_v, raw_v));
           const __m512 val = _mm512_sub_ps(
               _mm512_add_ps(_mm512_set1_ps(q_eff_norm_sq), normsq_v), cross);
-          _mm512_storeu_ps(values + off, val);
-          _mm512_storeu_ps(rank_keys + off, _mm512_sub_ps(_mm512_setzero_ps(), val));
+          _mm512_storeu_ps(scores + off, _mm512_sub_ps(_mm512_setzero_ps(), val));
         } else {
+          // ⟨q,x⟩ = ‖q_eff‖·‖x_eff‖·⟨q_unit,x_unit⟩  +  ⟨c,x⟩  +  (⟨q,c⟩ − ‖c‖²)
           const __m512 dot = _mm512_mul_ps(_mm512_set1_ps(q_eff_norm),
-                                           _mm512_mul_ps(norms_v, score));
-          _mm512_storeu_ps(values + off, dot);
-          _mm512_storeu_ps(rank_keys + off, dot);
+                                           _mm512_mul_ps(norms_v, raw_v));
+          const __m512 cx_bias = _mm512_add_ps(_mm512_loadu_ps(cx_dots.data() + db0 + off),
+                                               _mm512_set1_ps(q_c_offset));
+          _mm512_storeu_ps(scores + off, _mm512_add_ps(dot, cx_bias));
         }
       }
       return;
@@ -1136,42 +1692,84 @@ struct StorageLayout {
       if constexpr (kL2) {
         const float val = q_eff_norm_sq + norm_squares[db0 + i]
                           - 2.0f * q_eff_norm * norms[db0 + i] * raw[i];
-        values[i] = val; rank_keys[i] = -val;
+        scores[i] = -val;
       } else {
-        const float dot = q_eff_norm * norms[db0 + i] * raw[i];
-        values[i] = dot; rank_keys[i] = dot;
+        scores[i] = q_eff_norm * norms[db0 + i] * raw[i] + cx_dots[db0 + i] + q_c_offset;
+      }
+    }
+  }
+
+  // Big-packed path postprocess: same formulas as postprocess_packed, 8 AVX-512
+  // passes for 128 lanes.  MSE mode only (no QJL).
+  template <bool kL2>
+  void postprocess_big_packed(std::size_t db0, std::size_t bs,
+                              float q_eff_norm, float q_eff_norm_sq,
+                              float q_c_offset,
+                              const float* raw, float* scores) const {
+    if (bs == detail::kBigBlockSize) {
+      const __m512 two_qn = _mm512_set1_ps(2.0f * q_eff_norm);
+      const __m512 qn_sq  = _mm512_set1_ps(q_eff_norm_sq);
+      const __m512 qn     = _mm512_set1_ps(q_eff_norm);
+      const __m512 qc_off = _mm512_set1_ps(q_c_offset);
+      for (std::size_t off = 0; off < detail::kBigBlockSize; off += 16) {
+        const __m512 norms_v  = _mm512_loadu_ps(norms.data() + db0 + off);
+        const __m512 normsq_v = _mm512_loadu_ps(norm_squares.data() + db0 + off);
+        const __m512 raw_v    = _mm512_loadu_ps(raw + off);
+        if constexpr (kL2) {
+          const __m512 cross = _mm512_mul_ps(two_qn, _mm512_mul_ps(norms_v, raw_v));
+          const __m512 val = _mm512_sub_ps(_mm512_add_ps(qn_sq, normsq_v), cross);
+          _mm512_storeu_ps(scores + off, _mm512_sub_ps(_mm512_setzero_ps(), val));
+        } else {
+          const __m512 dot = _mm512_mul_ps(qn, _mm512_mul_ps(norms_v, raw_v));
+          const __m512 cx_bias = _mm512_add_ps(
+              _mm512_loadu_ps(cx_dots.data() + db0 + off), qc_off);
+          _mm512_storeu_ps(scores + off, _mm512_add_ps(dot, cx_bias));
+        }
+      }
+      return;
+    }
+    for (std::size_t i = 0; i < bs; ++i) {
+      if constexpr (kL2) {
+        const float val = q_eff_norm_sq + norm_squares[db0 + i]
+                          - 2.0f * q_eff_norm * norms[db0 + i] * raw[i];
+        scores[i] = -val;
+      } else {
+        scores[i] = q_eff_norm * norms[db0 + i] * raw[i] + cx_dots[db0 + i] + q_c_offset;
       }
     }
   }
 
   // Generic path postprocess: optional QJL residual correction from scratch[].
+  // q_c_offset = ⟨q,c⟩ − ‖c‖² (per-query constant for IP centroid correction; 0 otherwise).
   template <bool kUseResidual, bool kL2>
   void postprocess_generic(std::size_t db0, std::size_t bs,
                            float q_eff_norm, float q_eff_norm_sq,
+                           float q_c_offset,
                            float* dot_scores, const float* scratch,
-                           float* values, float* rank_keys) const {
+                           float* scores) const {
     if (bs == detail::kBlockSize) {
       const __m512 norms_v  = _mm512_loadu_ps(norms.data() + db0);
       const __m512 normsq_v = _mm512_loadu_ps(norm_squares.data() + db0);
-      __m512 score = _mm512_loadu_ps(dot_scores);
+      __m512 raw_v = _mm512_loadu_ps(dot_scores);
       if constexpr (kUseResidual) {
         const __m512 inv_norms = _mm512_div_ps(_mm512_set1_ps(1.0f), norms_v);
         const __m512 gc = _mm512_mul_ps(
             _mm512_loadu_ps(residual_scales.data() + db0), inv_norms);
-        score = _mm512_fmadd_ps(gc, _mm512_loadu_ps(scratch), score);
+        raw_v = _mm512_fmadd_ps(gc, _mm512_loadu_ps(scratch), raw_v);
       }
       if constexpr (kL2) {
         const __m512 cross = _mm512_mul_ps(_mm512_set1_ps(2.0f * q_eff_norm),
-                                           _mm512_mul_ps(norms_v, score));
+                                           _mm512_mul_ps(norms_v, raw_v));
         const __m512 val = _mm512_sub_ps(
             _mm512_add_ps(_mm512_set1_ps(q_eff_norm_sq), normsq_v), cross);
-        _mm512_storeu_ps(values, val);
-        _mm512_storeu_ps(rank_keys, _mm512_sub_ps(_mm512_setzero_ps(), val));
+        _mm512_storeu_ps(scores, _mm512_sub_ps(_mm512_setzero_ps(), val));
       } else {
+        // ⟨q,x⟩ = ‖q_eff‖·‖x_eff‖·⟨q_unit,x_unit⟩  +  ⟨c,x⟩  +  (⟨q,c⟩ − ‖c‖²)
         const __m512 dot = _mm512_mul_ps(_mm512_set1_ps(q_eff_norm),
-                                         _mm512_mul_ps(norms_v, score));
-        _mm512_storeu_ps(values, dot);
-        _mm512_storeu_ps(rank_keys, dot);
+                                         _mm512_mul_ps(norms_v, raw_v));
+        const __m512 cx_bias = _mm512_add_ps(_mm512_loadu_ps(cx_dots.data() + db0),
+                                              _mm512_set1_ps(q_c_offset));
+        _mm512_storeu_ps(scores, _mm512_add_ps(dot, cx_bias));
       }
       return;
     }
@@ -1185,10 +1783,9 @@ struct StorageLayout {
       if constexpr (kL2) {
         const float val = q_eff_norm_sq + norm_squares[db0 + i]
                           - 2.0f * q_eff_norm * norms[db0 + i] * ip;
-        values[i] = val; rank_keys[i] = -val;
+        scores[i] = -val;
       } else {
-        const float dot = q_eff_norm * norms[db0 + i] * ip;
-        values[i] = dot; rank_keys[i] = dot;
+        scores[i] = q_eff_norm * norms[db0 + i] * ip + cx_dots[db0 + i] + q_c_offset;
       }
     }
   }
@@ -1244,7 +1841,7 @@ struct KMeansIVF {
         [&](std::size_t a, std::size_t b){ return cdists[a] < cdists[b]; });
   }
 
- private:
+ 
   // K-means++ init + Lloyd iterations with AVX-512 FMA assignment.
   // Subsamples to min(n, 256*nlist) training vectors to cap cost.
   void run_kmeans(const float* data, std::size_t n, std::size_t dim, std::size_t padded_dim,
@@ -1277,13 +1874,28 @@ struct KMeansIVF {
       std::vector<float> min_sq(max_n, std::numeric_limits<float>::max());
       for (std::size_t ci = 1; ci < k; ++ci) {
         const float* last = cents.data() + (ci - 1) * d;
-        for (std::size_t i = 0; i < max_n; ++i) {
+        // Embarrassingly parallel: each i updates only min_sq[i].
+        #pragma omp parallel for num_threads(static_cast<int>(num_threads)) schedule(static)
+        for (std::ptrdiff_t ii = 0; ii < static_cast<std::ptrdiff_t>(max_n); ++ii) {
+          const std::size_t i = static_cast<std::size_t>(ii);
           const float* xi = data + sample[i] * d;
           float dsq = detail::l2_sq_distance(xi, last, d);
           if (dsq < min_sq[i]) min_sq[i] = dsq;
         }
+        // SIMD horizontal sum of min_sq.
         float total = 0.f;
-        for (float v : min_sq) total += v;
+        {
+#if defined(__AVX512F__)
+          __m512 vacc = _mm512_setzero_ps();
+          std::size_t i = 0;
+          for (; i + 16 <= max_n; i += 16)
+            vacc = _mm512_add_ps(vacc, _mm512_loadu_ps(min_sq.data() + i));
+          total = _mm512_reduce_add_ps(vacc);
+          for (; i < max_n; ++i) total += min_sq[i];
+#else
+          for (float v : min_sq) total += v;
+#endif
+        }
         std::uniform_real_distribution<float> ureal(0.f, total > 0.f ? total : 1.f);
         float tgt = ureal(rng), acc = 0.f;
         std::size_t chosen = max_n - 1;
@@ -1317,26 +1929,73 @@ struct KMeansIVF {
 
       if (iter > 0 && changed == 0) break;
 
-      // Recompute centroids as cluster means
-      std::fill(cents.begin(), cents.end(), 0.f);
-      std::vector<std::size_t> cnt(k, 0);
-      for (std::size_t i = 0; i < max_n; ++i) {
-        const std::size_t c = asgn[i];
-        const float* xi = data + sample[i] * d;
-        float* cc = cents.data() + c * d;
-        for (std::size_t j = 0; j < d; ++j) cc[j] += xi[j];
-        ++cnt[c];
-      }
-      for (std::size_t c = 0; c < k; ++c) {
-        if (cnt[c] > 0) {
-          const float inv = 1.f / static_cast<float>(cnt[c]);
-          float* cc = cents.data() + c * d;
-          for (std::size_t j = 0; j < d; ++j) cc[j] *= inv;
-        } else {
-          // Empty cluster: copy from a non-empty neighbor
-          std::size_t src = (c + 1) % k;
-          while (cnt[src] == 0) src = (src + 1) % k;
-          std::copy(cents.data() + src * d, cents.data() + src * d + d, cents.data() + c * d);
+      // Recompute centroids as cluster means.
+      // Use thread-local partial accumulators to avoid write conflicts,
+      // then merge with SIMD.
+      {
+        const std::size_t nt = std::min(num_threads, max_n);
+        std::vector<float>       partial_cents(nt * k * d, 0.f);
+        std::vector<std::size_t> partial_cnt  (nt * k,     0);
+        #pragma omp parallel num_threads(static_cast<int>(nt))
+        {
+          const std::size_t tid  = static_cast<std::size_t>(omp_get_thread_num());
+          float*       pcents = partial_cents.data() + tid * k * d;
+          std::size_t* pcnt   = partial_cnt.data()   + tid * k;
+          #pragma omp for schedule(static) nowait
+          for (std::ptrdiff_t ii = 0; ii < static_cast<std::ptrdiff_t>(max_n); ++ii) {
+            const std::size_t i  = static_cast<std::size_t>(ii);
+            const std::size_t c  = asgn[i];
+            const float*      xi = data + sample[i] * d;
+            float* pcc = pcents + c * d;
+            std::size_t j = 0;
+#if defined(__AVX512F__)
+            for (; j + 16 <= d; j += 16)
+              _mm512_storeu_ps(pcc + j,
+                _mm512_add_ps(_mm512_loadu_ps(pcc + j), _mm512_loadu_ps(xi + j)));
+#endif
+            for (; j < d; ++j) pcc[j] += xi[j];
+            ++pcnt[c];
+          }
+        }
+        // Merge thread partials into cents/cnt.
+        std::fill(cents.begin(), cents.end(), 0.f);
+        std::vector<std::size_t> cnt(k, 0);
+        for (std::size_t t = 0; t < nt; ++t) {
+          const float*       pcents = partial_cents.data() + t * k * d;
+          const std::size_t* pcnt   = partial_cnt.data()   + t * k;
+          for (std::size_t c = 0; c < k; ++c) {
+            cnt[c] += pcnt[c];
+            float*       cc  = cents.data() + c * d;
+            const float* pcc = pcents + c * d;
+            std::size_t j = 0;
+#if defined(__AVX512F__)
+            for (; j + 16 <= d; j += 16)
+              _mm512_storeu_ps(cc + j,
+                _mm512_add_ps(_mm512_loadu_ps(cc + j), _mm512_loadu_ps(pcc + j)));
+#endif
+            for (; j < d; ++j) cc[j] += pcc[j];
+          }
+        }
+        // Scale and handle empty clusters.
+        for (std::size_t c = 0; c < k; ++c) {
+          if (cnt[c] > 0) {
+            const float inv = 1.f / static_cast<float>(cnt[c]);
+            float* cc = cents.data() + c * d;
+#if defined(__AVX512F__)
+            const __m512 vinv = _mm512_set1_ps(inv);
+            std::size_t j = 0;
+            for (; j + 16 <= d; j += 16)
+              _mm512_storeu_ps(cc + j, _mm512_mul_ps(_mm512_loadu_ps(cc + j), vinv));
+            for (; j < d; ++j) cc[j] *= inv;
+#else
+            for (std::size_t j = 0; j < d; ++j) cc[j] *= inv;
+#endif
+          } else {
+            // Empty cluster: copy from a non-empty neighbor.
+            std::size_t src = (c + 1) % k;
+            while (cnt[src] == 0) src = (src + 1) % k;
+            std::copy(cents.data() + src * d, cents.data() + src * d + d, cents.data() + c * d);
+          }
         }
       }
     }
@@ -1379,6 +2038,7 @@ class TurboQuantIndex {
     std::size_t num_threads = 1;
     std::size_t nlist  = 1;   // IVF clusters; 1 = flat (current behavior preserved)
     std::size_t nprobe = 1;   // Clusters to probe per query (clamped to nlist)
+    bool l2_direct = true;    // MSE-mode L2: use ‖x̂_eff‖² (direct L2 ADC) instead of ‖x_eff‖²
   };
 
   // Validates dim and bitwidth; sets padded_dim_ = next power of 2 for Hadamard else dim.
@@ -1390,6 +2050,7 @@ class TurboQuantIndex {
         use_data_centroid_(cfg.use_data_centroid),
         force_generic_path_(cfg.force_generic_path),
         use_packed_nibbles_(cfg.use_packed_nibbles),
+        l2_direct_(cfg.l2_direct),
         seed_(cfg.seed),
         num_threads_(std::max<std::size_t>(1, cfg.num_threads)) {
     if (dim_ == 0)
@@ -1429,24 +2090,65 @@ class TurboQuantIndex {
       if (n == 0 || x == nullptr)
         throw std::invalid_argument("train: n > 0 and x != null required for use_data_centroid");
       centroid_.assign(dim_, 0.0f);
-      for (std::size_t i = 0; i < n; ++i) {
-        const float* xi = x + i * dim_;
-        for (std::size_t j = 0; j < dim_; ++j) centroid_[j] += xi[j];
+      {
+        // Parallel partial sums per thread, then SIMD merge.
+        const int nt = static_cast<int>(num_threads_);
+        std::vector<float> partial(static_cast<std::size_t>(nt) * dim_, 0.0f);
+        #pragma omp parallel num_threads(nt)
+        {
+          const int tid = omp_get_thread_num();
+          float* p = partial.data() + static_cast<std::size_t>(tid) * dim_;
+          #pragma omp for schedule(static)
+          for (std::ptrdiff_t ii = 0; ii < static_cast<std::ptrdiff_t>(n); ++ii) {
+            const float* xi = x + static_cast<std::size_t>(ii) * dim_;
+            std::size_t j = 0;
+#if defined(__AVX512F__)
+            for (; j + 16 <= dim_; j += 16)
+              _mm512_storeu_ps(p + j,
+                _mm512_add_ps(_mm512_loadu_ps(p + j), _mm512_loadu_ps(xi + j)));
+#endif
+            for (; j < dim_; ++j) p[j] += xi[j];
+          }
+        }
+        // Merge per-thread partial sums into centroid_ with SIMD.
+        for (int t = 0; t < nt; ++t) {
+          const float* p = partial.data() + static_cast<std::size_t>(t) * dim_;
+          std::size_t j = 0;
+#if defined(__AVX512F__)
+          for (; j + 16 <= dim_; j += 16)
+            _mm512_storeu_ps(centroid_.data() + j,
+              _mm512_add_ps(_mm512_loadu_ps(centroid_.data() + j), _mm512_loadu_ps(p + j)));
+#endif
+          for (; j < dim_; ++j) centroid_[j] += p[j];
+        }
       }
-      const float inv_n = 1.0f / static_cast<float>(n);
-      for (std::size_t j = 0; j < dim_; ++j) centroid_[j] *= inv_n;
+      {
+        const float inv_n = 1.0f / static_cast<float>(n);
+#if defined(__AVX512F__)
+        const __m512 vinv = _mm512_set1_ps(inv_n);
+        std::size_t j = 0;
+        for (; j + 16 <= dim_; j += 16)
+          _mm512_storeu_ps(centroid_.data() + j,
+            _mm512_mul_ps(_mm512_loadu_ps(centroid_.data() + j), vinv));
+        for (; j < dim_; ++j) centroid_[j] *= inv_n;
+#else
+        for (std::size_t j = 0; j < dim_; ++j) centroid_[j] *= inv_n;
+#endif
+      }
       centroid_.resize(padded_dim_, 0.0f);  // zero-pad for internal use
+      c_norm_sq_ = detail::dot_product(centroid_.data(), centroid_.data(), dim_);
     } else {
       centroid_.clear();
+      c_norm_sq_ = 0.0f;
     }
 
     // 2. Build codebook (centroids + decision thresholds)
     mse_bits_ = (mode_ == Mode::kInnerProduct) ? (bitwidth_ - 1) : bitwidth_;
     codebook_.build(mse_bits_, padded_dim_, mode_);
 
-    // 3. Decide storage path and compute strides
+    // 3. Decide storage path and compute strides (IVF not yet ported to kBigPackedNibble)
     storage_.configure(mse_bits_, bitwidth_, force_generic_path_, use_packed_nibbles_,
-                       padded_dim_, mode_, codebook_.size);
+                       padded_dim_, mode_, codebook_.size, ivf_.active());
 
     // 4. Generate rotation and (for IP) QJL transform
     rotation_.generate(rotation_type_, padded_dim_, seed_);
@@ -1484,8 +2186,19 @@ class TurboQuantIndex {
     const std::size_t eff_bs    = storage_.eff_block_size();
     const std::size_t new_blocks = detail::ceil_div(ntotal_, eff_bs);
 
-    if (storage_.path == StorageLayout::Path::kPackedNibble) {
+    if (storage_.path == StorageLayout::Path::kBigPackedNibble) {
+      storage_.big_packed_nibbles.resize(new_blocks * storage_.big_packed_block_stride, 0);
+#ifdef __linux__
+      { auto* p = storage_.big_packed_nibbles.data();
+        if (p) madvise(p, storage_.big_packed_nibbles.size(), MADV_HUGEPAGE); }
+#endif
+      storage_.gammas.resize(new_blocks * kBigBlockSize, 0.f);
+    } else if (storage_.path == StorageLayout::Path::kPackedNibble) {
       storage_.packed_nibbles.resize(new_blocks * storage_.packed_block_stride, 0);
+#ifdef __linux__
+      { auto* p = storage_.packed_nibbles.data();
+        if (p) madvise(p, storage_.packed_nibbles.size(), MADV_HUGEPAGE); }
+#endif
       storage_.gammas.resize(new_blocks * kPackedBlockSize, 0.f);
     } else if (storage_.path == StorageLayout::Path::kNibble) {
       storage_.nibbles.resize(new_blocks * storage_.nibble_block_stride, 0);
@@ -1498,6 +2211,7 @@ class TurboQuantIndex {
     }
     storage_.norms.resize(new_blocks * eff_bs, 0.f);
     storage_.norm_squares.resize(new_blocks * eff_bs, 0.f);
+    storage_.cx_dots.resize(new_blocks * eff_bs, 0.f);
 
     const std::size_t start_block = old_total / eff_bs;
     parallel_for(start_block, new_blocks, [&](std::size_t b0, std::size_t b1) {
@@ -1520,18 +2234,37 @@ class TurboQuantIndex {
           const std::size_t lane = gi - block_begin;
           const float* src = x + li * dim_;
 
-          // Compute x_eff = (x - centroid) or x; store norm of x_eff
-          std::fill(x_eff.begin(), x_eff.end(), 0.0f);
+          // Compute x_eff = (x - centroid) or x; store norm and ⟨c,x⟩
+          // No fill needed: [0,dim_) is overwritten below; [dim_,padded_dim_) stays zero from construction.
+          float cx_dot = 0.0f;
           if (use_data_centroid_) {
-            for (std::size_t j = 0; j < dim_; ++j)
+            std::size_t j = 0;
+#if defined(__AVX512F__)
+            __m512 vcx = _mm512_setzero_ps();
+            for (; j + 16 <= dim_; j += 16) {
+              const __m512 vx = _mm512_loadu_ps(src + j);
+              const __m512 vc = _mm512_loadu_ps(centroid_.data() + j);
+              _mm512_storeu_ps(x_eff.data() + j, _mm512_sub_ps(vx, vc));
+              vcx = _mm512_fmadd_ps(vc, vx, vcx);
+            }
+            cx_dot = _mm512_reduce_add_ps(vcx);
+#endif
+            for (; j < dim_; ++j) {
               x_eff[j] = src[j] - centroid_[j];
+              cx_dot  += centroid_[j] * src[j];
+            }
           } else {
-            for (std::size_t j = 0; j < dim_; ++j)
-              x_eff[j] = src[j];
+            std::size_t j = 0;
+#if defined(__AVX512F__)
+            for (; j + 16 <= dim_; j += 16)
+              _mm512_storeu_ps(x_eff.data() + j, _mm512_loadu_ps(src + j));
+#endif
+            for (; j < dim_; ++j) x_eff[j] = src[j];
           }
           const float norm = detail::l2_norm(x_eff.data(), dim_);
           storage_.norms[gi]        = norm;
           storage_.norm_squares[gi] = norm * norm;
+          storage_.cx_dots[gi]      = cx_dot;
 
           if (norm == 0.0f) {
             if (storage_.path != StorageLayout::Path::kGeneric) storage_.gammas[gi] = 0.0f;
@@ -1541,15 +2274,47 @@ class TurboQuantIndex {
 
           // Normalise and rotate
           const float inv_norm = 1.0f / norm;
-          std::fill(unit.begin(), unit.end(), 0.0f);
-          for (std::size_t j = 0; j < dim_; ++j) unit[j] = x_eff[j] * inv_norm;
+          {
+            std::size_t j = 0;
+#if defined(__AVX512F__)
+            const __m512 vinv = _mm512_set1_ps(inv_norm);
+            for (; j + 16 <= dim_; j += 16)
+              _mm512_storeu_ps(unit.data() + j,
+                _mm512_mul_ps(_mm512_loadu_ps(x_eff.data() + j), vinv));
+#endif
+            for (; j < dim_; ++j) unit[j] = x_eff[j] * inv_norm;
+          }
           rotation_.forward(unit.data(), rotated.data(), work.data());
 
           encode_rotated(rotated.data(), codes.data());
 
+          // Direct L2 ADC: override ‖x_eff‖² with ‖x̂_eff‖² = norm² · Σ c[code_j]²
+          // so the L2 kernel computes ‖q − x̂‖² (exact distance to reconstructed
+          // point) instead of a biased estimate of ‖q − x‖².
+          if (l2_direct_ && mode_ != Mode::kInnerProduct) {
+            float uhat_sq = 0.0f;
+            for (std::size_t j = 0; j < padded_dim_; ++j) {
+              const float c = codebook_.centroids[codes[j]];
+              uhat_sq += c * c;
+            }
+            storage_.norm_squares[gi] = norm * norm * uhat_sq;
+          }
+
           if (mode_ != Mode::kInnerProduct) {
             // MSE path: store codes only
-            if (storage_.path == StorageLayout::Path::kPackedNibble) {
+            if (storage_.path == StorageLayout::Path::kBigPackedNibble) {
+              // Block-128 layout: at dim j, byte j*64+c holds low nibble = lane c (c<64),
+              //                   high nibble = lane c+64.
+              std::uint8_t* pk = storage_.big_packed_nibble_block_ptr(bi);
+              for (std::size_t j = 0; j < padded_dim_; ++j) {
+                const std::uint8_t code = static_cast<std::uint8_t>(codes[j]) & 0x0f;
+                if (lane < 64)
+                  pk[j * 64 + lane] |= code;
+                else
+                  pk[j * 64 + (lane - 64)] |= (code << 4);
+              }
+              storage_.gammas[gi] = 0.0f;
+            } else if (storage_.path == StorageLayout::Path::kPackedNibble) {
               std::uint8_t* pk = storage_.packed_nibble_block_ptr(bi);
               for (std::size_t j = 0; j < padded_dim_; ++j) {
                 const std::uint8_t code = static_cast<std::uint8_t>(codes[j]) & 0x0f;
@@ -1661,7 +2426,11 @@ class TurboQuantIndex {
       return;
     }
 
-    if (storage_.path == StorageLayout::Path::kPackedNibble) {
+    if (storage_.path == StorageLayout::Path::kBigPackedNibble) {
+      // MSE mode only (configure() never selects kBigPackedNibble for IP mode)
+      if (metric == SearchMetric::kL2) query_big_packed_impl<true>(nq, x, k, distances, labels);
+      else                              query_big_packed_impl<false>(nq, x, k, distances, labels);
+    } else if (storage_.path == StorageLayout::Path::kPackedNibble) {
       if (mode_ == Mode::kInnerProduct) {
         if (metric == SearchMetric::kL2) query_packed_impl<true, true>(nq, x, k, distances, labels);
         else                              query_packed_impl<true, false>(nq, x, k, distances, labels);
@@ -1720,8 +2489,7 @@ class TurboQuantIndex {
     if (k > ntotal_) k = ntotal_;
 
     std::vector<float>   raw_all(n_blocks * eff_bs);
-    std::vector<float>   val_all(n_blocks * eff_bs);
-    std::vector<float>   key_all(n_blocks * eff_bs);
+    std::vector<float>   score_all(n_blocks * eff_bs);
 
     std::vector<float>       q_work(padded_dim_, 0.0f);
     std::vector<float>       q_unit(padded_dim_, 0.0f);
@@ -1737,7 +2505,8 @@ class TurboQuantIndex {
       const float* qptr = x + qi * dim_;
 
       auto tp0 = Clock::now();
-      const float q_en = prepare_query(qptr, q_work, q_unit);
+      float q_dot_c_unused;
+      const float q_en = prepare_query(qptr, q_work, q_unit, q_dot_c_unused);
       const float q_en_sq = q_en * q_en;
       auto tp1 = Clock::now();
       t_prepare += Dur(tp1 - tp0).count();
@@ -1778,15 +2547,13 @@ class TurboQuantIndex {
       for (std::size_t db0 = 0; db0 < ntotal_; db0 += eff_bs) {
         const std::size_t bs = std::min<std::size_t>(eff_bs, ntotal_ - db0);
         if (storage_.path == StorageLayout::Path::kPackedNibble) {
-          storage_.postprocess_packed<true>(db0, bs, q_en, q_en_sq,
+          storage_.postprocess_packed<true>(db0, bs, q_en, q_en_sq, 0.0f,
                                             raw_all.data() + db0,
-                                            val_all.data() + db0,
-                                            key_all.data() + db0);
+                                            score_all.data() + db0);
         } else {
-          storage_.postprocess_nibble<true>(db0, bs, q_en, q_en_sq,
+          storage_.postprocess_nibble<true>(db0, bs, q_en, q_en_sq, 0.0f,
                                             raw_all.data() + db0,
-                                            val_all.data() + db0,
-                                            key_all.data() + db0);
+                                            score_all.data() + db0);
         }
       }
       auto tp5 = Clock::now();
@@ -1794,11 +2561,11 @@ class TurboQuantIndex {
 
       std::size_t heap_size = 0;
       for (std::size_t i = 0; i < ntotal_; ++i)
-        detail::heap_push_or_replace(heap, heap_size, k, key_all[i], val_all[i],
+        detail::heap_push_or_replace(heap, heap_size, k, score_all[i],
                                      static_cast<idx_t>(i));
       std::sort(heap.begin(), heap.begin() + static_cast<std::ptrdiff_t>(heap_size),
                 [](const detail::HeapEntry& a, const detail::HeapEntry& b) {
-                  return a.rank_key > b.rank_key; });
+                  return a.score > b.score; });
       auto tp6 = Clock::now();
       t_heap += Dur(tp6 - tp5).count();
     }
@@ -1822,6 +2589,7 @@ class TurboQuantIndex {
   static constexpr float       kQjlScale       = detail::kQjlScale;
   static constexpr std::size_t kBlockSize       = detail::kBlockSize;
   static constexpr std::size_t kPackedBlockSize = detail::kPackedBlockSize;
+  static constexpr std::size_t kBigBlockSize    = detail::kBigBlockSize;
 
   // ------------------------------------------------------------------
   // Members
@@ -1835,12 +2603,14 @@ class TurboQuantIndex {
   bool          use_data_centroid_  = false;
   bool          force_generic_path_ = false;
   bool          use_packed_nibbles_ = true;
+  bool          l2_direct_          = false;
   std::uint64_t seed_        = 0;
   std::size_t   num_threads_ = 1;
   std::size_t   ntotal_      = 0;
   bool          trained_     = false;
 
   std::vector<float> centroid_;  // padded_dim_ floats when use_data_centroid_ is active
+  float              c_norm_sq_ = 0.0f;  // ‖c‖² for IP centroid correction
 
   // Sub-components
   Codebook      codebook_;
@@ -1857,21 +2627,29 @@ class TurboQuantIndex {
   }
 
   // Writes q_unit[j] = q_eff[j] / ‖q_eff‖; returns ‖q_eff‖.
+  // Also computes q_dot_c_out = ⟨q,c⟩ (0 when use_data_centroid_ is false).
   float prepare_query(const float* qptr,
                       std::vector<float>& q_work,
-                      std::vector<float>& q_unit) const {
+                      std::vector<float>& q_unit,
+                      float& q_dot_c_out) const {
+    q_dot_c_out = 0.0f;
     float q_eff_norm;
     if (use_data_centroid_) {
-      for (std::size_t j = 0; j < dim_; ++j) q_work[j] = qptr[j] - centroid_[j];
+      for (std::size_t j = 0; j < dim_; ++j) {
+        q_work[j]    = qptr[j] - centroid_[j];
+        q_dot_c_out += centroid_[j] * qptr[j];
+      }
       q_eff_norm = detail::l2_norm(q_work.data(), dim_);
     } else {
       q_eff_norm = detail::l2_norm(qptr, dim_);
     }
-    std::fill(q_unit.begin(), q_unit.end(), 0.0f);
+    // [dim_,padded_dim_) stays zero from construction; only touch [0,dim_).
     if (q_eff_norm > 0.0f) {
       const float inv = 1.0f / q_eff_norm;
       const float* src = use_data_centroid_ ? q_work.data() : qptr;
       for (std::size_t j = 0; j < dim_; ++j) q_unit[j] = src[j] * inv;
+    } else {
+      for (std::size_t j = 0; j < dim_; ++j) q_unit[j] = 0.0f;
     }
     return q_eff_norm;
   }
@@ -1927,13 +2705,24 @@ class TurboQuantIndex {
       std::vector<float>& projected, std::vector<float>& work,
       std::vector<std::uint32_t>& codes)
   {
-    std::fill(x_eff.begin(), x_eff.end(), 0.0f);
+    // No fill needed: [0,dim_) is overwritten below; [dim_,padded_dim_) stays zero from construction.
     const float* cp = local_centroid ? local_centroid
                     : (use_data_centroid_ ? centroid_.data() : nullptr);
     if (cp) {
-      for (std::size_t j = 0; j < dim_; ++j) x_eff[j] = src[j] - cp[j];
+      std::size_t j = 0;
+#if defined(__AVX512F__)
+      for (; j + 16 <= dim_; j += 16)
+        _mm512_storeu_ps(x_eff.data() + j,
+          _mm512_sub_ps(_mm512_loadu_ps(src + j), _mm512_loadu_ps(cp + j)));
+#endif
+      for (; j < dim_; ++j) x_eff[j] = src[j] - cp[j];
     } else {
-      for (std::size_t j = 0; j < dim_; ++j) x_eff[j] = src[j];
+      std::size_t j = 0;
+#if defined(__AVX512F__)
+      for (; j + 16 <= dim_; j += 16)
+        _mm512_storeu_ps(x_eff.data() + j, _mm512_loadu_ps(src + j));
+#endif
+      for (; j < dim_; ++j) x_eff[j] = src[j];
     }
 
     const float norm = detail::l2_norm(x_eff.data(), dim_);
@@ -1947,10 +2736,28 @@ class TurboQuantIndex {
     }
 
     const float inv = 1.0f / norm;
-    std::fill(unit.begin(), unit.end(), 0.0f);
-    for (std::size_t j = 0; j < dim_; ++j) unit[j] = x_eff[j] * inv;
+    {
+      std::size_t j = 0;
+#if defined(__AVX512F__)
+      const __m512 vinv = _mm512_set1_ps(inv);
+      for (; j + 16 <= dim_; j += 16)
+        _mm512_storeu_ps(unit.data() + j,
+          _mm512_mul_ps(_mm512_loadu_ps(x_eff.data() + j), vinv));
+#endif
+      for (; j < dim_; ++j) unit[j] = x_eff[j] * inv;
+    }
     rotation_.forward(unit.data(), rotated.data(), work.data());
     encode_rotated(rotated.data(), codes.data());
+
+    // Direct L2 ADC: override ‖x_eff‖² with ‖x̂_eff‖² = norm² · Σ c[code_j]²
+    if (l2_direct_ && mode_ != Mode::kInnerProduct) {
+      float uhat_sq = 0.0f;
+      for (std::size_t j = 0; j < padded_dim_; ++j) {
+        const float c = codebook_.centroids[codes[j]];
+        uhat_sq += c * c;
+      }
+      storage_.norm_squares[gi] = norm * norm * uhat_sq;
+    }
 
     if (mode_ != Mode::kInnerProduct) {
       if (storage_.path == StorageLayout::Path::kPackedNibble) {
@@ -2033,15 +2840,16 @@ class TurboQuantIndex {
       std::vector<std::int8_t> base_i8(padded_dim_ * 16);
       std::vector<std::int8_t> qjl_i8(kUseQjl ? padded_dim_ * 16 : 0);
       alignas(64) float raw_scores[kBlockSize];
-      alignas(64) float cand_values[kBlockSize];
-      alignas(64) float cand_rank_keys[kBlockSize];
+      alignas(64) float cand_scores[kBlockSize];
       std::vector<detail::HeapEntry> heap(k);
       std::size_t heap_size = 0;
 
       for (std::size_t qi = q0; qi < q1; ++qi) {
         const float* qptr = x + qi * dim_;
-        const float q_en = prepare_query(qptr, q_work, q_unit);
+        float q_dot_c;
+        const float q_en = prepare_query(qptr, q_work, q_unit, q_dot_c);
         const float q_en_sq = q_en * q_en;
+        const float q_c_offset = (kL2 || !use_data_centroid_) ? 0.0f : (q_dot_c - c_norm_sq_);
 
         rotation_.forward(q_unit.data(), rotated.data(), work.data());
         if constexpr (kUseQjl)
@@ -2065,20 +2873,20 @@ class TurboQuantIndex {
                                       storage_.gammas.data() + db0,
                                       base_scale, qjl_scale_v, bs, raw_scores);
 
-          storage_.postprocess_nibble<kL2>(db0, bs, q_en, q_en_sq,
-                                           raw_scores, cand_values, cand_rank_keys);
+          storage_.postprocess_nibble<kL2>(db0, bs, q_en, q_en_sq, q_c_offset,
+                                           raw_scores, cand_scores);
 
           for (std::size_t i = 0; i < bs; ++i)
-            detail::heap_push_or_replace(heap, heap_size, k, cand_rank_keys[i],
-                                         cand_values[i], static_cast<idx_t>(db0 + i));
+            detail::heap_push_or_replace(heap, heap_size, k, cand_scores[i],
+                                         static_cast<idx_t>(db0 + i));
         }
 
         std::sort(heap.begin(), heap.begin() + static_cast<std::ptrdiff_t>(heap_size),
                   [](const detail::HeapEntry& a, const detail::HeapEntry& b) {
-                    return a.rank_key > b.rank_key; });
+                    return a.score > b.score; });
         const std::size_t out_base = qi * k;
         for (std::size_t r = 0; r < heap_size; ++r) {
-          distances[out_base + r] = heap[r].value;
+          distances[out_base + r] = kL2 ? -heap[r].score : heap[r].score;
           labels[out_base + r]    = heap[r].label;
         }
       }
@@ -2086,48 +2894,77 @@ class TurboQuantIndex {
   }
 
   // ------------------------------------------------------------------
-  // query_packed_impl — 32-lane packed nibble path (faster memory layout)
+  // query_packed_impl — 32-lane packed nibble path with Q-way query batching.
+  //
+  // Multi-query batching principle: for a batch of Q=kBatchQ queries, build all
+  // Q LUTs first, then iterate blocks once.  For each block, call
+  // score_block32_packed Q times back-to-back.  The first call (qb=0) pulls the
+  // block from L3/DRAM into L2; subsequent calls (qb=1..Q-1) hit L2 instead of
+  // L3/DRAM.  Empirical sweep (SIFT-1M dim=128, Wiki-100K dim=2048, 8 threads):
+  //
+  //   Q=1 (old):  SIFT-1M=711 QPS, Wiki-2048=417 QPS
+  //   Q=32:       SIFT-1M=989 QPS, Wiki-2048=761 QPS   (+39% / +83%)  ← optimum
+  //   Q=64:       SIFT-1M=978 QPS, Wiki-2048=749 QPS   (slight regression)
+  //
+  // At kBatchQ=32, SIFT-128: 32×2 KB=64 KB LUTs fit in L2 (not L1).  The DB
+  // block (2 KB) promoted to L2 by qb=0 is served from L2 for qb=1..31.
+  // For larger dims (Wiki-2048: 32 KB block), same mechanism holds in L2/L3.
+  // Compute is unchanged; this is a flat-only optimization (IVF not batched).
   // ------------------------------------------------------------------
   template <bool kUseQjl, bool kL2>
   void query_packed_impl(std::size_t nq, const float* x, std::size_t k,
                          float* distances, idx_t* labels) const {
+    static constexpr int kBatchQ = 32;  // queries batched per block-loop pass
     parallel_for(0, nq, [&](std::size_t q0, std::size_t q1) {
+      // Single-query scratch reused across the prepare/rotate/lut phases
       std::vector<float> q_work(padded_dim_, 0.0f);
       std::vector<float> q_unit(padded_dim_, 0.0f);
       std::vector<float> rotated(padded_dim_);
       std::vector<float> projected(kUseQjl ? padded_dim_ : 0);
       std::vector<float> work(padded_dim_);
-      std::vector<std::int8_t> base_i8(padded_dim_ * 16);
-      std::vector<std::int8_t> qjl_i8(kUseQjl ? padded_dim_ * 16 : 0);
-      alignas(64) float raw_scores[kPackedBlockSize];
-      alignas(64) float cand_values[kPackedBlockSize];
-      alignas(64) float cand_rank_keys[kPackedBlockSize];
-      std::vector<detail::HeapEntry> heap(k);
-      std::size_t heap_size = 0;
 
-      for (std::size_t qi = q0; qi < q1; ++qi) {
-        const float* qptr = x + qi * dim_;
-        const float q_en = prepare_query(qptr, q_work, q_unit);
-        const float q_en_sq = q_en * q_en;
+      // Per-batch state: Q LUT slots + accumulators + heaps
+      const std::size_t lut_stride = padded_dim_ * 16;
+      std::vector<std::int8_t> batch_base(kBatchQ * lut_stride);
+      std::vector<std::int8_t> batch_qjl(kUseQjl ? kBatchQ * lut_stride : 0);
+      alignas(64) float raw_s [kBatchQ][kPackedBlockSize];
+      alignas(64) float cand_s[kBatchQ][kPackedBlockSize];
+      float q_ens[kBatchQ], q_en_sqs[kBatchQ], q_c_offs[kBatchQ];
+      float bscales[kBatchQ], qscales[kBatchQ];
+      std::vector<std::vector<detail::HeapEntry>> heaps(
+          kBatchQ, std::vector<detail::HeapEntry>(k));
+      std::size_t hsizes[kBatchQ];
 
-        rotation_.forward(q_unit.data(), rotated.data(), work.data());
-        if constexpr (kUseQjl)
-          qjl_.forward(rotated.data(), projected.data(), work.data());
+      const std::size_t num_blocks = detail::ceil_div(ntotal_, kPackedBlockSize);
 
-        float base_scale = 1.0f, qjl_scale_v = 1.0f;
-        codebook_.build_lut16_int8(rotated.data(),
-                                   kUseQjl ? projected.data() : nullptr,
-                                   base_i8.data(),
-                                   kUseQjl ? qjl_i8.data() : nullptr,
-                                   base_scale, qjl_scale_v);
-        heap_size = 0;
+      for (std::size_t qib = q0; qib < q1; qib += kBatchQ) {
+        const int actual = static_cast<int>(std::min<std::size_t>(kBatchQ, q1 - qib));
 
-        const std::size_t num_blocks = detail::ceil_div(ntotal_, kPackedBlockSize);
+        // Phase 1: prepare all queries in the batch (sequential — reuses scratch)
+        for (int qb = 0; qb < actual; ++qb) {
+          float q_dot_c;
+          q_ens[qb] = prepare_query(x + (qib + qb) * dim_, q_work, q_unit, q_dot_c);
+          q_en_sqs[qb] = q_ens[qb] * q_ens[qb];
+          q_c_offs[qb] = (kL2 || !use_data_centroid_) ? 0.0f : (q_dot_c - c_norm_sq_);
+          rotation_.forward(q_unit.data(), rotated.data(), work.data());
+          if constexpr (kUseQjl)
+            qjl_.forward(rotated.data(), projected.data(), work.data());
+          bscales[qb] = 1.0f; qscales[qb] = 1.0f;
+          codebook_.build_lut16_int8(rotated.data(),
+                                     kUseQjl ? projected.data() : nullptr,
+                                     batch_base.data() + qb * lut_stride,
+                                     kUseQjl ? batch_qjl.data() + qb * lut_stride : nullptr,
+                                     bscales[qb], qscales[qb]);
+          hsizes[qb] = 0;
+        }
+
+        // Phase 2: stream blocks once; each block scored against all batch queries.
+        // After the first qb=0 call the 2 KB block is L1-hot for qb=1..actual-1.
         for (std::size_t bi = 0; bi < num_blocks; ++bi) {
           const std::size_t db0 = bi * kPackedBlockSize;
           const std::size_t bs  = std::min<std::size_t>(kPackedBlockSize, ntotal_ - db0);
 
-          // Prefetch next block
+          // Prefetch next block once (not per-query)
           if (bi + 1 < num_blocks) {
             const std::uint8_t* next = storage_.packed_nibble_block_ptr(bi + 1);
             for (std::size_t off = 0; off < storage_.packed_block_stride; off += 64)
@@ -2136,27 +2973,117 @@ class TurboQuantIndex {
             _mm_prefetch(reinterpret_cast<const char*>(storage_.norm_squares.data() + db0 + kPackedBlockSize), _MM_HINT_T0);
           }
 
-          storage_.score_block32_packed(storage_.packed_nibble_block_ptr(bi),
-                                        base_i8.data(),
-                                        kUseQjl ? qjl_i8.data() : nullptr,
-                                        storage_.gammas.data() + db0,
-                                        base_scale, qjl_scale_v, bs, raw_scores);
-
-          storage_.postprocess_packed<kL2>(db0, bs, q_en, q_en_sq,
-                                           raw_scores, cand_values, cand_rank_keys);
-
-          for (std::size_t i = 0; i < bs; ++i)
-            detail::heap_push_or_replace(heap, heap_size, k, cand_rank_keys[i],
-                                         cand_values[i], static_cast<idx_t>(db0 + i));
+          for (int qb = 0; qb < actual; ++qb) {
+            storage_.score_block32_packed(
+                storage_.packed_nibble_block_ptr(bi),
+                batch_base.data() + qb * lut_stride,
+                kUseQjl ? batch_qjl.data() + qb * lut_stride : nullptr,
+                storage_.gammas.data() + db0,
+                bscales[qb], qscales[qb], bs, raw_s[qb]);
+            storage_.postprocess_packed<kL2>(db0, bs,
+                q_ens[qb], q_en_sqs[qb], q_c_offs[qb], raw_s[qb], cand_s[qb]);
+            detail::flush_candidates_to_heap(
+                cand_s[qb], bs, db0, heaps[qb], hsizes[qb], k);
+          }
         }
 
-        std::sort(heap.begin(), heap.begin() + static_cast<std::ptrdiff_t>(heap_size),
-                  [](const detail::HeapEntry& a, const detail::HeapEntry& b) {
-                    return a.rank_key > b.rank_key; });
-        const std::size_t out_base = qi * k;
-        for (std::size_t r = 0; r < heap_size; ++r) {
-          distances[out_base + r] = heap[r].value;
-          labels[out_base + r]    = heap[r].label;
+        // Phase 3: sort heaps and write outputs
+        for (int qb = 0; qb < actual; ++qb) {
+          std::sort(heaps[qb].begin(),
+                    heaps[qb].begin() + static_cast<std::ptrdiff_t>(hsizes[qb]),
+                    [](const detail::HeapEntry& a, const detail::HeapEntry& b) {
+                      return a.score > b.score; });
+          const std::size_t out_base = (qib + qb) * k;
+          for (std::size_t r = 0; r < hsizes[qb]; ++r) {
+            distances[out_base + r] = kL2 ? -heaps[qb][r].score : heaps[qb][r].score;
+            labels[out_base + r]    = heaps[qb][r].label;
+          }
+        }
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // query_big_packed_impl — 128-lane AVX-512BW packed nibble path.
+  //
+  // Same Q-batching strategy as query_packed_impl: build kBatchQ LUTs, then
+  // iterate blocks once.  Uses score_block128_packed_avx512bw (2.67× fewer
+  // port-5 ops/lane vs block32).  MSE mode only (no QJL).
+  // ------------------------------------------------------------------
+  template <bool kL2>
+  void query_big_packed_impl(std::size_t nq, const float* x, std::size_t k,
+                             float* distances, idx_t* labels) const {
+    static constexpr int kBatchQ = 32;
+    parallel_for(0, nq, [&](std::size_t q0, std::size_t q1) {
+      std::vector<float> q_work(padded_dim_, 0.0f);
+      std::vector<float> q_unit(padded_dim_, 0.0f);
+      std::vector<float> rotated(padded_dim_);
+      std::vector<float> work(padded_dim_);
+
+      const std::size_t lut_stride = padded_dim_ * 16;
+      std::vector<std::int8_t> batch_base(kBatchQ * lut_stride);
+      alignas(64) float raw_s [kBatchQ][kBigBlockSize];
+      alignas(64) float cand_s[kBatchQ][kBigBlockSize];
+      float q_ens[kBatchQ], q_en_sqs[kBatchQ], q_c_offs[kBatchQ], bscales[kBatchQ];
+      std::vector<std::vector<detail::HeapEntry>> heaps(
+          kBatchQ, std::vector<detail::HeapEntry>(k));
+      std::size_t hsizes[kBatchQ];
+
+      const std::size_t num_blocks = detail::ceil_div(ntotal_, kBigBlockSize);
+
+      for (std::size_t qib = q0; qib < q1; qib += kBatchQ) {
+        const int actual = static_cast<int>(std::min<std::size_t>(kBatchQ, q1 - qib));
+
+        // Phase 1: prepare all queries in batch
+        for (int qb = 0; qb < actual; ++qb) {
+          float q_dot_c, qjl_scale_unused = 1.0f;
+          q_ens[qb]    = prepare_query(x + (qib + qb) * dim_, q_work, q_unit, q_dot_c);
+          q_en_sqs[qb] = q_ens[qb] * q_ens[qb];
+          q_c_offs[qb] = (kL2 || !use_data_centroid_) ? 0.0f : (q_dot_c - c_norm_sq_);
+          rotation_.forward(q_unit.data(), rotated.data(), work.data());
+          bscales[qb] = 1.0f;
+          codebook_.build_lut16_int8(rotated.data(), nullptr,
+                                     batch_base.data() + qb * lut_stride,
+                                     nullptr, bscales[qb], qjl_scale_unused);
+          hsizes[qb] = 0;
+        }
+
+        // Phase 2: stream blocks once, scoring all batch queries per block
+        for (std::size_t bi = 0; bi < num_blocks; ++bi) {
+          const std::size_t db0 = bi * kBigBlockSize;
+          const std::size_t bs  = std::min<std::size_t>(kBigBlockSize, ntotal_ - db0);
+
+          if (bi + 1 < num_blocks) {
+            const std::uint8_t* next = storage_.big_packed_nibble_block_ptr(bi + 1);
+            for (std::size_t off = 0; off < storage_.big_packed_block_stride; off += 64)
+              _mm_prefetch(reinterpret_cast<const char*>(next + off), _MM_HINT_T0);
+            _mm_prefetch(reinterpret_cast<const char*>(storage_.norms.data() + db0 + kBigBlockSize), _MM_HINT_T0);
+            _mm_prefetch(reinterpret_cast<const char*>(storage_.norm_squares.data() + db0 + kBigBlockSize), _MM_HINT_T0);
+          }
+
+          for (int qb = 0; qb < actual; ++qb) {
+            storage_.score_block128_packed_avx512bw(
+                storage_.big_packed_nibble_block_ptr(bi),
+                batch_base.data() + qb * lut_stride,
+                bscales[qb], bs, raw_s[qb]);
+            storage_.postprocess_big_packed<kL2>(db0, bs,
+                q_ens[qb], q_en_sqs[qb], q_c_offs[qb], raw_s[qb], cand_s[qb]);
+            detail::flush_candidates_to_heap(
+                cand_s[qb], bs, db0, heaps[qb], hsizes[qb], k);
+          }
+        }
+
+        // Phase 3: sort heaps and write outputs
+        for (int qb = 0; qb < actual; ++qb) {
+          std::sort(heaps[qb].begin(),
+                    heaps[qb].begin() + static_cast<std::ptrdiff_t>(hsizes[qb]),
+                    [](const detail::HeapEntry& a, const detail::HeapEntry& b) {
+                      return a.score > b.score; });
+          const std::size_t out_base = (qib + qb) * k;
+          for (std::size_t r = 0; r < hsizes[qb]; ++r) {
+            distances[out_base + r] = kL2 ? -heaps[qb][r].score : heaps[qb][r].score;
+            labels[out_base + r]    = heaps[qb][r].label;
+          }
         }
       }
     });
@@ -2177,15 +3104,16 @@ class TurboQuantIndex {
       std::vector<float> work(padded_dim_);
       alignas(64) float dot_scores[kBlockSize];
       alignas(64) float scratch_scores[kBlockSize];
-      alignas(64) float cand_values[kBlockSize];
-      alignas(64) float cand_rank_keys[kBlockSize];
+      alignas(64) float cand_scores[kBlockSize];
       std::vector<detail::HeapEntry> heap(k);
       std::size_t heap_size = 0;
 
       for (std::size_t qi = q0; qi < q1; ++qi) {
         const float* qptr = x + qi * dim_;
-        const float q_en = prepare_query(qptr, q_work, q_unit);
+        float q_dot_c;
+        const float q_en = prepare_query(qptr, q_work, q_unit, q_dot_c);
         const float q_en_sq = q_en * q_en;
+        const float q_c_offset = (kL2 || !use_data_centroid_) ? 0.0f : (q_dot_c - c_norm_sq_);
 
         rotation_.forward(q_unit.data(), rotated.data(), work.data());
         if constexpr (kUseResidual)
@@ -2203,28 +3131,26 @@ class TurboQuantIndex {
             std::fill(scratch_scores, scratch_scores + bs, 0.0f);
             storage_.score_generic_code_sign_block(bi, bs, lut.data(), projected.data(),
                                                    dot_scores, scratch_scores);
-            storage_.postprocess_generic<true, kL2>(db0, bs, q_en, q_en_sq,
-                                                    dot_scores, scratch_scores,
-                                                    cand_values, cand_rank_keys);
+            storage_.postprocess_generic<true, kL2>(db0, bs, q_en, q_en_sq, q_c_offset,
+                                                    dot_scores, scratch_scores, cand_scores);
           } else {
             std::fill(dot_scores, dot_scores + bs, 0.0f);
             storage_.score_generic_code_block(bi, bs, lut.data(), dot_scores);
-            storage_.postprocess_generic<false, kL2>(db0, bs, q_en, q_en_sq,
-                                                     dot_scores, nullptr,
-                                                     cand_values, cand_rank_keys);
+            storage_.postprocess_generic<false, kL2>(db0, bs, q_en, q_en_sq, q_c_offset,
+                                                     dot_scores, nullptr, cand_scores);
           }
 
           for (std::size_t i = 0; i < bs; ++i)
-            detail::heap_push_or_replace(heap, heap_size, k, cand_rank_keys[i],
-                                         cand_values[i], static_cast<idx_t>(db0 + i));
+            detail::heap_push_or_replace(heap, heap_size, k, cand_scores[i],
+                                         static_cast<idx_t>(db0 + i));
         }
 
         std::sort(heap.begin(), heap.begin() + static_cast<std::ptrdiff_t>(heap_size),
                   [](const detail::HeapEntry& a, const detail::HeapEntry& b) {
-                    return a.rank_key > b.rank_key; });
+                    return a.score > b.score; });
         const std::size_t out_base = qi * k;
         for (std::size_t r = 0; r < heap_size; ++r) {
-          distances[out_base + r] = heap[r].value;
+          distances[out_base + r] = kL2 ? -heap[r].score : heap[r].score;
           labels[out_base + r]    = heap[r].label;
         }
       }
@@ -2288,6 +3214,7 @@ class TurboQuantIndex {
     }
     storage_.norms.assign(total_slots, 0.f);
     storage_.norm_squares.assign(total_slots, 0.f);
+    storage_.cx_dots.assign(total_slots, 0.f);  // IVF uses cluster-relative centering; correction is 0
 
     // Fill ivf_.ids: storage-slot → original add-order index
     ivf_.ids.assign(total_slots, -1);
@@ -2337,8 +3264,7 @@ class TurboQuantIndex {
       std::vector<std::int8_t> base_i8(padded_dim_ * 16);
       std::vector<std::int8_t> qjl_i8(kUseQjl ? padded_dim_ * 16 : 0);
       alignas(64) float raw_scores[kPackedBlockSize];
-      alignas(64) float cand_values[kPackedBlockSize];
-      alignas(64) float cand_rank_keys[kPackedBlockSize];
+      alignas(64) float cand_scores[kPackedBlockSize];
       std::vector<detail::HeapEntry> heap(k);
       std::vector<float>       cdists(ivf_.nlist);
       std::vector<std::size_t> probe_order(ivf_.nlist);
@@ -2412,20 +3338,20 @@ class TurboQuantIndex {
                                           storage_.gammas.data() + db0,
                                           base_scale, qjl_scale_v, bs, raw_scores);
 
-            storage_.postprocess_packed<kL2>(db0, bs, q_r_norm, q_r_norm_sq,
-                                             raw_scores, cand_values, cand_rank_keys);
+            storage_.postprocess_packed<kL2>(db0, bs, q_r_norm, q_r_norm_sq, 0.0f,
+                                             raw_scores, cand_scores);
 
             for (std::size_t i = 0; i < bs; ++i)
-              detail::heap_push_or_replace(heap, heap_size, k, cand_rank_keys[i],
-                                           cand_values[i], static_cast<idx_t>(db0 + i));
+              detail::heap_push_or_replace(heap, heap_size, k, cand_scores[i],
+                                           static_cast<idx_t>(db0 + i));
           }
         }
 
         std::sort(heap.begin(), heap.begin() + static_cast<std::ptrdiff_t>(heap_size),
-                  [](const detail::HeapEntry& a, const detail::HeapEntry& b){ return a.rank_key > b.rank_key; });
+                  [](const detail::HeapEntry& a, const detail::HeapEntry& b){ return a.score > b.score; });
         const std::size_t out_base = qi * k;
         for (std::size_t r = 0; r < heap_size; ++r) {
-          distances[out_base + r] = heap[r].value;
+          distances[out_base + r] = kL2 ? -heap[r].score : heap[r].score;
           labels[out_base + r]    = ivf_.ids[heap[r].label];
         }
       }
@@ -2447,8 +3373,7 @@ class TurboQuantIndex {
       std::vector<std::int8_t> base_i8(padded_dim_ * 16);
       std::vector<std::int8_t> qjl_i8(kUseQjl ? padded_dim_ * 16 : 0);
       alignas(64) float raw_scores[kBlockSize];
-      alignas(64) float cand_values[kBlockSize];
-      alignas(64) float cand_rank_keys[kBlockSize];
+      alignas(64) float cand_scores[kBlockSize];
       std::vector<detail::HeapEntry> heap(k);
       std::vector<float>       cdists(ivf_.nlist);
       std::vector<std::size_t> probe_order(ivf_.nlist);
@@ -2497,19 +3422,19 @@ class TurboQuantIndex {
                                         kUseQjl ? qjl_i8.data() : nullptr,
                                         storage_.gammas.data() + db0,
                                         base_scale, qjl_scale_v, bs, raw_scores);
-            storage_.postprocess_nibble<kL2>(db0, bs, q_r_norm, q_r_norm_sq,
-                                             raw_scores, cand_values, cand_rank_keys);
+            storage_.postprocess_nibble<kL2>(db0, bs, q_r_norm, q_r_norm_sq, 0.0f,
+                                             raw_scores, cand_scores);
             for (std::size_t i = 0; i < bs; ++i)
-              detail::heap_push_or_replace(heap, heap_size, k, cand_rank_keys[i],
-                                           cand_values[i], static_cast<idx_t>(db0 + i));
+              detail::heap_push_or_replace(heap, heap_size, k, cand_scores[i],
+                                           static_cast<idx_t>(db0 + i));
           }
         }
 
         std::sort(heap.begin(), heap.begin() + static_cast<std::ptrdiff_t>(heap_size),
-                  [](const detail::HeapEntry& a, const detail::HeapEntry& b){ return a.rank_key > b.rank_key; });
+                  [](const detail::HeapEntry& a, const detail::HeapEntry& b){ return a.score > b.score; });
         const std::size_t out_base = qi * k;
         for (std::size_t r = 0; r < heap_size; ++r) {
-          distances[out_base + r] = heap[r].value;
+          distances[out_base + r] = kL2 ? -heap[r].score : heap[r].score;
           labels[out_base + r]    = ivf_.ids[heap[r].label];
         }
       }
@@ -2531,8 +3456,7 @@ class TurboQuantIndex {
       std::vector<float> work(padded_dim_);
       alignas(64) float dot_scores[kBlockSize];
       alignas(64) float scratch_scores[kBlockSize];
-      alignas(64) float cand_values[kBlockSize];
-      alignas(64) float cand_rank_keys[kBlockSize];
+      alignas(64) float cand_scores[kBlockSize];
       std::vector<detail::HeapEntry> heap(k);
       std::vector<float>       cdists(ivf_.nlist);
       std::vector<std::size_t> probe_order(ivf_.nlist);
@@ -2575,27 +3499,25 @@ class TurboQuantIndex {
               std::fill(scratch_scores, scratch_scores + bs, 0.0f);
               storage_.score_generic_code_sign_block(bi, bs, lut.data(), projected.data(),
                                                      dot_scores, scratch_scores);
-              storage_.postprocess_generic<true, kL2>(db0, bs, q_r_norm, q_r_norm_sq,
-                                                      dot_scores, scratch_scores,
-                                                      cand_values, cand_rank_keys);
+              storage_.postprocess_generic<true, kL2>(db0, bs, q_r_norm, q_r_norm_sq, 0.0f,
+                                                      dot_scores, scratch_scores, cand_scores);
             } else {
               std::fill(dot_scores, dot_scores + bs, 0.0f);
               storage_.score_generic_code_block(bi, bs, lut.data(), dot_scores);
-              storage_.postprocess_generic<false, kL2>(db0, bs, q_r_norm, q_r_norm_sq,
-                                                       dot_scores, nullptr,
-                                                       cand_values, cand_rank_keys);
+              storage_.postprocess_generic<false, kL2>(db0, bs, q_r_norm, q_r_norm_sq, 0.0f,
+                                                       dot_scores, nullptr, cand_scores);
             }
             for (std::size_t i = 0; i < bs; ++i)
-              detail::heap_push_or_replace(heap, heap_size, k, cand_rank_keys[i],
-                                           cand_values[i], static_cast<idx_t>(db0 + i));
+              detail::heap_push_or_replace(heap, heap_size, k, cand_scores[i],
+                                           static_cast<idx_t>(db0 + i));
           }
         }
 
         std::sort(heap.begin(), heap.begin() + static_cast<std::ptrdiff_t>(heap_size),
-                  [](const detail::HeapEntry& a, const detail::HeapEntry& b){ return a.rank_key > b.rank_key; });
+                  [](const detail::HeapEntry& a, const detail::HeapEntry& b){ return a.score > b.score; });
         const std::size_t out_base = qi * k;
         for (std::size_t r = 0; r < heap_size; ++r) {
-          distances[out_base + r] = heap[r].value;
+          distances[out_base + r] = kL2 ? -heap[r].score : heap[r].score;
           labels[out_base + r]    = ivf_.ids[heap[r].label];
         }
       }
@@ -2605,9 +3527,6 @@ class TurboQuantIndex {
  public:
   // ------------------------------------------------------------------
   // reconstruct — approximate inverse of add() (debug / analysis only)
-  //
-  // Exposed for the Python binding, which uses it to provide reconstruction
-  // inspection, MSE reporting, and graph-distance estimation helpers.
   // ------------------------------------------------------------------
   void reconstruct(std::size_t n, float* out) const {
     require_trained();
@@ -2620,7 +3539,17 @@ class TurboQuantIndex {
       const std::uint32_t mse_mask = (1u << mse_bits_) - 1u;
 
       for (std::size_t i = begin; i < end; ++i) {
-        if (storage_.path == StorageLayout::Path::kPackedNibble) {
+        if (storage_.path == StorageLayout::Path::kBigPackedNibble) {
+          const std::size_t bi   = i / kBigBlockSize;
+          const std::size_t lane = i % kBigBlockSize;
+          const std::uint8_t* pk = storage_.big_packed_nibble_block_ptr(bi);
+          for (std::size_t j = 0; j < padded_dim_; ++j) {
+            const std::uint8_t byte = pk[j * 64 + (lane < 64 ? lane : lane - 64)];
+            const std::uint8_t nib  = (lane < 64) ? (byte & 0x0f) : (byte >> 4);
+            const std::uint32_t code = static_cast<std::uint32_t>(nib) & mse_mask;
+            rotated[j] = (code < codebook_.size) ? codebook_.centroids[code] : 0.0f;
+          }
+        } else if (storage_.path == StorageLayout::Path::kPackedNibble) {
           const std::size_t bi   = i / kPackedBlockSize;
           const std::size_t lane = i % kPackedBlockSize;
           const std::uint8_t* pk = storage_.packed_nibble_block_ptr(bi);

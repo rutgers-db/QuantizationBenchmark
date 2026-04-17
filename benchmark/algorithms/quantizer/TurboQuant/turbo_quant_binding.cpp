@@ -94,19 +94,122 @@ class PyTurboQuant {
   // ------------------------------------------------------------------ //
   //  getMSE — mean squared reconstruction error                         //
   // ------------------------------------------------------------------ //
+  // getMSE — parallel + SIMD mean squared reconstruction error.
+  // Per-vector SSE is accumulated in float (SIMD), then cast to double
+  // before adding to the thread-local sum to preserve precision.
   float getMSE() {
     if (n_data_ == 0 || data_copy_.empty()) return 0.0f;
     py::array_t<float> recon_arr = reconstruct(n_data_);
     const float* recon = recon_arr.data();
     const float* orig  = data_copy_.data();
-    double mse = 0.0;
-    for (std::size_t i = 0; i < n_data_; ++i) {
-      for (std::size_t j = 0; j < dim_; ++j) {
-        float d = orig[i * dim_ + j] - recon[i * dim_ + j];
-        mse += static_cast<double>(d * d);
+
+    const std::size_t nt = index_->num_threads();
+    double total_sse = 0.0;
+
+#if defined(__AVX512F__)
+    const std::size_t full16 = (dim_ >> 4) << 4;
+
+    auto vec_sse_avx512 = [&](const float* o, const float* r) -> float {
+      __m512 vacc = _mm512_setzero_ps();
+      for (std::size_t j = 0; j < full16; j += 16) {
+        __m512 diff = _mm512_sub_ps(_mm512_loadu_ps(o + j), _mm512_loadu_ps(r + j));
+        vacc = _mm512_fmadd_ps(diff, diff, vacc);
       }
+      float s = _mm512_reduce_add_ps(vacc);
+      for (std::size_t j = full16; j < dim_; ++j) { float d = o[j] - r[j]; s += d * d; }
+      return s;
+    };
+
+    if (nt <= 1) {
+      for (std::size_t i = 0; i < n_data_; ++i)
+        total_sse += static_cast<double>(vec_sse_avx512(orig + i*dim_, recon + i*dim_));
+    } else {
+      std::vector<double> partial(nt, 0.0);
+      #pragma omp parallel num_threads(static_cast<int>(nt))
+      {
+        const int tid  = omp_get_thread_num();
+        const int nthr = omp_get_num_threads();
+        const std::size_t chunk = (n_data_ + nthr - 1) / nthr;
+        const std::size_t i0 = static_cast<std::size_t>(tid) * chunk;
+        const std::size_t i1 = std::min(i0 + chunk, n_data_);
+        double local = 0.0;
+        for (std::size_t i = i0; i < i1; ++i)
+          local += static_cast<double>(vec_sse_avx512(orig + i*dim_, recon + i*dim_));
+        partial[tid] = local;
+      }
+      for (std::size_t t = 0; t < nt; ++t) total_sse += partial[t];
     }
-    return static_cast<float>(mse / static_cast<double>(n_data_));
+
+#elif defined(__AVX2__)
+    const std::size_t full8 = (dim_ >> 3) << 3;
+
+    auto vec_sse_avx2 = [&](const float* o, const float* r) -> float {
+      __m256 vacc = _mm256_setzero_ps();
+      for (std::size_t j = 0; j < full8; j += 8) {
+        __m256 diff = _mm256_sub_ps(_mm256_loadu_ps(o + j), _mm256_loadu_ps(r + j));
+        vacc = _mm256_add_ps(vacc, _mm256_mul_ps(diff, diff));
+      }
+      // Horizontal sum of 8-wide accumulator
+      __m128 lo   = _mm256_castps256_ps128(vacc);
+      __m128 hi   = _mm256_extractf128_ps(vacc, 1);
+      __m128 sum4 = _mm_add_ps(lo, hi);
+      sum4 = _mm_hadd_ps(sum4, sum4);
+      sum4 = _mm_hadd_ps(sum4, sum4);
+      float s = _mm_cvtss_f32(sum4);
+      for (std::size_t j = full8; j < dim_; ++j) { float d = o[j] - r[j]; s += d * d; }
+      return s;
+    };
+
+    if (nt <= 1) {
+      for (std::size_t i = 0; i < n_data_; ++i)
+        total_sse += static_cast<double>(vec_sse_avx2(orig + i*dim_, recon + i*dim_));
+    } else {
+      std::vector<double> partial(nt, 0.0);
+      #pragma omp parallel num_threads(static_cast<int>(nt))
+      {
+        const int tid  = omp_get_thread_num();
+        const int nthr = omp_get_num_threads();
+        const std::size_t chunk = (n_data_ + nthr - 1) / nthr;
+        const std::size_t i0 = static_cast<std::size_t>(tid) * chunk;
+        const std::size_t i1 = std::min(i0 + chunk, n_data_);
+        double local = 0.0;
+        for (std::size_t i = i0; i < i1; ++i)
+          local += static_cast<double>(vec_sse_avx2(orig + i*dim_, recon + i*dim_));
+        partial[tid] = local;
+      }
+      for (std::size_t t = 0; t < nt; ++t) total_sse += partial[t];
+    }
+
+#else
+    // Scalar fallback: thread-local double accumulation
+    if (nt <= 1) {
+      for (std::size_t i = 0; i < n_data_; ++i)
+        for (std::size_t j = 0; j < dim_; ++j) {
+          float d = orig[i*dim_+j] - recon[i*dim_+j];
+          total_sse += static_cast<double>(d * d);
+        }
+    } else {
+      std::vector<double> partial(nt, 0.0);
+      #pragma omp parallel num_threads(static_cast<int>(nt))
+      {
+        const int tid  = omp_get_thread_num();
+        const int nthr = omp_get_num_threads();
+        const std::size_t chunk = (n_data_ + nthr - 1) / nthr;
+        const std::size_t i0 = static_cast<std::size_t>(tid) * chunk;
+        const std::size_t i1 = std::min(i0 + chunk, n_data_);
+        double local = 0.0;
+        for (std::size_t i = i0; i < i1; ++i)
+          for (std::size_t j = 0; j < dim_; ++j) {
+            float d = orig[i*dim_+j] - recon[i*dim_+j];
+            local += static_cast<double>(d * d);
+          }
+        partial[tid] = local;
+      }
+      for (std::size_t t = 0; t < nt; ++t) total_sse += partial[t];
+    }
+#endif
+
+    return static_cast<float>(total_sse / static_cast<double>(n_data_));
   }
 
   // ------------------------------------------------------------------ //
@@ -165,7 +268,7 @@ PYBIND11_MODULE(turbo_quant_cpp, m) {
            py::arg("mode")              = 0,          // 0 = kMSE
            py::arg("num_threads")       = 1,
            py::arg("seed")              = 123456789ULL,
-           py::arg("rotation_type")     = 1,          // 1 = kDense
+           py::arg("rotation_type")     = 0,          // 0 = kHadamard
            py::arg("use_data_centroid") = true,
            py::arg("nlist")             = 1,
            py::arg("nprobe")            = 1)

@@ -1,0 +1,65 @@
+FROM python:3.9-slim
+
+ARG ALGO_TYPE
+ARG ALGO_NAME
+ARG FAISS_GIT_REF=v1.13.1
+ARG FAISS_OPT_LEVEL=avx2
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    gfortran \
+    git \
+    libgomp1 \
+    liblapack-dev \
+    libopenblas-dev \
+    swig \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir \
+    numpy \
+    h5py \
+    pyyaml \
+    psutil \
+    threadpoolctl \
+    pybind11
+
+RUN git clone --depth 1 --branch ${FAISS_GIT_REF} https://github.com/facebookresearch/faiss.git /tmp/faiss && \
+    cmake -S /tmp/faiss -B /tmp/faiss/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=ON \
+        -DBUILD_TESTING=OFF \
+        -DFAISS_ENABLE_GPU=OFF \
+        -DFAISS_ENABLE_PYTHON=ON \
+        -DFAISS_ENABLE_C_API=OFF \
+        -DFAISS_OPT_LEVEL=${FAISS_OPT_LEVEL} && \
+    cmake --build /tmp/faiss/build --target faiss -j"$(nproc)" && \
+    if [ "${FAISS_OPT_LEVEL}" != "generic" ]; then \
+        cmake --build /tmp/faiss/build --target faiss_${FAISS_OPT_LEVEL} -j"$(nproc)"; \
+    fi && \
+    cmake --build /tmp/faiss/build --target swigfaiss -j"$(nproc)" && \
+    cmake --install /tmp/faiss/build && \
+    echo "/usr/local/lib" > /etc/ld.so.conf.d/faiss.conf && \
+    ldconfig && \
+    cd /tmp/faiss/build/faiss/python && \
+    python setup.py install && \
+    cp /tmp/faiss/build/faiss/python/libfaiss_python_callbacks.so /usr/local/lib/ && \
+    ldconfig && \
+    rm -rf /tmp/faiss
+
+COPY benchmark/ /benchmark/
+COPY benchmark/algorithms/${ALGO_TYPE}/${ALGO_NAME}/ /algorithms/${ALGO_TYPE}/${ALGO_NAME}/
+
+RUN cd /algorithms/${ALGO_TYPE}/${ALGO_NAME}/ && \
+    mkdir -p build && \
+    cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build . -j"$(nproc)" && \
+    cp residual_opq_ivfpq_cpp*.so .. && \
+    cd .. && \
+    rm -rf build
+
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64
+ENV PYTHONPATH=/
+
+WORKDIR /workspace

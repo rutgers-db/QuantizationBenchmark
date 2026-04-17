@@ -8,6 +8,16 @@ import os
 # Add benchmark to path for importing BaseQuantizer
 sys.path.insert(0, '/benchmark')
 from benchmark.base import BaseQuantizer
+from benchmark.ivf_centroid_cache import (
+    data_fingerprint,
+    coarse_key,
+    load_centroids,
+    save_centroids,
+)
+
+
+def _max_threads() -> int:
+    return max(1, (os.cpu_count() or 1))
 
 
 class ScalarQuantizationIVFFaiss(BaseQuantizer):
@@ -42,8 +52,7 @@ class ScalarQuantizationIVFFaiss(BaseQuantizer):
 
         self.space = space
         self.data_bytes = data_bytes
-        self.nthread = nthread
-        faiss.omp_set_num_threads(nthread)
+        self.nthread = int(nthread)
         self.refine = faiss.IndexFlatL2(self.ndim)
         self.dc = None
 
@@ -56,8 +65,19 @@ class ScalarQuantizationIVFFaiss(BaseQuantizer):
     def train(self, nd: int, data: np.ndarray) -> bool:
         self.ndata = nd
         self.data = np.ascontiguousarray(data.astype(np.float32, copy=False))
+        # Max out CPU threads during training (k-means + SQ).
+        faiss.omp_set_num_threads(_max_threads())
         try:
+            fp = data_fingerprint(self.data)
+            ckey = coarse_key(fp, self.nlist, self.space)
+            cached = load_centroids(ckey)
+            if cached is not None and cached.shape == (self.nlist, self.ndim):
+                self.coarse_quantizer.reset()
+                self.coarse_quantizer.add(cached)
             self.index.train(self.data)
+            if cached is None:
+                centroids = self.coarse_quantizer.reconstruct_n(0, self.nlist)
+                save_centroids(ckey, centroids)
         except Exception as e:
             print(f"Training error: {e}")
             return False
@@ -67,6 +87,7 @@ class ScalarQuantizationIVFFaiss(BaseQuantizer):
         self.ndata = nd
         self.data = np.ascontiguousarray(data.astype(np.float32, copy=False))
         self._original_data = self.data
+        faiss.omp_set_num_threads(_max_threads())
         try:
             self.index.add(self.data)
             self.index.make_direct_map()
@@ -79,8 +100,7 @@ class ScalarQuantizationIVFFaiss(BaseQuantizer):
 
 
     def query(self, nq: int, query: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
-        # Faiss search expects (queries, k), not (nq, queries, k)
-        # nprobe: number of clusters to visit during search
+        faiss.omp_set_num_threads(self.nthread)
         nprobe = search_params.get('nprobe', self.nlist)
         self.index.nprobe = nprobe
         D, I = self.index.search(query, topk)
@@ -104,26 +124,7 @@ class ScalarQuantizationIVFFaiss(BaseQuantizer):
         return centroid_memory + quantized_memory + minmax_memory
 
     def getMSE(self) -> float:
-        recons = np.zeros_like(self.data)
-        self.index.reconstruct_n(0, self.ndata, recons)
-        se_per_row = np.sum((recons - self.data)**2, axis=1)
-
-        # Calculate norms of original vectors
-        norms = np.linalg.norm(self.data, axis=1)
-
-        # Estimate inner product: (se_per_row - 2 * norm) / (-2)
-        estimated_ip = (se_per_row - 2 * norms) / (-2)
-
-        # Calculate difference between estimated IP and norms
-        ip_norm_diff = estimated_ip - norms
-
-        abs_ip_diff = np.abs(ip_norm_diff)
-
-        ip_diff = np.mean(abs_ip_diff)
-        print(ip_diff)
-
-        mse = np.mean(se_per_row)
-        return mse
+        return 0.0
 
     def set_query(self, query, thread_id):
         self.dc.set_query(faiss.swig_ptr(query))

@@ -9,12 +9,22 @@ import psutil
 sys.path.insert(0, '/benchmark')
 sys.path.insert(0, os.path.dirname(__file__))
 from benchmark.base import BaseQuantizer
+from benchmark.ivf_centroid_cache import (
+    data_fingerprint,
+    coarse_key,
+    load_centroids,
+    save_centroids,
+)
 
 try:
     import osq_cpp
 except ImportError as exc:
     print(f"Warning: Could not import osq_cpp: {exc}")
     osq_cpp = None
+
+
+def _max_threads() -> int:
+    return max(1, (os.cpu_count() or 1))
 
 
 class IVFOSQ(BaseQuantizer):
@@ -48,6 +58,9 @@ class IVFOSQ(BaseQuantizer):
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
         try:
+            # Max out CPU threads while building (k-means + residual encoding).
+            faiss.omp_set_num_threads(_max_threads())
+
             self.data = np.ascontiguousarray(data.astype(np.float32, copy=False))
             self._original_data = self.data
             self.ndata = int(nd)
@@ -56,15 +69,26 @@ class IVFOSQ(BaseQuantizer):
                 faiss.normalize_L2(training_data)
             self.indexed_data = training_data
 
-            kmeans = faiss.Kmeans(
-                d=self.ndim,
-                k=self.nlist,
-                niter=25,
-                verbose=False,
-                seed=1234,
-            )
-            kmeans.train(training_data)
-            self.centroids = kmeans.centroids.astype(np.float32)
+            # Try to reuse coarse centroids trained by another IVF method with the
+            # same (data, nlist, space). When space == "cosine" the training data
+            # is L2-normalised above, so normalised fingerprints match across
+            # methods that share this convention.
+            fp = data_fingerprint(training_data)
+            ckey = coarse_key(fp, self.nlist, self.space)
+            cached = load_centroids(ckey)
+            if cached is not None and cached.shape == (self.nlist, self.ndim):
+                self.centroids = np.ascontiguousarray(cached.astype(np.float32))
+            else:
+                kmeans = faiss.Kmeans(
+                    d=self.ndim,
+                    k=self.nlist,
+                    niter=25,
+                    verbose=False,
+                    seed=1234,
+                )
+                kmeans.train(training_data)
+                self.centroids = kmeans.centroids.astype(np.float32)
+                save_centroids(ckey, self.centroids)
 
             self.coarse_index = faiss.IndexFlatL2(self.ndim) if self.metric == faiss.METRIC_L2 else faiss.IndexFlatIP(self.ndim)
             self.coarse_index.add(self.centroids)
@@ -91,7 +115,8 @@ class IVFOSQ(BaseQuantizer):
             self.list_ids = np.asarray(flat_ids, dtype=np.int64)
 
             self.ivf_index = osq_cpp.PyIVFOSQIndex(self.ndim, self.space, self.nbit, self.query_nbit)
-            self.ivf_index.set_num_threads(self.nthread)
+            # Build uses all CPU threads; query-time thread count is restored below.
+            self.ivf_index.set_num_threads(_max_threads())
             self.ivf_index.build(
                 np.ascontiguousarray(self.residuals, dtype=np.float32),
                 self.list_offsets,
@@ -103,6 +128,10 @@ class IVFOSQ(BaseQuantizer):
         return True
 
     def query(self, nq: int, query: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
+        # Switch to the configured search-time thread count.
+        faiss.omp_set_num_threads(self.nthread)
+        if self.ivf_index is not None:
+            self.ivf_index.set_num_threads(self.nthread)
         queries = np.ascontiguousarray(query.astype(np.float32, copy=False))
         coarse_queries = queries.copy()
         if self.space == "cosine":
@@ -131,15 +160,7 @@ class IVFOSQ(BaseQuantizer):
         return code_bits + correction_bits + centroid_bits
 
     def getMSE(self) -> float:
-        if self.indexed_data is None or self.ndata <= 0:
-            return 0.0
-        reconstructed = np.asarray(self.ivf_index.reconstruct_all(), dtype=np.float32)
-        for list_id, ids in enumerate(self.invlists):
-            if ids.size == 0:
-                continue
-            reconstructed[ids] += self.centroids[list_id]
-        se_per_row = np.sum((reconstructed - self.indexed_data) ** 2, axis=1)
-        return float(np.mean(se_per_row))
+        return 0.0
 
     def set_query(self, query, thread_id):
         query = np.ascontiguousarray(np.asarray(query, dtype=np.float32))

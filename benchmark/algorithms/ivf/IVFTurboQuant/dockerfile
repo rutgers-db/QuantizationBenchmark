@@ -1,0 +1,41 @@
+FROM python:3.9-slim
+
+ARG ALGO_TYPE
+ARG ALGO_NAME
+
+# System dependencies: C++17 compiler, CMake, OpenMP
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python dependencies
+RUN pip install --no-cache-dir \
+    numpy \
+    h5py \
+    pyyaml \
+    psutil \
+    threadpoolctl \
+    pybind11 \
+    faiss-cpu
+
+# Copy the benchmark framework
+COPY benchmark/ /benchmark/
+
+# Copy the algorithm module (includes the .hpp header)
+COPY benchmark/algorithms/${ALGO_TYPE}/${ALGO_NAME}/ /algorithms/${ALGO_TYPE}/${ALGO_NAME}/
+
+# Build the pybind11 module
+RUN cd /algorithms/${ALGO_TYPE}/${ALGO_NAME}/ && \
+    mkdir -p build && \
+    cd build && \
+    cmake .. && \
+    make -j$(nproc) && \
+    cp turbo_quant_cpp*.so .. && \
+    cd .. && \
+    rm -rf build
+
+ENV PYTHONPATH=/:/algorithms/${ALGO_TYPE}/${ALGO_NAME}
+
+WORKDIR /workspace

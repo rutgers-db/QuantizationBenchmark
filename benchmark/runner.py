@@ -280,7 +280,7 @@ class BenchmarkRunner:
     def __init__(
         self,
         dataset_name: str,
-        data_dir: str = "/data/local/embedding_dataset/hdf5/",
+        data_dir: str = "/data/local/embedding_dataset/hdf5",
         debug: bool = False,
         distribution_shift_test: bool = False,
         distribution_shift_group: str = "distribution_shift",
@@ -290,7 +290,8 @@ class BenchmarkRunner:
 
         Args:
             dataset_name: Name of the HDF5 dataset in the data/ directory
-            data_dir: Directory where datasets are stored (default: "/data/local/embedding_dataset/hdf5/")
+            data_dir: Directory where datasets are stored
+                (default: "/data/local/embedding_dataset/hdf5")
             debug: Enable debug mode with real-time Docker output (default: False)
 
         Note:
