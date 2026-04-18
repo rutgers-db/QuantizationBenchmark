@@ -57,22 +57,24 @@ class IVFOSQ(BaseQuantizer):
         self._current_query = None
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
+        return self.train(nd, data) and self.add(nd, data)
+
+    def train(self, nd: int, data: np.ndarray) -> bool:
+        """Learn coarse centroids from (possibly shifted) training sample.
+
+        Centroids are cached under the shared raw-space coarse-key so that any
+        IVF method training on the same sample and (nlist, space) reuses the
+        same k-means output — including across distribution-shift groups.
+        """
         try:
-            # Max out CPU threads while building (k-means + residual encoding).
+            # Max out CPU threads while building (k-means).
             faiss.omp_set_num_threads(_max_threads())
 
-            self.data = np.ascontiguousarray(data.astype(np.float32, copy=False))
-            self._original_data = self.data
-            self.ndata = int(nd)
-            training_data = self.data.copy()
+            training_data = np.ascontiguousarray(data.astype(np.float32, copy=False))
             if self.space == "cosine":
+                training_data = training_data.copy()
                 faiss.normalize_L2(training_data)
-            self.indexed_data = training_data
 
-            # Try to reuse coarse centroids trained by another IVF method with the
-            # same (data, nlist, space). When space == "cosine" the training data
-            # is L2-normalised above, so normalised fingerprints match across
-            # methods that share this convention.
             fp = data_fingerprint(training_data)
             ckey = coarse_key(fp, self.nlist, self.space)
             cached = load_centroids(ckey)
@@ -90,9 +92,33 @@ class IVFOSQ(BaseQuantizer):
                 self.centroids = kmeans.centroids.astype(np.float32)
                 save_centroids(ckey, self.centroids)
 
-            self.coarse_index = faiss.IndexFlatL2(self.ndim) if self.metric == faiss.METRIC_L2 else faiss.IndexFlatIP(self.ndim)
+            self.coarse_index = (
+                faiss.IndexFlatL2(self.ndim)
+                if self.metric == faiss.METRIC_L2
+                else faiss.IndexFlatIP(self.ndim)
+            )
             self.coarse_index.add(self.centroids)
-            _, assignments = self.coarse_index.search(training_data, 1)
+            return True
+        except Exception as exc:
+            print(f"Training error: {exc}")
+            return False
+
+    def add(self, nd: int, data: np.ndarray) -> bool:
+        """Assign + encode the database vectors using the centroids from train()."""
+        if self.coarse_index is None or self.centroids is None:
+            raise RuntimeError("Index not trained. Call train() first.")
+        try:
+            faiss.omp_set_num_threads(_max_threads())
+
+            self.data = np.ascontiguousarray(data.astype(np.float32, copy=False))
+            self._original_data = self.data
+            self.ndata = int(nd)
+            indexed_data = self.data.copy()
+            if self.space == "cosine":
+                faiss.normalize_L2(indexed_data)
+            self.indexed_data = indexed_data
+
+            _, assignments = self.coarse_index.search(self.indexed_data, 1)
             self.assignments = assignments[:, 0].astype(np.int64)
 
             buckets = [[] for _ in range(self.nlist)]
@@ -115,17 +141,17 @@ class IVFOSQ(BaseQuantizer):
             self.list_ids = np.asarray(flat_ids, dtype=np.int64)
 
             self.ivf_index = osq_cpp.PyIVFOSQIndex(self.ndim, self.space, self.nbit, self.query_nbit)
-            # Build uses all CPU threads; query-time thread count is restored below.
+            # Build uses all CPU threads; query-time thread count is restored on query.
             self.ivf_index.set_num_threads(_max_threads())
             self.ivf_index.build(
                 np.ascontiguousarray(self.residuals, dtype=np.float32),
                 self.list_offsets,
                 self.list_ids,
             )
+            return True
         except Exception as exc:
-            print(f"Training error: {exc}")
+            print(f"Add error: {exc}")
             return False
-        return True
 
     def query(self, nq: int, query: np.ndarray, topk: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
         # Switch to the configured search-time thread count.
