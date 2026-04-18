@@ -1,0 +1,2 @@
+python run.py --dataset sift-128-euclidean --algorithm TurboQuant --data-dir /data/local/embedding_dataset/hdf5/ --distribution-shift-test --debug
+python run.py --dataset gist-960-euclidean --algorithm TurboQuant --data-dir /data/local/embedding_dataset/hdf5/ --distribution-shift-test --debug
