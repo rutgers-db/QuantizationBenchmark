@@ -9,11 +9,11 @@ from matplotlib.legend_handler import HandlerTuple
 
 matplotlib.rcParams.update({
     "font.size": 14,
-    "axes.labelsize": 16,
+    "axes.labelsize": 20,
     "axes.titlesize": 18,
     "legend.fontsize": 12,
-    "xtick.labelsize": 14,
-    "ytick.labelsize": 14,
+    "xtick.labelsize": 18,
+    "ytick.labelsize": 18,
 })
 
 # ── Configuration ──────────────────────────────────────────────
@@ -41,7 +41,7 @@ SCATTER_MARKER_SIZE = 80
 # If "yscale" is omitted, it defaults to "log" (or "linear" when ylim starts at 0).
 DATASET_AXES = {
     "sift-128-euclidean": {"xlim": (0.4, 1.0), "ylim": (1000, 200000), "yscale": "log"},
-    "text2image-200-euclidean": {"xlim": (0.25, 0.9), "ylim": (300, 150000), "yscale": "log"},
+    "text2image-200-euclidean": {"xlim": (0.25, 0.9), "ylim": (300, 250000), "yscale": "log"},
     "video-1024-euclidean": {"xlim": (0.58, 1.0), "ylim": (10, 15000), "yscale": "log"},
 }
 
@@ -57,13 +57,14 @@ os.makedirs(LEGENDS_DIR, exist_ok=True)
 
 # ── Styles ─────────────────────────────────────────────────────
 STYLES = {
-    "Faiss-IVFPQ":      {"alias": "IVFPQ",        "color": "#1f77b4"},
-    "Faiss-OPQ-IVFPQ":  {"alias": "IVFOPQ",       "color": "#9467bd"},
-    "Faiss-IVFSQ":      {"alias": "IVFSQ",        "color": "#ff7f0e"},
-    "IVFOSQ":           {"alias": "IVFOSQ",       "color": "#8c564b"},
-    "IVFRabitQLibrary": {"alias": "IVFRabitQ",    "color": "#d62728"},
-    "IVFSAQ":           {"alias": "IVFSAQ",       "color": "#f39c12"},
-    "IVFTurboQuant":    {"alias": "IVFTurboQuant", "color": "#00acc1"},
+    "Faiss-IVFPQ":         {"alias": "IVFPQ",        "color": "#1f77b4"},
+    "Faiss-OPQ-IVFPQ":     {"alias": "IVFOPQ",       "color": "#9467bd"},
+    "Faiss-IVFPQFastScan": {"alias": "IVFPQFastScan", "color": "#2ca02c"},
+    "Faiss-IVFSQ":         {"alias": "IVFSQ",        "color": "#ff7f0e"},
+    "IVFOSQ":              {"alias": "IVFOSQ",       "color": "#8c564b"},
+    "IVFRabitQLibrary":    {"alias": "IVFRaBitQ",    "color": "#d62728"},
+    "IVFSAQ":              {"alias": "IVFSAQ",       "color": "#f39c12"},
+    "IVFTurboQuant":       {"alias": "IVFTurboQuant", "color": "#00acc1"},
 }
 
 
@@ -279,7 +280,7 @@ for dataset, nlist_data in sorted(data.items()):
             ax.set_ylim(*axes_cfg["ylim"])
 
         ax.set_xlabel("Recall@100")
-        ax.set_ylabel("Queries per Second")
+        ax.set_ylabel("QPS")
         ax.grid(True, which="both", linestyle="--", alpha=0.5)
 
         fig.tight_layout()
