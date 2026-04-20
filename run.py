@@ -356,6 +356,110 @@ def save_results(results, output_dir: str = "benchmark/results"):
     print(f"\nResults saved to: {filepath}")
 
 
+def _convert_types(obj, exclude_keys={'predictions', 'distances'}):
+    """Convert numpy types to Python types for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: _convert_types(v, exclude_keys) for k, v in obj.items()
+                if k not in exclude_keys}
+    elif isinstance(obj, list):
+        return [_convert_types(item, exclude_keys) for item in obj]
+    elif hasattr(obj, 'tolist'):
+        return obj.tolist()
+    elif hasattr(obj, 'item'):
+        return obj.item()
+    return obj
+
+
+def _build_result_filename(result) -> str:
+    """Build the output filename for a result set."""
+    if 'graph' in result:
+        if 'quantizer' in result and result['quantizer']:
+            algo_str = f"{result['graph']}_{result['quantizer']}"
+        else:
+            algo_str = result['graph']
+    else:
+        algo_str = result['quantizer']
+        if result.get('dimreduction'):
+            algo_str = f"{result['dimreduction']}_{algo_str}"
+    return f"{result['dataset']}_{algo_str}.json"
+
+
+def load_distribution_shift_groups(
+    dataset_name: str,
+    explicit_group: str = None,
+    config_path: str = 'benchmark/distribution_shift_groups.yaml',
+):
+    """Resolve which distribution shift groups to benchmark for a dataset."""
+    if explicit_group:
+        groups = [group.strip() for group in explicit_group.split(',') if group.strip()]
+        if groups:
+            return groups
+
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(
+            f"Distribution shift config not found: {config_path}. "
+            "Pass --distribution-shift-group or create the config file."
+        )
+
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f) or {}
+
+    dataset_config = config.get(dataset_name)
+    if dataset_config is None:
+        raise ValueError(
+            f"No distribution shift groups configured for dataset '{dataset_name}' in {config_path}."
+        )
+
+    if isinstance(dataset_config, dict):
+        groups = dataset_config.get('groups', [])
+    elif isinstance(dataset_config, list):
+        groups = dataset_config
+    else:
+        raise ValueError(
+            f"Invalid distribution shift config for dataset '{dataset_name}'. "
+            "Expected a list or a dict with a 'groups' key."
+        )
+
+    groups = [str(group).strip() for group in groups if str(group).strip()]
+    if not groups:
+        raise ValueError(
+            f"Dataset '{dataset_name}' has no distribution shift groups configured in {config_path}."
+        )
+
+    return groups
+
+
+def save_distribution_shift_results(results, output_dir: str = 'benchmark/results/distribution_shift'):
+    """Save results from multiple distribution shift groups into one JSON file."""
+    if not isinstance(results, list) or not results:
+        raise ValueError('Distribution shift results must be a non-empty list.')
+
+    os.makedirs(output_dir, exist_ok=True)
+    filename = _build_result_filename(results[0])
+    filepath = os.path.join(output_dir, filename)
+
+    from collections import defaultdict
+    grouped_results = defaultdict(list)
+
+    for result in results:
+        shift_group = result.get('distribution_shift', {}).get('group_name', 'distribution_shift')
+        grouped_results[shift_group].append(result)
+
+    serializable_results = []
+    for shift_group, group_results in grouped_results.items():
+        first_result = group_results[0]
+        serializable_results.append({
+            'distribution_shift_group': shift_group,
+            'distribution_shift_metadata': _convert_types(first_result.get('distribution_shift', {})),
+            'results': _convert_types(group_results),
+        })
+
+    with open(filepath, 'w') as f:
+        json.dump(serializable_results, f, indent=2)
+
+    print(f"\nDistribution shift results saved to: {filepath}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Quantization Benchmark Framework',
