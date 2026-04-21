@@ -31,23 +31,25 @@ os.makedirs(LEGENDS_DIR, exist_ok=True)
 
 # IVF method name -> corresponding standalone color
 IVF_STYLES = {
-    "Faiss-IVFPQ":        {"color": "#1f77b4", "name": "IVFPQ"},
-    "Faiss-OPQ-IVFPQ":    {"color": "#9467bd", "name": "IVFOPQ"},
-    # "ResidualOPQ-IVFPQ":  {"color": "#17becf"},   # new - no standalone match
-    "Faiss-IVFSQ":        {"color": "#ff7f0e", "name": "IVFSQ"},
-    "IVFOSQ":             {"color": "#8c564b", "name": "IVFOSQ"},
+    # "Faiss-IVFPQ":        {"color": "#1f77b4", "name": "IVFPQ"},
+    # "Faiss-OPQ-IVFPQ":    {"color": "#9467bd", "name": "IVFOPQ"},
+    "IVFE8":  {"color": "#17becf", "name": "IVFE8"},   # new - no standalone match
+    "IVFE8FastScan":      {"color": "#f39c12", "name": "IVFE8FastScan"},  
+    # "Faiss-IVFSQ":        {"color": "#ff7f0e", "name": "IVFSQ"},
+    # "IVFOSQ":             {"color": "#8c564b", "name": "IVFOSQ"},
     "IVFRabitQLibrary":   {"color": "#d62728", "name": "IVFRabitQ"},
-    "IVFSAQ-merged":      {"color": "#f39c12", "name": "IVFSAQ"}, 
-    "IVFTurboQuant":      {"color": "#00acc1", "name": "IVFTurboQuant"},
+    # "IVFSAQ-merged":      {"color": "#f39c12", "name": "IVFSAQ"},
+    "Faiss-IVFPQFastScan":      {"color": "#8c564b", "name": "IVFPQFastScan"},  
+    # "IVFTurboQuant":      {"color": "#00acc1", "name": "IVFTurboQuant"},
 }
 
 KNOWN_DATASETS = [
-    "audio-128-euclidean",
-    "gist-960-euclidean",
-    "paper-200-euclidean",
+    # "audio-128-euclidean",
+    # "gist-960-euclidean",
+    # "paper-200-euclidean",
     "sift-128-euclidean",
-    "text2image-200-euclidean",
-    "video-1024-euclidean",
+    # "text2image-200-euclidean",
+    # "video-1024-euclidean",
 ]
 
 
@@ -248,13 +250,13 @@ def main():
 
     # Fixed log scale y-axis, capped at 100000
     ax.set_yscale("log")
-    ax.set_ylim(top=100000)
+    # ax.set_ylim(top=100000)
     ax.yaxis.set_major_locator(matplotlib.ticker.LogLocator(base=10, subs=[1, 2, 5]))
     ax.yaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter())
     ax.yaxis.get_major_formatter().set_scientific(False)
 
     # Fixed x-axis range
-    ax.set_xlim(0.5, 1.0)
+    # ax.set_xlim(0.5, 1.0)
 
     ax.set_xlabel("Recall@100")
     ax.set_ylabel("QPS")
@@ -263,7 +265,7 @@ def main():
     fig.tight_layout()
     stem = os.path.join(FIGURES_DIR,
                         f"{dataset}_nlist{nlist}_{suffix}_recall100")
-    fig.savefig(stem + ".pdf", format="pdf", bbox_inches="tight")
+    fig.savefig(stem + "_compare_ivfe8.pdf", format="pdf", bbox_inches="tight")
     print(f"[OK] Saved: {stem}.pdf")
     plt.close(fig)
 
@@ -292,9 +294,9 @@ def main():
         )
         leg_stem = os.path.join(LEGENDS_DIR,
                                 f"{dataset}_nlist{nlist}_{suffix}_recall100_legend")
-        fig_leg.savefig(leg_stem + ".pdf", format="pdf",
+        fig_leg.savefig(leg_stem + "_compare_ivfe8.pdf", format="pdf",
                         bbox_inches=bbox, pad_inches=0.05)
-        print(f"[OK] Saved: {leg_stem}.pdf")
+        print(f"[OK] Saved: {leg_stem}_compare_ivfe8.pdf")
         plt.close(fig_leg)
 
 

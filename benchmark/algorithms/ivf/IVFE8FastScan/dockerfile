@@ -1,6 +1,6 @@
 FROM python:3.9-slim
 
-# Build arguments
+# Build arguments (provided by the benchmark harness)
 ARG ALGO_TYPE
 ARG ALGO_NAME
 
@@ -36,23 +36,25 @@ RUN pip install --no-cache-dir \
 # Copy the benchmark framework code
 COPY benchmark/ /benchmark/
 
-# Copy the algorithm module (includes rabitqlib headers under include/)
-COPY benchmark/algorithms/${ALGO_TYPE}/${ALGO_NAME}/ /algorithms/${ALGO_TYPE}/${ALGO_NAME}/
+# IVFE8FastScan shares the same C++ source as IVFE8.
+# Copy the IVFE8 source tree into this algorithm's working directory,
+# then overlay the FastScan-specific module.py.
+COPY benchmark/algorithms/ivf/IVFE8/ /algorithms/ivf/IVFE8FastScan/
+COPY benchmark/algorithms/ivf/IVFE8FastScan/module.py /algorithms/ivf/IVFE8FastScan/module.py
+COPY benchmark/algorithms/ivf/IVFE8FastScan/config.yaml /algorithms/ivf/IVFE8FastScan/config.yaml
 
-# Build the Python bindings
-RUN cd /algorithms/${ALGO_TYPE}/${ALGO_NAME}/ && \
+# Build the Python bindings (produces e8_cpp.so containing both IVFE8 and IVFE8FastScan)
+RUN cd /algorithms/ivf/IVFE8FastScan/ && \
     mkdir -p build && \
     cd build && \
     cmake .. && \
     make && \
-    cp rabitqlib_cpp*.so .. && \
+    cp e8_cpp*.so .. && \
     cd .. && \
     rm -rf build
 
 # Set Python path
-ENV PYTHONPATH=/:/algorithms/${ALGO_TYPE}/${ALGO_NAME}
+ENV PYTHONPATH=/:/algorithms/ivf/IVFE8FastScan
 
 # Set working directory
 WORKDIR /workspace
-
-# The entrypoint will be provided by the framework at runtime
