@@ -1,5 +1,7 @@
-# Configuration for IVFRabitQLibrary (RaBitQ with IVF)
-# Uses multiple IVF clusters (nlist) with nprobe-based search
+# Configuration for IVFE8PQ (learned PQ codebook on normalized residuals,
+# RaBitQ-style scoring). Same nsubvec / nbit knobs as Faiss-IVFPQ.
+# Constraint: nsubvec must divide padded_dim (= round_up(ndim, 64));
+# the C++ scan currently only supports nbit=8.
 
 sift-128-euclidean:
   common:
@@ -8,12 +10,13 @@ sift-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [1]
     nlist: [1024]
+    nsubvec: [16]
+    nbit: [8]
   search:
     - topk: 100
       nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      # nrerank: [200, 300, 500, 1000]
 
 gist-960-euclidean:
   common:
@@ -22,8 +25,9 @@ gist-960-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [1,4]
     nlist: [1024, 4096]
+    nsubvec: [120, 480]
+    nbit: [8]
   search:
     - topk: 100
       nprobe: [10, 20, 30, 50, 75, 100]
@@ -36,8 +40,9 @@ audio-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [1,4]
     nlist: [1024, 4096]
+    nsubvec: [16, 64]
+    nbit: [8]
   search:
     - topk: 100
       nprobe: [10, 20, 30, 50, 75, 100]
@@ -50,8 +55,9 @@ video-1024-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [1,4]
     nlist: [1024, 4096]
+    nsubvec: [128, 512]
+    nbit: [8]
   search:
     - topk: 100
       nprobe: [10, 20, 30, 50, 75, 100]
@@ -64,8 +70,9 @@ text2image-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [1,4]
     nlist: [1024, 4096]
+    nsubvec: [32, 128]     # padded_dim = 256 -> dsub = 8, 2
+    nbit: [8]
   search:
     - topk: 100
       nprobe: [10, 20, 30, 50, 75, 100]
@@ -78,8 +85,9 @@ paper-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [1,4]
     nlist: [1024, 4096]
+    nsubvec: [32, 128]     # padded_dim = 256 -> dsub = 8, 2
+    nbit: [8]
   search:
     - topk: 100
       nprobe: [10, 20, 30, 50, 75, 100]

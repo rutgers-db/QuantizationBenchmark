@@ -1,0 +1,80 @@
+FROM python:3.9-slim
+
+# Build arguments (provided by the benchmark harness)
+ARG ALGO_TYPE
+ARG ALGO_NAME
+
+# System deps: build tools + BLAS (for faiss) + OpenMP.
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    libgomp1 \
+    libopenblas-dev \
+    liblapack-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Eigen (needed by rabitqlib headers)
+RUN cd /tmp && \
+    wget https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz && \
+    tar -xzf eigen-3.4.0.tar.gz && \
+    cd eigen-3.4.0 && \
+    mkdir build && cd build && \
+    cmake .. && \
+    make install && \
+    cd / && rm -rf /tmp/eigen-3.4.0*
+
+# Python deps
+RUN pip install --no-cache-dir \
+    numpy \
+    h5py \
+    pyyaml \
+    psutil \
+    pybind11 \
+    threadpoolctl \
+    faiss-cpu
+
+# Build faiss from source (C++ headers + libfaiss.so) so we can #include
+# <faiss/Clustering.h>, <faiss/impl/ProductQuantizer.h>, etc. from e8pq.hpp.
+RUN git clone --depth 1 --branch v1.7.4 \
+        https://github.com/facebookresearch/faiss.git /tmp/faiss && \
+    cd /tmp/faiss && \
+    cmake -B build . \
+        -DFAISS_ENABLE_GPU=OFF \
+        -DFAISS_ENABLE_PYTHON=OFF \
+        -DBUILD_TESTING=OFF \
+        -DBUILD_SHARED_LIBS=ON \
+        -DFAISS_OPT_LEVEL=avx2 \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DBLA_VENDOR=OpenBLAS && \
+    cmake --build build -j"$(nproc)" && \
+    cmake --install build && \
+    ldconfig && \
+    rm -rf /tmp/faiss
+
+# Copy the benchmark framework code
+COPY benchmark/ /benchmark/
+
+# Algorithm sources. The rabitqlib headers (FHT-Kac rotator, space.hpp) live
+# under IVFE8/include — reuse them here by copying that tree first, then
+# overlaying IVFE8PQ's own files on top.
+COPY benchmark/algorithms/ivf/IVFE8/include/ /algorithms/${ALGO_TYPE}/${ALGO_NAME}/include/
+COPY benchmark/algorithms/${ALGO_TYPE}/${ALGO_NAME}/ /algorithms/${ALGO_TYPE}/${ALGO_NAME}/
+
+# Build the Python binding
+RUN cd /algorithms/${ALGO_TYPE}/${ALGO_NAME}/ && \
+    mkdir -p build && \
+    cd build && \
+    cmake .. && \
+    make -j"$(nproc)" && \
+    cp e8pq_cpp*.so .. && \
+    cd .. && \
+    rm -rf build
+
+# Set Python path
+ENV PYTHONPATH=/:/algorithms/${ALGO_TYPE}/${ALGO_NAME}
+ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+
+WORKDIR /workspace
