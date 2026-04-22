@@ -607,6 +607,11 @@ public:
         float*   Dptr = static_cast<float*>(D.request().ptr);
 
         omp_set_num_threads(nthread_);
+#ifdef __AVX512VBMI__
+        std::cout << "IVFE8FastScan: using AVX512VBMI in-register LUT path" << std::endl;
+#else
+        std::cout << "IVFE8FastScan: AVX512VBMI not detected, falling back to scalar LUT lookup (performance will be poor)" << std::endl;
+#endif
 
         const size_t padded_dim = padded_dim_;
         const size_t n_blocks   = n_blocks_;

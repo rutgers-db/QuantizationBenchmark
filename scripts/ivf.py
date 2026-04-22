@@ -34,10 +34,12 @@ IVF_STYLES = {
     # "Faiss-IVFPQ":        {"color": "#1f77b4", "name": "IVFPQ"},
     # "Faiss-OPQ-IVFPQ":    {"color": "#9467bd", "name": "IVFOPQ"},
     "IVFE8":  {"color": "#17becf", "name": "IVFE8"},   # new - no standalone match
+    "IVFE8FastScan":      {"color": "#f39c12", "name": "IVFE8FastScan"},  
     # "Faiss-IVFSQ":        {"color": "#ff7f0e", "name": "IVFSQ"},
     # "IVFOSQ":             {"color": "#8c564b", "name": "IVFOSQ"},
     "IVFRabitQLibrary":   {"color": "#d62728", "name": "IVFRabitQ"},
-    "IVFE8PQ":      {"color": "#f39c12", "name": "IVFSpherePQ"},  # new - no standalone match
+    # "IVFSAQ-merged":      {"color": "#f39c12", "name": "IVFSAQ"},
+    "Faiss-IVFPQFastScan":      {"color": "#8c564b", "name": "IVFPQFastScan"},  
     # "IVFTurboQuant":      {"color": "#00acc1", "name": "IVFTurboQuant"},
 }
 
