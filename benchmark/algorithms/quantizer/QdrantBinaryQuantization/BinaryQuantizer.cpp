@@ -518,7 +518,8 @@ void BinaryQuantizer::add(size_t n, const float* x) {
     if (n == 0) return;
     reserve(ntotal + n);
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(static) if (n > 256)
+    const int _nt_add = (num_threads > 0) ? num_threads : omp_get_max_threads();
+    #pragma omp parallel for schedule(static) num_threads(_nt_add) if (n > 256)
 #endif
     for (long long i = 0; i < static_cast<long long>(n); ++i) {
         encode_db(x + static_cast<size_t>(i) * d,
@@ -563,7 +564,8 @@ void BinaryQuantizer::search(size_t nq,
     struct G { uint64_t* p; ~G() { aligned_free_words(p); } } guard{qcodes};
 
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(static) if (nq > 8)
+    const int _nt_search = (num_threads > 0) ? num_threads : omp_get_max_threads();
+    #pragma omp parallel for schedule(static) num_threads(_nt_search) if (nq > 8)
 #endif
     for (long long i = 0; i < static_cast<long long>(nq); ++i) {
         encode_query(x + static_cast<size_t>(i) * d,
@@ -578,7 +580,7 @@ void BinaryQuantizer::search(size_t nq,
     const int Kq = k_q();
 
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 1) if (nq > 1)
+    #pragma omp parallel for schedule(dynamic, 1) num_threads(_nt_search) if (nq > 1)
 #endif
     for (long long qi = 0; qi < static_cast<long long>(nq); ++qi) {
         const uint64_t* q = qcodes + static_cast<size_t>(qi) * qwords;

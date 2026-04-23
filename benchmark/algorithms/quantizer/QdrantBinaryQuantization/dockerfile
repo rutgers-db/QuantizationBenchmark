@@ -1,0 +1,33 @@
+FROM python:3.9-slim
+
+ARG ALGO_TYPE
+ARG ALGO_NAME
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir \
+    numpy \
+    h5py \
+    pyyaml \
+    psutil \
+    pybind11 \
+    threadpoolctl \
+    faiss-cpu
+
+COPY benchmark/ /benchmark/
+COPY benchmark/algorithms/${ALGO_TYPE}/${ALGO_NAME}/ /algorithms/${ALGO_TYPE}/${ALGO_NAME}/
+
+RUN cd /algorithms/${ALGO_TYPE}/${ALGO_NAME}/ && \
+    mkdir -p build && cd build && \
+    cmake .. && \
+    make -j$(nproc) bq_cpp && \
+    cp bq_cpp*.so .. && \
+    cd .. && rm -rf build
+
+ENV PYTHONPATH=/:/algorithms/quantizer/QdrantBinaryQuantization
+
+WORKDIR /workspace

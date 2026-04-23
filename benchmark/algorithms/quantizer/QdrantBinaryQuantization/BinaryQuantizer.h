@@ -98,11 +98,17 @@ public:
     size_t codes_capacity = 0;
     uint64_t* codes = nullptr;   // 64-B aligned; ntotal * n_words uint64s in use
 
+    // Number of OpenMP threads used by add() / search(). 0 or negative
+    // means "OpenMP default" (OMP_NUM_THREADS). Settable via set_num_threads.
+    int num_threads = 0;
+
     BinaryQuantizer(size_t d,
                     Encoding encoding = Encoding::OneBit,
                     QueryEncoding query_encoding = QueryEncoding::SameAsStorage,
                     Metric metric = Metric::L2);
     ~BinaryQuantizer();
+
+    void set_num_threads(int n) { num_threads = n; }
 
     BinaryQuantizer(const BinaryQuantizer&) = delete;
     BinaryQuantizer& operator=(const BinaryQuantizer&) = delete;

@@ -414,7 +414,13 @@ void RotationalQuantizer::add(size_t n, const float* x) {
   codes_.resize((base + n) * code_bytes_);
   meta_.resize((base + n) * 4);
 
-#pragma omp parallel
+  const int _nt_add = (num_threads_ > 0) ? num_threads_ :
+#if defined(_OPENMP)
+                      omp_get_max_threads();
+#else
+                      1;
+#endif
+#pragma omp parallel num_threads(_nt_add)
 {
   std::vector<float> rx(static_cast<size_t>(out_d_));
 #pragma omp for schedule(static)
@@ -455,7 +461,13 @@ void RotationalQuantizer::search(size_t nq, const float* queries, size_t k,
   const bool is_l2 = (metric_ == Metric::L2);
   const size_t ntotal = ntotal_;
 
-#pragma omp parallel
+  const int _nt_search = (num_threads_ > 0) ? num_threads_ :
+#if defined(_OPENMP)
+                         omp_get_max_threads();
+#else
+                         1;
+#endif
+#pragma omp parallel num_threads(_nt_search)
 {
   // Per-thread scratch (allocated once, reused across queries this thread handles).
   std::vector<float>    rq_buf(static_cast<size_t>(out_d_));

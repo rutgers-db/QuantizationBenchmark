@@ -23,6 +23,10 @@ class RotationalQuantizer {
                       Metric metric = Metric::L2,
                       uint64_t seed = 0x517cc1b727220a95ULL);
 
+  // Number of OpenMP threads for add() / search(). <= 0 -> OMP default.
+  void set_num_threads(int n) { num_threads_ = n; }
+  int num_threads() const { return num_threads_; }
+
   void train(size_t n, const float* x);           // no-op (RQ is data-independent)
   void add(size_t n, const float* x);
   void search(size_t nq, const float* queries, size_t k,
@@ -42,6 +46,7 @@ class RotationalQuantizer {
   int bits_;
   Metric metric_;
   int rounds_;
+  int num_threads_ = 0;
   static constexpr int kBlock = 64;
   static constexpr int kBrqMinDim = 256;   // Weaviate pads BRQ input to ≥256.
 
