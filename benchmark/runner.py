@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import yaml
 from typing import Optional, Dict, Any, List
@@ -160,6 +161,37 @@ def _expand_build_search_combinations(config: Dict[str, Any]) -> List[Dict[str, 
                 'search_params': search_params
             })
 
+    return result
+
+
+def _expand_grouped_config(dataset_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Expand a grouped dataset config where each group binds its own build and search params.
+
+    Format:
+        {
+          common: {...},             # shared across groups (optional)
+          groups: [
+            {build: {...}, search: [...]},
+            {build: {...}, search: [...], common: {...}},  # group-level common (optional, overrides)
+            ...
+          ]
+        }
+
+    Each group is expanded independently via _expand_build_search_combinations and concatenated.
+    """
+    dataset_common = dataset_config.get('common', {}) or {}
+    groups = dataset_config.get('groups', []) or []
+
+    result = []
+    for group in groups:
+        group_common = {**dataset_common, **(group.get('common', {}) or {})}
+        sub_config = {
+            'common': group_common,
+            'build': group.get('build', {}) or {},
+            'search': group.get('search', {}) or {},
+        }
+        result.extend(_expand_build_search_combinations(sub_config))
     return result
 
 
@@ -404,23 +436,37 @@ class BenchmarkRunner:
             List of configuration dicts for the current dataset
         """
         if algo_type == 'graph':
-            config_path = os.path.join(
-                "benchmark/graphs", algo_name, "config.yaml"
-            )
+            candidate_dirs = [os.path.join("benchmark/graphs", algo_name)]
         elif algo_type == 'quantizer':
-            quantizer_config_paths = [
-                os.path.join("benchmark/algorithms", "quantizer", algo_name, "config.yaml"),
-                os.path.join("benchmark/algorithms", "ivf", algo_name, "config.yaml"),
+            candidate_dirs = [
+                os.path.join("benchmark/algorithms", "quantizer", algo_name),
+                os.path.join("benchmark/algorithms", "ivf", algo_name),
             ]
-            config_path = next((path for path in quantizer_config_paths if os.path.exists(path)), quantizer_config_paths[0])
         else:
-            config_path = os.path.join(
-                "benchmark/algorithms", algo_type, algo_name, "config.yaml"
-            )
+            candidate_dirs = [os.path.join("benchmark/algorithms", algo_type, algo_name)]
+
+        # JSON takes priority over YAML; within each format, prefer the first matching candidate dir.
+        config_path = None
+        for d in candidate_dirs:
+            p = os.path.join(d, "config.json")
+            if os.path.exists(p):
+                config_path = p
+                break
+        if config_path is None:
+            for d in candidate_dirs:
+                p = os.path.join(d, "config.yaml")
+                if os.path.exists(p):
+                    config_path = p
+                    break
+        if config_path is None:
+            config_path = os.path.join(candidate_dirs[0], "config.yaml")
 
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
-                config = yaml.safe_load(f)
+                if config_path.endswith('.json'):
+                    config = json.load(f)
+                else:
+                    config = yaml.safe_load(f)
                 if not config:
                     return [{}]
 
@@ -435,6 +481,9 @@ class BenchmarkRunner:
                         for cfg in dataset_config:
                             all_configs.extend(expand_param_combinations(cfg))
                         return all_configs
+                    elif isinstance(dataset_config, dict) and 'groups' in dataset_config:
+                        # Grouped format: each group binds its own build and search params.
+                        return _expand_grouped_config(dataset_config)
                     else:
                         # Single config dict, expand parameter combinations
                         return expand_param_combinations(dataset_config)

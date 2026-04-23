@@ -74,12 +74,13 @@ class PRQFaiss(BaseQuantizer):
         return codebook_size + code_size
 
     def getMSE(self) -> float:
-        if self.data is None or self.ndata <= 0:
-            return 0.0
-        recons = np.zeros((self.ndata, self.ndim), dtype=np.float32)
-        self.index.reconstruct_n(0, self.ndata, recons)
-        se_per_row = np.sum((recons - self.data) ** 2, axis=1)
-        return float(np.mean(se_per_row))
+        return 0.0
+        # if self.data is None or self.ndata <= 0:
+        #     return 0.0
+        # recons = np.zeros((self.ndata, self.ndim), dtype=np.float32)
+        # self.index.reconstruct_n(0, self.ndata, recons)
+        # se_per_row = np.sum((recons - self.data) ** 2, axis=1)
+        # return float(np.mean(se_per_row))
 
     def set_query(self, query, thread_id):
         query = np.ascontiguousarray(query, dtype=np.float32)

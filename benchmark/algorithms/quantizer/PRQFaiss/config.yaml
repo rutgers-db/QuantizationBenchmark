@@ -5,8 +5,8 @@ sift-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsplits: [4]
-    nsubvec: [8]
+    nsplits: [2, 4]
+    nsubvec: [4, 8, 16, 32]
     nbit: [8]
   search:
     - topk: 100
@@ -20,7 +20,7 @@ gist-960-euclidean:
     space: "l2"
   build:
     nsplits: [4]
-    nsubvec: [120]
+    nsubvec: [30, 60, 120]
     nbit: [8]
   search:
     - topk: 100
