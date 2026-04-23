@@ -8,7 +8,7 @@ ARG ALGO_NAME
 RUN apt-get update && apt-get install -y     build-essential     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-RUN pip install --no-cache-dir     numpy     h5py     pyyaml     psutil     faiss-cpu
+RUN pip install --no-cache-dir     numpy     h5py     pyyaml     psutil     faiss-cpu  threadpoolctl
 
 # Copy the benchmark framework code
 COPY benchmark/ /benchmark/
