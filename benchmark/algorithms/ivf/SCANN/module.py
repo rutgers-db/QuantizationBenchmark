@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from typing import Tuple
 import psutil
@@ -7,6 +8,11 @@ sys.path.insert(0, '/benchmark')
 from benchmark.base import BaseQuantizer
 
 import scann
+from threadpoolctl import threadpool_limits
+
+
+def _max_threads() -> int:
+    return max(1, (os.cpu_count() or 1))
 
 
 class SCANN(BaseQuantizer):
@@ -15,22 +21,23 @@ class SCANN(BaseQuantizer):
 
     Uses tree partitioning + asymmetric hashing (AH) for approximate search.
     All datasets are L2; ScaNN's "squared_l2" distance is used directly.
-    Reordering (exact rescoring) is built-in via ScaNN's .reorder() step and
-    controlled at search time via pre_reorder_num_neighbors.
 
-    Build params: num_leaves, dims_per_block, data_bytes, nthread, space
+    The searcher is built WITHOUT .reorder() so query() returns pure AH-scored
+    results (no hidden exact-rescoring overhead in the no-rerank baseline).
+    Reranking is handled by BaseQuantizer.searchAndRerank, which calls query()
+    with nrerank candidates then does exact L2 in Python — this matches what
+    other IVF methods do and keeps the comparison fair.
+
+    Build params: num_leaves, dims_per_block, hash_type, data_bytes, nthread, space
     Search params: num_leaves_to_search (passed via **search_params)
-    Rerank: nrerank (passed to searchAndRerank; uses ScaNN's exact reorder pass)
     """
-
-    # Maximum reorder candidates – built into the searcher at construction time.
-    _MAX_REORDER = 2500
 
     def __init__(
         self,
         ndim,
         num_leaves,
         dims_per_block=2,
+        hash_type="lut16",
         data_bytes=4,
         nthread=1,
         space="l2",
@@ -39,10 +46,15 @@ class SCANN(BaseQuantizer):
         self.ndim = int(ndim)
         self.num_leaves = int(num_leaves)
         self.dims_per_block = int(dims_per_block)
+        self.hash_type = str(hash_type).lower()
         self.data_bytes = int(data_bytes)
         self.nthread = int(nthread)
         self.space = str(space).lower()
 
+        if self.hash_type not in ("lut16", "lut256"):
+            raise ValueError(
+                f"hash_type must be 'lut16' or 'lut256', got {self.hash_type!r}"
+            )
         if self.ndim % self.dims_per_block != 0:
             raise ValueError(
                 f"ndim ({self.ndim}) must be divisible by dims_per_block ({self.dims_per_block})"
@@ -66,6 +78,9 @@ class SCANN(BaseQuantizer):
         # Use at most 250 000 samples for k-means tree training (ScaNN default).
         training_sample_size = min(nd, 250000)
 
+        # Max out threads during build (k-means + AH codebook training).
+        build_threads = _max_threads()
+
         try:
             if self.space == "l2":
                 # ScaNN supports squared_l2 natively – no transformation needed.
@@ -78,8 +93,7 @@ class SCANN(BaseQuantizer):
                         num_leaves_to_search=min(100, self.num_leaves),
                         training_sample_size=training_sample_size,
                     )
-                    .score_ah(self.dims_per_block)
-                    .reorder(self._MAX_REORDER)
+                    .score_ah(self.dims_per_block, hash_type=self.hash_type)
                 )
             else:
                 # Fallback for non-L2 spaces: normalise and use dot_product.
@@ -98,11 +112,16 @@ class SCANN(BaseQuantizer):
                     .score_ah(
                         self.dims_per_block,
                         anisotropic_quantization_threshold=0.2,
+                        hash_type=self.hash_type,
                     )
-                    .reorder(self._MAX_REORDER)
                 )
 
-            self.searcher = builder.set_n_training_threads(self.nthread).build()
+            # threadpool_limits caps OpenMP/BLAS threads during build; ScaNN's
+            # own k-means training threads are set via set_n_training_threads.
+            with threadpool_limits(limits=build_threads):
+                self.searcher = (
+                    builder.set_n_training_threads(build_threads).build()
+                )
         except Exception as e:
             print(f"ScaNN build error: {e}")
             return False
@@ -116,8 +135,9 @@ class SCANN(BaseQuantizer):
         self, nq: int, query: np.ndarray, topk: int, **search_params
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Approximate AH search followed by a *small* exact reorder pass
-        (pre_reorder_num_neighbors = topk to minimise overhead).
+        Pure AH-scored search – no exact reranking.
+        BaseQuantizer.searchAndRerank will handle any reranking in Python so
+        the ScaNN baseline is a fair apples-to-apples vs other IVF methods.
         """
         queries = np.ascontiguousarray(query.astype(np.float32, copy=False))
 
@@ -128,51 +148,16 @@ class SCANN(BaseQuantizer):
             int(search_params.get("num_leaves_to_search", min(100, self.num_leaves))),
             self.num_leaves,
         )
-        # Cap topk at dataset size.
         effective_topk = min(topk, self.ndata)
-        # Rerank only topk candidates exactly (keeps the "no-rerank" baseline fast).
-        pre_reorder = min(effective_topk, self._MAX_REORDER)
 
-        I, D = self.searcher.search_batched(
-            queries,
-            leaves_to_search=num_leaves_to_search,
-            pre_reorder_num_neighbors=pre_reorder,
-            final_num_neighbors=effective_topk,
-        )
-
-        I = self._pad_results(np.asarray(I, dtype=np.int64), nq, effective_topk)
-        D = self._pad_results(np.asarray(D, dtype=np.float32), nq, effective_topk)
-        return I, D
-
-    def searchAndRerank(
-        self,
-        nq: int,
-        queries: np.ndarray,
-        topk: int,
-        nrerank: int,
-        **search_params,
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        ScaNN-native reranking: AH coarse search → exact reorder of nrerank candidates.
-        """
-        queries = np.ascontiguousarray(queries.astype(np.float32, copy=False))
-
-        if self.space != "l2":
-            queries = queries / np.linalg.norm(queries, axis=1, keepdims=True)
-
-        num_leaves_to_search = min(
-            int(search_params.get("num_leaves_to_search", min(100, self.num_leaves))),
-            self.num_leaves,
-        )
-        effective_topk = min(topk, self.ndata)
-        pre_reorder = min(int(nrerank), self._MAX_REORDER)
-
-        I, D = self.searcher.search_batched(
-            queries,
-            leaves_to_search=num_leaves_to_search,
-            pre_reorder_num_neighbors=pre_reorder,
-            final_num_neighbors=effective_topk,
-        )
+        # Parallelise across queries using nthread; threadpool_limits caps
+        # OpenMP/BLAS to the same count so we don't oversubscribe cores.
+        with threadpool_limits(limits=self.nthread):
+            I, D = self.searcher.search_batched_parallel(
+                queries,
+                leaves_to_search=num_leaves_to_search,
+                final_num_neighbors=effective_topk,
+            )
 
         I = self._pad_results(np.asarray(I, dtype=np.int64), nq, effective_topk)
         D = self._pad_results(np.asarray(D, dtype=np.float32), nq, effective_topk)
@@ -187,13 +172,14 @@ class SCANN(BaseQuantizer):
 
     def getCompressionRate(self) -> float:
         """
-        AH with lut16 (default): 4 bits per block.
-        Rate = (ndim * 32 bits) / (ndim / dims_per_block * 4 bits)
-             = 8 * dims_per_block
-        For dims_per_block=2 → 16x compression.
+        AH compression ratio depends on hash_type:
+          lut16  → 4 bits per block (16 centroids)
+          lut256 → 8 bits per block (256 centroids)
+        Rate = (ndim * data_bytes * 8) / (ndim / dims_per_block * bits_per_block)
         """
+        bits_per_block = 4 if self.hash_type == "lut16" else 8
         original_bits = self.ndim * self.data_bytes * 8
-        compressed_bits = (self.ndim // self.dims_per_block) * 4  # lut16 = 4 bits
+        compressed_bits = (self.ndim // self.dims_per_block) * bits_per_block
         return original_bits / compressed_bits
 
     def getMSE(self) -> float:
