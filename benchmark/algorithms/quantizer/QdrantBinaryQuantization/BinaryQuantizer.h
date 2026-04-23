@@ -136,6 +136,11 @@ public:
     // Size of one encoded query, in uint64 words (depends on query_encoding).
     size_t query_code_words() const;
 
+    // Score an already-encoded query against a single db id and return the
+    // metric value (same scale as `search` distances). Caller is responsible
+    // for ensuring `qcode` is the encoding produced by `encode_query`.
+    float score_one(const uint64_t* qcode, size_t db_id) const;
+
     void reset();
 
     int k_db() const { return static_cast<int>(encoding); }

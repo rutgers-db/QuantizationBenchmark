@@ -542,6 +542,19 @@ float BinaryQuantizer::h_to_metric(int64_t h) const {
     return h_scale;
 }
 
+float BinaryQuantizer::score_one(const uint64_t* qcode, size_t db_id) const {
+    if (!is_trained) throw std::runtime_error("BinaryQuantizer::score_one called before train");
+    if (db_id >= ntotal) throw std::out_of_range("BinaryQuantizer::score_one: db_id out of range");
+    const bool symmetric = (query_encoding == QueryEncoding::SameAsStorage);
+    int64_t h;
+    if (symmetric) {
+        h = static_cast<int64_t>(xor_popcnt(codes + db_id * n_words, qcode, n_words));
+    } else {
+        h = xor_popcnt_scalar_kq(codes + db_id * n_words, qcode, n_words, k_q());
+    }
+    return h_to_metric(h);
+}
+
 namespace {
 // Max-heap keyed by raw weighted Hamming — smallest H = closest for every metric.
 struct Cand {
