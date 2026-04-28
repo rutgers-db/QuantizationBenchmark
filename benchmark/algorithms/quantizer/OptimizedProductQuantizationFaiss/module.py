@@ -12,7 +12,8 @@ class OptimizedProductQuantizationFaiss(BaseQuantizer):
         self.ndim = ndim
         self.nsubvec = nsubvec
         self.nbit = nbit
-        self.PQIndex = faiss.IndexPQ(ndim, nsubvec, nbit)
+        metric = faiss.METRIC_INNER_PRODUCT if space in ("ip", "inner_product") else faiss.METRIC_L2
+        self.PQIndex = faiss.IndexPQ(ndim, nsubvec, nbit, metric)
         self.index = None
         self.space = space
         self.niter = niter

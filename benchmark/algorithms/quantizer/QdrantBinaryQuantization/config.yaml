@@ -94,3 +94,17 @@ siftsmall-128-euclidean:
   search:
     - topk: 100
       nrerank: [200, 300, 500, 800, 1000]
+
+laion-768-ip:
+  # encoding=1 -> 32x, encoding=2 -> 16x; QdrantBQ cannot reach 8x.
+  common:
+    data_bytes: 4
+    ndim: 768
+    nthread: 16
+    space: "ip"
+  build:
+    encoding: [1, 2]
+    query_encoding: ["same", "scalar4", "scalar8"]
+  search:
+    - topk: 100
+      nrerank: [200, 300, 500, 800, 1000]

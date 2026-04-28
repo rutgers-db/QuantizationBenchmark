@@ -97,6 +97,20 @@ paper-200-euclidean:
   search:
     - topk: 100
       nrerank: [200, 300, 500, 800, 1000]
+
+laion-768-ip:
+  common:
+    data_bytes: 4
+    ndim: 768
+    nthread: 16
+    space: "ip"
+  build:
+    # nsubvec=96 -> 32x, nsubvec=192 -> 16x, nsubvec=384 -> 8x compression at nbit=8
+    nsubvec: [96, 192, 384]
+    nbit: [8]
+  search:
+    - topk: 100
+      nrerank: [200, 300, 500, 800, 1000]
 # Example with build/search separation (for IVF-based methods):
 # sift-128-euclidean:
 #   build:

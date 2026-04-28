@@ -20,13 +20,16 @@ class SCANN(BaseQuantizer):
     ScaNN (Scalable Nearest Neighbors) IVF-style index.
 
     Uses tree partitioning + asymmetric hashing (AH) for approximate search.
-    All datasets are L2; ScaNN's "squared_l2" distance is used directly.
+    Maps `space` to ScaNN's native distance measures:
+      - "l2"     -> "squared_l2", raw vectors, no AVQ
+      - "ip"     -> "dot_product", raw vectors, anisotropic_quantization=0.2
+      - "cosine" -> "dot_product", L2-normalised vectors, anisotropic_quantization=0.2
 
     The searcher is built WITHOUT .reorder() so query() returns pure AH-scored
     results (no hidden exact-rescoring overhead in the no-rerank baseline).
     Reranking is handled by BaseQuantizer.searchAndRerank, which calls query()
-    with nrerank candidates then does exact L2 in Python — this matches what
-    other IVF methods do and keeps the comparison fair.
+    with nrerank candidates then does exact distance in Python — this matches
+    what other IVF methods do and keeps the comparison fair.
 
     Build params: num_leaves, dims_per_block, hash_type, data_bytes, nthread, space
     Search params: num_leaves_to_search (passed via **search_params)
@@ -95,8 +98,25 @@ class SCANN(BaseQuantizer):
                     )
                     .score_ah(self.dims_per_block, hash_type=self.hash_type)
                 )
+            elif self.space in ("ip", "inner_product"):
+                # Pure MIPS — raw vectors, ScaNN's dot_product, AVQ enabled.
+                builder = (
+                    scann.scann_ops_pybind.builder(
+                        self.data, 10, "dot_product"
+                    )
+                    .tree(
+                        num_leaves=self.num_leaves,
+                        num_leaves_to_search=min(100, self.num_leaves),
+                        training_sample_size=training_sample_size,
+                    )
+                    .score_ah(
+                        self.dims_per_block,
+                        anisotropic_quantization_threshold=0.2,
+                        hash_type=self.hash_type,
+                    )
+                )
             else:
-                # Fallback for non-L2 spaces: normalise and use dot_product.
+                # Cosine: normalise so dot_product == cosine similarity.
                 normalized = self.data / np.linalg.norm(
                     self.data, axis=1, keepdims=True
                 )
@@ -141,7 +161,9 @@ class SCANN(BaseQuantizer):
         """
         queries = np.ascontiguousarray(query.astype(np.float32, copy=False))
 
-        if self.space != "l2":
+        # Cosine path normalises both DB and query so dot_product == cosine sim.
+        # IP / MIPS uses raw vectors on both sides.
+        if self.space == "cosine":
             queries = queries / np.linalg.norm(queries, axis=1, keepdims=True)
 
         num_leaves_to_search = min(

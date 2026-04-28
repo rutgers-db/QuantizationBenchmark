@@ -37,9 +37,9 @@ class FaissOPQIVFPQ(BaseQuantizer):
         self.opq_out_dim = None if opq_out_dim is None else int(opq_out_dim)
         self.opq_niter = int(opq_niter)
 
-        if self.space not in {"l2", "cosine"}:
+        if self.space not in {"l2", "cosine", "ip", "inner_product"}:
             raise ValueError(
-                f"Unsupported space '{space}'. FaissOPQIVFPQ currently supports 'l2' and 'cosine'."
+                f"Unsupported space '{space}'. FaissOPQIVFPQ supports 'l2', 'cosine', 'ip'."
             )
 
         opq_prefix = f"OPQ{self.nsubvec}"
@@ -47,7 +47,12 @@ class FaissOPQIVFPQ(BaseQuantizer):
             opq_prefix = f"{opq_prefix}_{self.opq_out_dim}"
         self.factory_string = f"{opq_prefix},IVF{self.nlist},PQ{self.nsubvec}x{self.nbit}"
 
-        self.index = faiss.index_factory(self.ndim, self.factory_string, faiss.METRIC_L2)
+        metric = (
+            faiss.METRIC_INNER_PRODUCT
+            if self.space in {"ip", "inner_product"}
+            else faiss.METRIC_L2
+        )
+        self.index = faiss.index_factory(self.ndim, self.factory_string, metric)
         self.index_ivf = faiss.extract_index_ivf(self.index)
         self.opq = faiss.downcast_VectorTransform(self.index.chain.at(0))
         self.opq.niter = self.opq_niter
