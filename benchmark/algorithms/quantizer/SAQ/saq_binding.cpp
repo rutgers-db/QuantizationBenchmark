@@ -25,6 +25,7 @@ private:
     std::unique_ptr<IVF> ivf_;
     QuantizeConfig cfg_;
     SearcherConfig searcher_cfg_;
+    DistType dist_type_ = DistType::L2Sqr;
     size_t num_data_ = 0;
     size_t num_dim_ = 0;
     size_t num_cen_ = 0;
@@ -43,10 +44,14 @@ private:
     };
     std::vector<QueryState> query_states_;
 
+    static DistType parse_dist_type(const std::string& s) {
+        return (s == "ip" || s == "IP" || s == "inner_product") ? DistType::IP : DistType::L2Sqr;
+    }
+
 public:
     PySAQ(float avg_bits, bool enable_segmentation, int caq_adj_rd_lmt,
           bool random_rotation, bool use_fastscan, float caq_adj_eps,
-          float vars_bound_m) {
+          float vars_bound_m, const std::string& dist_type = "l2") {
         cfg_.avg_bits = avg_bits;
         cfg_.enable_segmentation = enable_segmentation;
         cfg_.single.quant_type = BaseQuantType::CAQ;
@@ -54,8 +59,9 @@ public:
         cfg_.single.use_fastscan = use_fastscan;
         cfg_.single.caq_adj_rd_lmt = caq_adj_rd_lmt;
         cfg_.single.caq_adj_eps = caq_adj_eps;
+        dist_type_ = parse_dist_type(dist_type);
         searcher_cfg_.searcher_vars_bound_m = vars_bound_m;
-        searcher_cfg_.dist_type = DistType::L2Sqr;
+        searcher_cfg_.dist_type = dist_type_;
     }
 
     void build(
@@ -142,7 +148,7 @@ public:
 
         SearcherConfig scfg;
         scfg.searcher_vars_bound_m = vars_bound_m;
-        scfg.dist_type = DistType::L2Sqr;
+        scfg.dist_type = dist_type_;
 
         #pragma omp parallel for num_threads(num_threads)
         for (uint32_t i = 0; i < nq; i++) {
@@ -185,7 +191,7 @@ public:
 
         SearcherConfig scfg;
         scfg.searcher_vars_bound_m = vars_bound_m;
-        scfg.dist_type = DistType::L2Sqr;
+        scfg.dist_type = dist_type_;
 
         #pragma omp parallel for num_threads(num_threads)
         for (uint32_t i = 0; i < nq; i++) {
@@ -219,11 +225,17 @@ public:
     // Compute per-element MSE via reconstruction.
     // NOTE: SaqCluEstimator mutates *saq_data and *pcluster (neither is thread-safe),
     // and SaqData has a deleted copy constructor. Runs single-threaded.
+    // Only the L2Sqr template path is instantiated; in IP mode return 0.0 to skip.
     float getMSE(int /* num_threads */) {
         if (!ivf_)
             throw std::runtime_error("Index not built. Call build() first.");
         if (cluster_ids_.empty())
             throw std::runtime_error("Cluster assignments not available. Rebuild the index.");
+        if (dist_type_ != DistType::L2Sqr) {
+            // The accurate-distance path is templated on DistType; reconstruction
+            // MSE is L2-specific anyway, so skip in IP mode.
+            return 0.0f;
+        }
 
         auto data_buf = data_ref_.request();
         size_t nd = data_buf.shape[0];
@@ -304,7 +316,7 @@ public:
 
         SearcherConfig scfg;
         scfg.searcher_vars_bound_m = 1e9f;
-        scfg.dist_type = DistType::L2Sqr;
+        scfg.dist_type = dist_type_;
 
         std::vector<std::pair<PID, float>> dist_list;
         ivf_->estimate(query_states_[thread_id].query, num_cen_, scfg,
@@ -323,14 +335,15 @@ PYBIND11_MODULE(saq_cpp, m) {
     m.doc() = "SAQ/CAQ C++ bindings (saqlib::IVF wrapper)";
 
     py::class_<PySAQ>(m, "PySAQ")
-        .def(py::init<float, bool, int, bool, bool, float, float>(),
+        .def(py::init<float, bool, int, bool, bool, float, float, const std::string&>(),
              py::arg("avg_bits"),
              py::arg("enable_segmentation") = true,
              py::arg("caq_adj_rd_lmt") = 6,
              py::arg("random_rotation") = true,
              py::arg("use_fastscan") = true,
              py::arg("caq_adj_eps") = 1e-8f,
-             py::arg("vars_bound_m") = 4.0f)
+             py::arg("vars_bound_m") = 4.0f,
+             py::arg("dist_type") = "l2")
         .def("build", &PySAQ::build,
              py::arg("data"),
              py::arg("centroids"),

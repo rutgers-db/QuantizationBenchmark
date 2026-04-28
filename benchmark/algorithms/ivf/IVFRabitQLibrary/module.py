@@ -81,6 +81,8 @@ class IVFRabitQLibrary(BaseQuantizer):
             faiss.omp_set_num_threads(_max_threads())
 
             train_data = np.ascontiguousarray(data, dtype=np.float32)
+            is_ip = self.space in ("ip", "inner_product")
+            cache_metric = "ip" if is_ip else "l2"
 
             if self.nlist == 1:
                 centroids = np.ascontiguousarray(
@@ -88,24 +90,27 @@ class IVFRabitQLibrary(BaseQuantizer):
                 )
             else:
                 fp = data_fingerprint(train_data)
-                ckey = coarse_key(fp, self.nlist, "l2")
+                ckey = coarse_key(fp, self.nlist, cache_metric)
                 cached = load_centroids(ckey)
                 if cached is not None and cached.shape == (self.nlist, self.ndim):
                     centroids = np.ascontiguousarray(cached.astype(np.float32))
                 else:
+                    # For IP, use spherical k-means (matches the official RaBitQ
+                    # ivf.py which trains "IVF{K},Flat" with METRIC_INNER_PRODUCT).
                     kmeans = faiss.Kmeans(
                         d=self.ndim,
                         k=self.nlist,
                         niter=25,
                         verbose=False,
                         seed=1234,
+                        spherical=is_ip,
                     )
                     kmeans.train(train_data)
                     centroids = np.ascontiguousarray(kmeans.centroids.astype(np.float32))
                     save_centroids(ckey, centroids)
 
             self._trained_centroids = centroids
-            self.coarse_index = faiss.IndexFlatL2(self.ndim)
+            self.coarse_index = faiss.IndexFlatIP(self.ndim) if is_ip else faiss.IndexFlatL2(self.ndim)
             self.coarse_index.add(centroids)
 
             self.trained = False

@@ -87,3 +87,19 @@ paper-200-euclidean:
     - topk: 100
       nprobe: [10, 20, 30, 50, 75, 100]
       nrerank: [200, 300, 500, 1000]
+
+laion-768-ip:
+  common:
+    data_bytes: 4
+    ndim: 768
+    nthread: 16
+    space: "ip"
+  build:
+    # nbit=4 fixed for FastScan; nsubvec=192 -> 32x, 384 -> 16x, 768 -> 8x compression
+    nsubvec: [192, 384, 768]
+    nbit: [4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [10, 20, 30, 50, 75, 100]
+      nrerank: [200, 300, 500, 1000]

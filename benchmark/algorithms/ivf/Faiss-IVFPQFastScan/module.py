@@ -29,16 +29,17 @@ class ProductQuantizationFastScanFaiss(BaseQuantizer):
         self.nsubvec = nsubvec
         self.nbit = nbit
         self.bbs = int(bbs)
-        self.coarse_quantizer = faiss.IndexFlatL2(ndim)
+        is_ip = space in ("ip", "inner_product")
+        metric = faiss.METRIC_INNER_PRODUCT if is_ip else faiss.METRIC_L2
+        self.coarse_quantizer = faiss.IndexFlatIP(ndim) if is_ip else faiss.IndexFlatL2(ndim)
         self.nlist = nlist
-        metric = faiss.METRIC_L2 if space == "l2" else faiss.METRIC_INNER_PRODUCT
         self.index = faiss.IndexIVFPQFastScan(
             self.coarse_quantizer, ndim, nlist, nsubvec, nbit, metric, self.bbs
         )
         self.space = space
         self.data_bytes = data_bytes
         self.nthread = int(nthread)
-        self.refine = faiss.IndexFlatL2(self.ndim)
+        self.refine = faiss.IndexFlatIP(self.ndim) if is_ip else faiss.IndexFlatL2(self.ndim)
         self.dc = None
 
     def fit(self, nd: int, data: np.ndarray) -> bool:

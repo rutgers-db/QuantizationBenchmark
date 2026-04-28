@@ -81,6 +81,7 @@ class IVFSAQ(BaseQuantizer):
                 "Make sure the C++ module was built correctly in the Docker image."
             )
 
+        self._dist_type = "ip" if self.space in ("ip", "inner_product") else "l2"
         self.cpp_index = saq_cpp.PySAQ(
             avg_bits=float(nbit),
             enable_segmentation=self.enable_segmentation,
@@ -89,6 +90,7 @@ class IVFSAQ(BaseQuantizer):
             use_fastscan=True,
             caq_adj_eps=1e-8,
             vars_bound_m=vars_bound_m,
+            dist_type=self._dist_type,
         )
 
     def _compute_pca(self, data):
@@ -136,7 +138,8 @@ class IVFSAQ(BaseQuantizer):
                 # with the shared raw-space coarse cache. Cache PCA + centroids
                 # together under an SAQ-specific key so multiple nbit runs over the
                 # same data and nlist reuse the same training output.
-                saq_key = f"saq_pca_{fp}_nlist{self.nlist}_d{self.ndim}"
+                # Distinguish L2 vs IP so spherical-vs-flat k-means don't share a key.
+                saq_key = f"saq_pca_{fp}_nlist{self.nlist}_d{self.ndim}_{self._dist_type}"
                 cached = load_npz(saq_key)
                 if (
                     cached is not None
@@ -158,7 +161,11 @@ class IVFSAQ(BaseQuantizer):
                     # Step 2: Transform training data to PCA space
                     data_pca = self._apply_pca(train_data)
 
-                    # Step 3: Run k-means on PCA-transformed data
+                    # Step 3: Run k-means on PCA-transformed data.
+                    # For IP, use spherical k-means (matches faiss IndexIVF's
+                    # default for METRIC_INNER_PRODUCT; PCA is orthogonal so IP
+                    # is preserved post-rotation).
+                    is_ip = self._dist_type == "ip"
                     if self.nlist == 1:
                         self.coarse_quantizer = np.ascontiguousarray(
                             data_pca.mean(axis=0, keepdims=True).astype(np.float32)
@@ -170,6 +177,7 @@ class IVFSAQ(BaseQuantizer):
                             niter=25,
                             verbose=False,
                             seed=1234,
+                            spherical=is_ip,
                         )
                         kmeans.train(data_pca)
                         self.coarse_quantizer = np.ascontiguousarray(
@@ -185,7 +193,8 @@ class IVFSAQ(BaseQuantizer):
                     )
 
                 # Step 4: Build coarse index for cluster assignment
-                self.coarse_index = faiss.IndexFlatL2(self.ndim)
+                is_ip = self._dist_type == "ip"
+                self.coarse_index = faiss.IndexFlatIP(self.ndim) if is_ip else faiss.IndexFlatL2(self.ndim)
                 self.coarse_index.add(self.coarse_quantizer)
 
                 self.trained = False

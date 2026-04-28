@@ -84,3 +84,16 @@ siftsmall-128-euclidean:
   search:
     - topk: 100
       nrerank: [200, 300, 500, 800, 1000]
+
+laion-768-ip:
+  common:
+    data_bytes: 4
+    ndim: 768
+    nthread: 16
+    space: "ip"
+  build:
+    # bits=1 -> 32x, bits=2 -> 16x, bits=4 -> 8x compression
+    bits: [1, 2, 4]
+  search:
+    - topk: 100
+      nrerank: [200, 300, 500, 800, 1000]

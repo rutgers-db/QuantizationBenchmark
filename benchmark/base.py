@@ -83,23 +83,31 @@ def _parallel_l2_topk(
     queries: np.ndarray,
     topk: int,
     nthread: int,
+    metric: str = "l2",
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Parallel exact-L2 rerank of per-query candidate sets.
+    Parallel exact rerank of per-query candidate sets.
 
     `selected` has shape (nq, nrerank, d); `I` has shape (nq, nrerank) with
     `-1` marking invalid candidates. Returns the top-k ids and distances.
 
+    metric:
+      - "l2": smallest L2 distance wins (invalid -> +inf)
+      - "ip": largest inner product wins (invalid -> -inf, returned distances
+        are inner products, larger-is-better)
+
     Parallelism: split the query axis into `nthread` chunks, process each
     chunk in a worker thread, and pin the BLAS pool to 1 thread inside a
     worker so the outer thread pool and inner BLAS pool don't oversubscribe.
-    The q·c term inside the L2 identity is a batched BLAS matmul, which
-    is the only computation worth parallelizing at this scale.
+    The q·c term is a batched BLAS matmul, the only computation worth
+    parallelizing at this scale.
     """
     nq, nrerank = I.shape
     k = min(int(topk), int(nrerank))
+    is_ip = metric == "ip"
+    fill = -np.inf if is_ip else np.inf
     out_I = np.full((nq, topk), -1, dtype=np.int64)
-    out_D = np.full((nq, topk), np.inf, dtype=np.float32)
+    out_D = np.full((nq, topk), fill, dtype=np.float32)
     if nq == 0 or k <= 0:
         return out_I, out_D
 
@@ -109,12 +117,17 @@ def _parallel_l2_topk(
         C = selected[start:end]
         Qc = Q[start:end]
         Ic = I[start:end]
-        c2 = np.einsum("ijk,ijk->ij", C, C)
-        q2 = np.einsum("ij,ij->i", Qc, Qc)[:, None]
         qc = np.matmul(C, Qc[:, :, None])[:, :, 0]
-        D = np.sqrt(np.maximum(c2 + q2 - 2.0 * qc, 0.0)).astype(np.float32, copy=False)
-        D = np.where(Ic >= 0, D, np.inf)
-        order = np.argsort(D, axis=1)[:, :k]
+        if is_ip:
+            D = qc.astype(np.float32, copy=False)
+            D = np.where(Ic >= 0, D, -np.inf)
+            order = np.argsort(-D, axis=1)[:, :k]
+        else:
+            c2 = np.einsum("ijk,ijk->ij", C, C)
+            q2 = np.einsum("ij,ij->i", Qc, Qc)[:, None]
+            D = np.sqrt(np.maximum(c2 + q2 - 2.0 * qc, 0.0)).astype(np.float32, copy=False)
+            D = np.where(Ic >= 0, D, np.inf)
+            order = np.argsort(D, axis=1)[:, :k]
         out_I[start:end, :k] = np.take_along_axis(Ic, order, axis=1)
         out_D[start:end, :k] = np.take_along_axis(D, order, axis=1)
 
@@ -124,6 +137,11 @@ def _parallel_l2_topk(
         with ThreadPoolExecutor(max_workers=workers) as ex:
             list(ex.map(lambda s: rerank_chunk(s, min(s + step, nq)), range(0, nq, step)))
     return out_I, out_D
+
+
+def _quantizer_metric(quantizer) -> str:
+    space = getattr(quantizer, "space", "l2")
+    return "ip" if space in ("ip", "inner_product") else "l2"
 
 
 class BaseQuantizer(ABC):
@@ -279,7 +297,9 @@ class BaseQuantizer(ABC):
         I, _ = self.query(nq, queries, nrerank, **search_params)
         safe_I = np.where(I >= 0, I, 0)
         selected = data[safe_I].astype(np.float32, copy=False)
-        return _parallel_l2_topk(I, selected, queries, topk, _rerank_nthread(self))
+        return _parallel_l2_topk(
+            I, selected, queries, topk, _rerank_nthread(self), metric=_quantizer_metric(self)
+        )
 
     def prepareRerankCandidates(
         self,
@@ -312,7 +332,9 @@ class BaseQuantizer(ABC):
         (nq, nrerank) and (nq, nrerank, d), parallelized across `nthread`.
         """
         I, selected = prepared_candidates
-        return _parallel_l2_topk(I, selected, queries, topk, _rerank_nthread(self))
+        return _parallel_l2_topk(
+            I, selected, queries, topk, _rerank_nthread(self), metric=_quantizer_metric(self)
+        )
 
 
 class BaseDimReduction(ABC):

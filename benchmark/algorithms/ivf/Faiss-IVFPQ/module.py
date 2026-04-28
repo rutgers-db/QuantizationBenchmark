@@ -26,13 +26,15 @@ class ProductQuantizationFaiss(BaseQuantizer):
         self.ndim = ndim
         self.nsubvec = nsubvec
         self.nbit = nbit
-        self.coarse_quantizer = faiss.IndexFlatL2(ndim)
+        is_ip = space in ("ip", "inner_product")
+        metric = faiss.METRIC_INNER_PRODUCT if is_ip else faiss.METRIC_L2
+        self.coarse_quantizer = faiss.IndexFlatIP(ndim) if is_ip else faiss.IndexFlatL2(ndim)
         self.nlist = nlist
-        self.index = faiss.IndexIVFPQ(self.coarse_quantizer, ndim, nlist, nsubvec, nbit)
+        self.index = faiss.IndexIVFPQ(self.coarse_quantizer, ndim, nlist, nsubvec, nbit, metric)
         self.space = space
         self.data_bytes = data_bytes
         self.nthread = int(nthread)
-        self.refine = faiss.IndexFlatL2(self.ndim)
+        self.refine = faiss.IndexFlatIP(self.ndim) if is_ip else faiss.IndexFlatL2(self.ndim)
         self.dc = None
 
 

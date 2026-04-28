@@ -340,6 +340,17 @@ class BenchmarkRunner:
         self.train_data = np.array(self.hdf5_file['train'])
         self.test_data = np.array(self.hdf5_file['test'])
         self.ground_truth = np.array(self.hdf5_file['neighbors'])
+        # Map dataset distance attr -> quantizer `space` kwarg.
+        # "euclidean" -> "l2", "inner_product"/"ip" -> "ip"; missing -> "l2".
+        raw_distance = self.hdf5_file.attrs.get('distance', 'euclidean')
+        if isinstance(raw_distance, bytes):
+            raw_distance = raw_distance.decode()
+        if raw_distance in ('euclidean', 'l2'):
+            self.space = 'l2'
+        elif raw_distance in ('inner_product', 'ip'):
+            self.space = 'ip'
+        else:
+            raise ValueError(f"Unsupported dataset distance attr: {raw_distance!r}")
         self.distribution_shift_info = None
         if self.distribution_shift_test:
             self.distribution_shift_info = get_distribution_shift_data(
@@ -625,7 +636,9 @@ class BenchmarkRunner:
         Returns:
             List of result dicts, one per search configuration
         """
-        build_params = quantizer_config['build_params']
+        build_params = dict(quantizer_config['build_params'])
+        # Inject dataset-level distance metric unless the config sets it explicitly.
+        build_params.setdefault('space', self.space)
         search_params_list = quantizer_config['search_params_list']
 
         print(f"\n{'='*60}")
