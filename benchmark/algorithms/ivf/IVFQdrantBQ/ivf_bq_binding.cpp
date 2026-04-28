@@ -106,6 +106,12 @@ class PyIVFBQIndex {
         index_->set_num_threads(num_threads_);
     }
 
+    // DB codes are independent of the query-side encoding; switching it
+    // post-build is safe and reuses the existing index.
+    void set_query_encoding(const std::string& qe) {
+        index_->set_query_encoding(parse_query_encoding(qe));
+    }
+
     // Train + encode the residuals, then take ownership of the inverted-list
     // metadata. `residuals` must already be ordered to match list_ids[].
     void build(py::array_t<float, py::array::c_style | py::array::forcecast> residuals,
@@ -177,6 +183,7 @@ class PyIVFBQIndex {
         for (long long qi = 0; qi < static_cast<long long>(nq); ++qi) {
             std::vector<float> residual(d_);
             AlignedQCode qcode(qwords);
+            std::vector<float> list_dists;   // per-list scratch, reused across probes
             std::vector<std::pair<float, std::int64_t>> heap;
             heap.reserve(k);
 
@@ -198,9 +205,13 @@ class PyIVFBQIndex {
 
                 const std::size_t begin = static_cast<std::size_t>(invlist_offsets_[list_no]);
                 const std::size_t end   = static_cast<std::size_t>(invlist_offsets_[list_no + 1]);
-                for (std::size_t pos = begin; pos < end; ++pos) {
-                    const std::int64_t id = invlist_ids_[pos];
-                    const float dist = index_->score_one(qcode.p, pos);
+                const std::size_t list_size = end - begin;
+                if (list_size == 0) continue;
+                if (list_dists.size() < list_size) list_dists.resize(list_size);
+                index_->score_range(qcode.p, begin, end, list_dists.data());
+                for (std::size_t m = 0; m < list_size; ++m) {
+                    const std::int64_t id = invlist_ids_[begin + m];
+                    const float dist = list_dists[m];
                     if (heap.size() < k) {
                         heap.emplace_back(dist, id);
                         if (heap.size() == k) std::make_heap(heap.begin(), heap.end(), heap_cmp);
@@ -259,7 +270,8 @@ PYBIND11_MODULE(ivf_bq_cpp, m) {
              py::arg("encoding")       = 1,
              py::arg("query_encoding") = "same",
              py::arg("metric")         = "l2")
-        .def("set_num_threads",    &PyIVFBQIndex::set_num_threads, py::arg("n"))
+        .def("set_num_threads",    &PyIVFBQIndex::set_num_threads,    py::arg("n"))
+        .def("set_query_encoding", &PyIVFBQIndex::set_query_encoding, py::arg("query_encoding"))
         .def("build",              &PyIVFBQIndex::build,
              py::arg("residuals"), py::arg("list_offsets"), py::arg("list_ids"))
         .def("search_preassigned", &PyIVFBQIndex::search_preassigned,

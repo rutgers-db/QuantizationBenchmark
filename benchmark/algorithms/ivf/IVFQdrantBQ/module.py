@@ -170,6 +170,12 @@ class IVFQdrantBQ(BaseQuantizer):
         faiss.omp_set_num_threads(self.nthread)
         if self.ivf_index is not None:
             self.ivf_index.set_num_threads(self.nthread)
+            # DB codes don't depend on query_encoding, so honor it per
+            # search to avoid rebuilding the index per encoding value.
+            qe = search_params.get("query_encoding", self.query_encoding)
+            if qe != self.query_encoding:
+                self.ivf_index.set_query_encoding(qe)
+                self.query_encoding = qe
         queries = np.ascontiguousarray(queries.astype(np.float32, copy=False))
         coarse_q = queries.copy()
         if self.space == "cosine":
