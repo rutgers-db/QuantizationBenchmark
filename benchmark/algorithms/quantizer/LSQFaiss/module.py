@@ -46,7 +46,12 @@ class LSQFaiss(BaseQuantizer):
         self.ndata = nd
         try:
             self.index.add(self.data)
-            self.dc = self.index.get_distance_computer()
+            # Some metrics don't expose get_distance_computer(); the dc is only
+            # used by graph-traversal hooks, so tolerate failure.
+            try:
+                self.dc = self.index.get_distance_computer()
+            except Exception:
+                self.dc = None
         except Exception as e:
             print(f"Add error: {e}")
             return False

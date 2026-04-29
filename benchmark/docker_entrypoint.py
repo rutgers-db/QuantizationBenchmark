@@ -15,7 +15,7 @@ from typing import Any, Dict
 from benchmark.base import BaseQuantizer
 
 
-QUERY_TIMING_RUNS = 5
+QUERY_TIMING_RUNS = 3
 
 
 def timed_trimmed_mean(fn, n_runs: int = QUERY_TIMING_RUNS):
