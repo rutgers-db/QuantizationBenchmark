@@ -77,7 +77,17 @@ class ProductQuantizationFaiss(BaseQuantizer):
             self.index.add(self.data)
             self.index.make_direct_map(True)
             self.refine.add(self.data)
-            self.dc = self.index.get_distance_computer()
+            # IndexIVFPQ exposes get_distance_computer() only for METRIC_L2.
+            # In IP mode it raises; the dc is just for graph traversal hooks
+            # (set_query/estimate_distance), which the IVF search path doesn't
+            # need, so swallow and leave dc=None.
+            try:
+                self.dc = self.index.get_distance_computer()
+            except Exception:
+                # faiss may raise FaissException (or another SWIG-wrapped type)
+                # when the index doesn't expose a per-element distance computer
+                # for this metric. Catch broadly.
+                self.dc = None
         except Exception as e:
             print(f"Add error: {e}")
             return False

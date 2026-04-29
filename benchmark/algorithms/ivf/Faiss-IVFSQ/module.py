@@ -93,7 +93,16 @@ class ScalarQuantizationIVFFaiss(BaseQuantizer):
             self.index.add(self.data)
             self.index.make_direct_map()
             self.refine.add(self.data)
-            self.dc = self.index.get_distance_computer()
+            # IndexIVFScalarQuantizer's get_distance_computer() may be metric-
+            # specific; the dc is only used for graph traversal hooks, so
+            # tolerate failure and leave dc=None for IVF-only paths.
+            try:
+                self.dc = self.index.get_distance_computer()
+            except Exception:
+                # faiss may raise FaissException (or another SWIG-wrapped type)
+                # when the index doesn't expose a per-element distance computer
+                # for this metric. Catch broadly.
+                self.dc = None
         except Exception as e:
             print(f"Add error: {e}")
             return False

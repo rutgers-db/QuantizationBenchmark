@@ -86,7 +86,16 @@ class FaissOPQIVFPQ(BaseQuantizer):
             self.index.reset()
             self.index.add(self.data)
             self.index_ivf.make_direct_map()
-            self.dc = self.index.get_distance_computer()
+            # IndexIVFPQ exposes get_distance_computer() only for METRIC_L2;
+            # in IP mode it raises. The dc is only for graph traversal hooks,
+            # not the IVF search path, so tolerate failure.
+            try:
+                self.dc = self.index.get_distance_computer()
+            except Exception:
+                # faiss may raise FaissException (or RuntimeError, or another
+                # SWIG-wrapped type) when the underlying index doesn't expose
+                # a per-element distance computer for this metric. Catch broadly.
+                self.dc = None
         except Exception as exc:
             print(f"Add error: {exc}")
             return False

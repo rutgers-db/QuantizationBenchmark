@@ -81,6 +81,12 @@ class QdrantBinaryQuantization(BaseQuantizer):
               **search_params) -> Tuple[np.ndarray, np.ndarray]:
         if not self.trained:
             raise RuntimeError("Index not trained. Call fit() or train()+add() first.")
+        # query_encoding is a search-time knob: DB codes don't depend on it,
+        # so sweeping it at search saves a rebuild per value.
+        qe = search_params.get("query_encoding", self.query_encoding)
+        if qe != self.query_encoding:
+            self.cpp_index.set_query_encoding(qe)
+            self.query_encoding = qe
         queries = np.ascontiguousarray(queries, dtype=np.float32)
         I, D = self.cpp_index.search(queries, topk)
         return I, D
