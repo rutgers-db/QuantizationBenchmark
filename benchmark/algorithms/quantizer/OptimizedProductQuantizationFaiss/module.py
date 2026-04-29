@@ -54,7 +54,13 @@ class OptimizedProductQuantizationFaiss(BaseQuantizer):
         self.ndata = nd
         try:
             self.index.add(self.data)
-            self.dc = self.PQIndex.get_distance_computer()
+            # Some metrics (e.g. METRIC_INNER_PRODUCT) don't expose
+            # get_distance_computer(); the dc is only used by graph-traversal
+            # hooks, so tolerate failure.
+            try:
+                self.dc = self.PQIndex.get_distance_computer()
+            except Exception:
+                self.dc = None
         except Exception as e:
             print(f"Add error: {e}")
             return False
