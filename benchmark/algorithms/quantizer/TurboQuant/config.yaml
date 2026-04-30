@@ -39,12 +39,12 @@ audio-128-euclidean:
     mode: "mse"
     use_data_centroid: true
   build:
-    bitwidth: [1,2,4]
+    bitwidth: [4]
     nlist: [1]
   search:
     - topk: 100
       nprobe: [1]
-      nrerank: [200, 300, 500, 800, 1000]
+      # nrerank: [200, 300, 500, 800, 1000]
 
 video-1024-euclidean:
   common:
@@ -55,12 +55,12 @@ video-1024-euclidean:
     mode: "mse"
     use_data_centroid: true
   build:
-    bitwidth: [1,2,4]
+    bitwidth: [4]
     nlist: [1]
   search:
     - topk: 100
       nprobe: [1]
-      nrerank: [200, 300, 500, 800, 1000]
+      # nrerank: [200, 300, 500, 800, 1000]
 
 text2image-200-euclidean:
   common:
@@ -71,12 +71,12 @@ text2image-200-euclidean:
     mode: "mse"
     use_data_centroid: true
   build:
-    bitwidth: [1,2,4]
+    bitwidth: [4]
     nlist: [1]
   search:
     - topk: 100
       nprobe: [1]
-      nrerank: [200, 300, 500, 800, 1000]
+      # nrerank: [200, 300, 500, 800, 1000]
 
 paper-200-euclidean:
   common:
@@ -116,7 +116,7 @@ laion-768-ip:
     ndim: 768
     nthread: 16
     space: "ip"
-    mode: "ip"
+    mode: "mse"
     use_data_centroid: true
   build:
     # IP mode: bitwidth-1 bits for centroid + 1 bit QJL = bitwidth bits total.

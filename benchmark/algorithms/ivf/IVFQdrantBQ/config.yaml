@@ -16,7 +16,7 @@ sift-128-euclidean:
   search:
     - topk: 100
       query_encoding: ["same", "scalar4", "scalar8"]
-      nprobe: [10, 20, 30, 50, 75, 100]
+      nprobe: [100]
       nrerank: [200, 300, 500, 1000]
 
 gist-960-euclidean:
@@ -31,7 +31,7 @@ gist-960-euclidean:
   search:
     - topk: 100
       query_encoding: ["same", "scalar4", "scalar8"]
-      nprobe: [10, 20, 30, 50, 75, 100]
+      nprobe: [100]
       nrerank: [200, 300, 500, 1000]
 
 audio-128-euclidean:
@@ -41,13 +41,13 @@ audio-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    encoding: [1, 2]
+    encoding: [1]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      query_encoding: ["same", "scalar4", "scalar8"]
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      query_encoding: ["scalar8"]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
 
 video-1024-euclidean:
   common:
@@ -56,13 +56,13 @@ video-1024-euclidean:
     nthread: 16
     space: "l2"
   build:
-    encoding: [1, 2]
+    encoding: [1]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      query_encoding: ["same", "scalar4", "scalar8"]
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      query_encoding: ["scalar8"]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
 
 text2image-200-euclidean:
   common:
@@ -71,13 +71,13 @@ text2image-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    encoding: [1, 2]
+    encoding: [1]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      query_encoding: ["same", "scalar4", "scalar8"]
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      query_encoding: ["scalar8"]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
 
 paper-200-euclidean:
   common:
@@ -91,7 +91,7 @@ paper-200-euclidean:
   search:
     - topk: 100
       query_encoding: ["same", "scalar4", "scalar8"]
-      nprobe: [10, 20, 30, 50, 75, 100]
+      nprobe: [100]
       nrerank: [200, 300, 500, 1000]
 
 laion-768-ip:
@@ -102,10 +102,10 @@ laion-768-ip:
     nthread: 16
     space: "ip"
   build:
-    encoding: [1, 2]
-    query_encoding: ["same", "scalar4", "scalar8"]
+    encoding: [1]
+    query_encoding: ["scalar8"]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]

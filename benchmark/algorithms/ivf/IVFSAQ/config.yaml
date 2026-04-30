@@ -23,7 +23,7 @@ gist-960-euclidean:
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
+      nprobe: [100]
       nrerank: [200, 300, 500, 1000]
 
 audio-128-euclidean:
@@ -33,12 +33,12 @@ audio-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [1,4]
+    nbit: [4]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
 
 video-1024-euclidean:
   common:
@@ -47,12 +47,12 @@ video-1024-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [1,4]
+    nbit: [4]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
 
 text2image-200-euclidean:
   common:
@@ -61,12 +61,12 @@ text2image-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [1,4]
+    nbit: [4]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
 
 paper-200-euclidean:
   common:
@@ -79,7 +79,7 @@ paper-200-euclidean:
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
+      nprobe: [100]
       nrerank: [200, 300, 500, 1000]
 
 laion-768-ip:
@@ -90,9 +90,9 @@ laion-768-ip:
     space: "ip"
   build:
     # nbit=1 -> 32x, nbit=2 -> 16x, nbit=4 -> 8x compression
-    nbit: [1, 2, 4]
+    nbit: [4]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
