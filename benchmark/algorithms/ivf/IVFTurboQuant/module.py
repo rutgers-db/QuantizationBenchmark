@@ -77,8 +77,8 @@ class IVFTurboQuant(BaseQuantizer):
         # IP datasets require IP-mode indexing (QJL residual + IP search kernel).
         # Auto-promote when the dataset metric is IP so callers don't have to
         # pass mode explicitly via config.
-        if space in ("ip", "inner_product"):
-            mode = "ip"
+        # if space in ("ip", "inner_product"):
+        #     mode = "ip"
         mode_int          = 0 if mode == "mse" else 1
         rotation_type_int = 0 if rotation_type == "hadamard" else 1
 
