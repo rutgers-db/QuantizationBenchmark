@@ -21,37 +21,90 @@
     "results": [
       {
         "dataset": "laion-768-ip",
-        "quantizer": "SAQ",
+        "quantizer": "IVFSAQ",
         "dimreduction": null,
         "quantizer_config": {
           "build_params": {
             "data_bytes": 4,
             "nbit": 4,
             "ndim": 768,
-            "nlist": 1,
+            "nlist": 1024,
             "nthread": 16,
             "space": "ip"
           },
           "search_params": {
             "topk": 100,
-            "nprobe": 1
+            "nprobe": 100
           }
         },
         "status": "success",
         "search_params": {
           "topk": 100,
-          "nprobe": 1
+          "nprobe": 100
         },
-        "training_time": 0.1381382942199707,
-        "add_time": 101.11088943481445,
-        "quantizer_memory": 19499124.0,
+        "training_time": 4.244524240493774,
+        "add_time": 49.80395698547363,
+        "quantizer_memory": 22486044.0,
         "compression_rate": 0.125,
         "mse": 0.0,
-        "query_time": 0.08362102508544922,
-        "queries_per_second": 11958.714916232337,
-        "recall": 9e-05,
-        "map": 8.999999999999999e-05,
-        "recall@1": 0.0,
+        "query_time": 0.07201910018920898,
+        "queries_per_second": 13885.205415963188,
+        "recall": 0.00821,
+        "map": 0.008192638888888847,
+        "recall@1": 0.023,
+        "rerank_results": [],
+        "experiment": "distribution_shift",
+        "distribution_shift": {
+          "group_name": "distribution_shift_k100_cnt1_size10k",
+          "k": 100,
+          "seed": 42,
+          "selected_cluster_count": 1,
+          "selected_cluster_ids": [
+            8
+          ],
+          "selected_cluster_id": 8,
+          "selected_cluster_size": 18533,
+          "selected_cluster_fraction": 0.0092665,
+          "candidate_pool_size": 18533,
+          "candidate_pool_fraction": 0.0092665,
+          "shift_sample_size": 10000,
+          "shift_sample_fraction": 0.005,
+          "js_divergence": 0.9619929006934587
+        }
+      },
+      {
+        "dataset": "laion-768-ip",
+        "quantizer": "IVFSAQ",
+        "dimreduction": null,
+        "quantizer_config": {
+          "build_params": {
+            "data_bytes": 4,
+            "nbit": 4,
+            "ndim": 768,
+            "nlist": 4096,
+            "nthread": 16,
+            "space": "ip"
+          },
+          "search_params": {
+            "topk": 100,
+            "nprobe": 100
+          }
+        },
+        "status": "success",
+        "search_params": {
+          "topk": 100,
+          "nprobe": 100
+        },
+        "training_time": 15.07340121269226,
+        "add_time": 133.54298663139343,
+        "quantizer_memory": 22201044.0,
+        "compression_rate": 0.125,
+        "mse": 0.0,
+        "query_time": 0.0991048812866211,
+        "queries_per_second": 10090.320345653827,
+        "recall": 0.01587,
+        "map": 0.015849904761904673,
+        "recall@1": 0.037,
         "rerank_results": [],
         "experiment": "distribution_shift",
         "distribution_shift": {
@@ -100,37 +153,94 @@
     "results": [
       {
         "dataset": "laion-768-ip",
-        "quantizer": "SAQ",
+        "quantizer": "IVFSAQ",
         "dimreduction": null,
         "quantizer_config": {
           "build_params": {
             "data_bytes": 4,
             "nbit": 4,
             "ndim": 768,
-            "nlist": 1,
+            "nlist": 1024,
             "nthread": 16,
             "space": "ip"
           },
           "search_params": {
             "topk": 100,
-            "nprobe": 1
+            "nprobe": 100
           }
         },
         "status": "success",
         "search_params": {
           "topk": 100,
-          "nprobe": 1
+          "nprobe": 100
         },
-        "training_time": 0.13567090034484863,
-        "add_time": 101.12664365768433,
-        "quantizer_memory": 19498820.0,
+        "training_time": 4.274500370025635,
+        "add_time": 49.40570092201233,
+        "quantizer_memory": 22634980.0,
         "compression_rate": 0.125,
         "mse": 0.0,
-        "query_time": 0.08377981185913086,
-        "queries_per_second": 11936.049721398529,
-        "recall": 9e-05,
-        "map": 8.999999999999999e-05,
-        "recall@1": 0.0,
+        "query_time": 0.07802963256835938,
+        "queries_per_second": 12815.644096797849,
+        "recall": 0.00927,
+        "map": 0.00926487330316737,
+        "recall@1": 0.017,
+        "rerank_results": [],
+        "experiment": "distribution_shift",
+        "distribution_shift": {
+          "group_name": "distribution_shift_k100_cnt5_size10k",
+          "k": 100,
+          "seed": 42,
+          "selected_cluster_count": 5,
+          "selected_cluster_ids": [
+            8,
+            43,
+            64,
+            75,
+            99
+          ],
+          "selected_cluster_id": null,
+          "selected_cluster_size": null,
+          "selected_cluster_fraction": null,
+          "candidate_pool_size": 56606,
+          "candidate_pool_fraction": 0.028303,
+          "shift_sample_size": 10000,
+          "shift_sample_fraction": 0.005,
+          "js_divergence": 0.9065183429259305
+        }
+      },
+      {
+        "dataset": "laion-768-ip",
+        "quantizer": "IVFSAQ",
+        "dimreduction": null,
+        "quantizer_config": {
+          "build_params": {
+            "data_bytes": 4,
+            "nbit": 4,
+            "ndim": 768,
+            "nlist": 4096,
+            "nthread": 16,
+            "space": "ip"
+          },
+          "search_params": {
+            "topk": 100,
+            "nprobe": 100
+          }
+        },
+        "status": "success",
+        "search_params": {
+          "topk": 100,
+          "nprobe": 100
+        },
+        "training_time": 15.107383489608765,
+        "add_time": 134.38528108596802,
+        "quantizer_memory": 22024016.0,
+        "compression_rate": 0.125,
+        "mse": 0.0,
+        "query_time": 0.09004402160644531,
+        "queries_per_second": 11105.679001885233,
+        "recall": 0.01815,
+        "map": 0.01811444805194801,
+        "recall@1": 0.043,
         "rerank_results": [],
         "experiment": "distribution_shift",
         "distribution_shift": {
@@ -188,37 +298,99 @@
     "results": [
       {
         "dataset": "laion-768-ip",
-        "quantizer": "SAQ",
+        "quantizer": "IVFSAQ",
         "dimreduction": null,
         "quantizer_config": {
           "build_params": {
             "data_bytes": 4,
             "nbit": 4,
             "ndim": 768,
-            "nlist": 1,
+            "nlist": 1024,
             "nthread": 16,
             "space": "ip"
           },
           "search_params": {
             "topk": 100,
-            "nprobe": 1
+            "nprobe": 100
           }
         },
         "status": "success",
         "search_params": {
           "topk": 100,
-          "nprobe": 1
+          "nprobe": 100
         },
-        "training_time": 0.1671602725982666,
-        "add_time": 99.0507709980011,
-        "quantizer_memory": 19498888.0,
+        "training_time": 4.1997926235198975,
+        "add_time": 50.87261962890625,
+        "quantizer_memory": 22592880.0,
         "compression_rate": 0.125,
         "mse": 0.0,
-        "query_time": 0.08923983573913574,
-        "queries_per_second": 11205.757963553202,
-        "recall": 9e-05,
-        "map": 8.999999999999999e-05,
-        "recall@1": 0.0,
+        "query_time": 0.06977057456970215,
+        "queries_per_second": 14332.689764522158,
+        "recall": 0.0108,
+        "map": 0.010784681547618974,
+        "recall@1": 0.021,
+        "rerank_results": [],
+        "experiment": "distribution_shift",
+        "distribution_shift": {
+          "group_name": "distribution_shift_k100_cnt10_size10k",
+          "k": 100,
+          "seed": 42,
+          "selected_cluster_count": 10,
+          "selected_cluster_ids": [
+            8,
+            9,
+            19,
+            41,
+            60,
+            68,
+            71,
+            82,
+            94,
+            96
+          ],
+          "selected_cluster_id": null,
+          "selected_cluster_size": null,
+          "selected_cluster_fraction": null,
+          "candidate_pool_size": 99065,
+          "candidate_pool_fraction": 0.0495325,
+          "shift_sample_size": 10000,
+          "shift_sample_fraction": 0.005,
+          "js_divergence": 0.8560534366969614
+        }
+      },
+      {
+        "dataset": "laion-768-ip",
+        "quantizer": "IVFSAQ",
+        "dimreduction": null,
+        "quantizer_config": {
+          "build_params": {
+            "data_bytes": 4,
+            "nbit": 4,
+            "ndim": 768,
+            "nlist": 4096,
+            "nthread": 16,
+            "space": "ip"
+          },
+          "search_params": {
+            "topk": 100,
+            "nprobe": 100
+          }
+        },
+        "status": "success",
+        "search_params": {
+          "topk": 100,
+          "nprobe": 100
+        },
+        "training_time": 15.057176113128662,
+        "add_time": 132.0356056690216,
+        "quantizer_memory": 22197528.0,
+        "compression_rate": 0.125,
+        "mse": 0.0,
+        "query_time": 0.09538388252258301,
+        "queries_per_second": 10483.951518363083,
+        "recall": 0.02153,
+        "map": 0.021487006156518842,
+        "recall@1": 0.045,
         "rerank_results": [],
         "experiment": "distribution_shift",
         "distribution_shift": {
@@ -291,37 +463,109 @@
     "results": [
       {
         "dataset": "laion-768-ip",
-        "quantizer": "SAQ",
+        "quantizer": "IVFSAQ",
         "dimreduction": null,
         "quantizer_config": {
           "build_params": {
             "data_bytes": 4,
             "nbit": 4,
             "ndim": 768,
-            "nlist": 1,
+            "nlist": 1024,
             "nthread": 16,
             "space": "ip"
           },
           "search_params": {
             "topk": 100,
-            "nprobe": 1
+            "nprobe": 100
           }
         },
         "status": "success",
         "search_params": {
           "topk": 100,
-          "nprobe": 1
+          "nprobe": 100
         },
-        "training_time": 0.15295720100402832,
-        "add_time": 99.31552505493164,
-        "quantizer_memory": 19498772.0,
+        "training_time": 4.184496641159058,
+        "add_time": 47.216307401657104,
+        "quantizer_memory": 22426260.0,
         "compression_rate": 0.125,
         "mse": 0.0,
-        "query_time": 0.08928203582763672,
-        "queries_per_second": 11200.46144479219,
-        "recall": 9e-05,
-        "map": 8.999999999999999e-05,
-        "recall@1": 0.0,
+        "query_time": 0.06563496589660645,
+        "queries_per_second": 15235.781512788193,
+        "recall": 0.01582,
+        "map": 0.015751902046783523,
+        "recall@1": 0.026,
+        "rerank_results": [],
+        "experiment": "distribution_shift",
+        "distribution_shift": {
+          "group_name": "distribution_shift_k100_cnt20_size10k",
+          "k": 100,
+          "seed": 42,
+          "selected_cluster_count": 20,
+          "selected_cluster_ids": [
+            7,
+            8,
+            12,
+            17,
+            36,
+            45,
+            47,
+            49,
+            54,
+            61,
+            63,
+            68,
+            71,
+            73,
+            75,
+            83,
+            84,
+            86,
+            89,
+            94
+          ],
+          "selected_cluster_id": null,
+          "selected_cluster_size": null,
+          "selected_cluster_fraction": null,
+          "candidate_pool_size": 410340,
+          "candidate_pool_fraction": 0.20517,
+          "shift_sample_size": 10000,
+          "shift_sample_fraction": 0.005,
+          "js_divergence": 0.6034500011053814
+        }
+      },
+      {
+        "dataset": "laion-768-ip",
+        "quantizer": "IVFSAQ",
+        "dimreduction": null,
+        "quantizer_config": {
+          "build_params": {
+            "data_bytes": 4,
+            "nbit": 4,
+            "ndim": 768,
+            "nlist": 4096,
+            "nthread": 16,
+            "space": "ip"
+          },
+          "search_params": {
+            "topk": 100,
+            "nprobe": 100
+          }
+        },
+        "status": "success",
+        "search_params": {
+          "topk": 100,
+          "nprobe": 100
+        },
+        "training_time": 15.159736394882202,
+        "add_time": 134.09151577949524,
+        "quantizer_memory": 21917088.0,
+        "compression_rate": 0.125,
+        "mse": 0.0,
+        "query_time": 0.08711814880371094,
+        "queries_per_second": 11478.664477285167,
+        "recall": 0.03701,
+        "map": 0.03676115077191004,
+        "recall@1": 0.081,
         "rerank_results": [],
         "experiment": "distribution_shift",
         "distribution_shift": {
@@ -434,37 +678,139 @@
     "results": [
       {
         "dataset": "laion-768-ip",
-        "quantizer": "SAQ",
+        "quantizer": "IVFSAQ",
         "dimreduction": null,
         "quantizer_config": {
           "build_params": {
             "data_bytes": 4,
             "nbit": 4,
             "ndim": 768,
-            "nlist": 1,
+            "nlist": 1024,
             "nthread": 16,
             "space": "ip"
           },
           "search_params": {
             "topk": 100,
-            "nprobe": 1
+            "nprobe": 100
           }
         },
         "status": "success",
         "search_params": {
           "topk": 100,
-          "nprobe": 1
+          "nprobe": 100
         },
-        "training_time": 0.14096856117248535,
-        "add_time": 99.13339257240295,
-        "quantizer_memory": 19499288.0,
+        "training_time": 4.206647157669067,
+        "add_time": 47.590176820755005,
+        "quantizer_memory": 22382836.0,
         "compression_rate": 0.125,
         "mse": 0.0,
-        "query_time": 0.08929896354675293,
-        "queries_per_second": 11198.33825928388,
-        "recall": 9e-05,
-        "map": 8.999999999999999e-05,
-        "recall@1": 0.0,
+        "query_time": 0.06692266464233398,
+        "queries_per_second": 14942.620789899322,
+        "recall": 0.01633,
+        "map": 0.01597446710738285,
+        "recall@1": 0.029,
+        "rerank_results": [],
+        "experiment": "distribution_shift",
+        "distribution_shift": {
+          "group_name": "distribution_shift_k100_cnt50_size10k",
+          "k": 100,
+          "seed": 42,
+          "selected_cluster_count": 50,
+          "selected_cluster_ids": [
+            4,
+            5,
+            6,
+            7,
+            8,
+            11,
+            13,
+            15,
+            18,
+            23,
+            24,
+            26,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            40,
+            43,
+            46,
+            48,
+            51,
+            54,
+            56,
+            57,
+            58,
+            60,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            72,
+            73,
+            74,
+            75,
+            77,
+            79,
+            83,
+            84,
+            85,
+            87,
+            89,
+            93,
+            96,
+            99
+          ],
+          "selected_cluster_id": null,
+          "selected_cluster_size": null,
+          "selected_cluster_fraction": null,
+          "candidate_pool_size": 838396,
+          "candidate_pool_fraction": 0.419198,
+          "shift_sample_size": 10000,
+          "shift_sample_fraction": 0.005,
+          "js_divergence": 0.37902790127704067
+        }
+      },
+      {
+        "dataset": "laion-768-ip",
+        "quantizer": "IVFSAQ",
+        "dimreduction": null,
+        "quantizer_config": {
+          "build_params": {
+            "data_bytes": 4,
+            "nbit": 4,
+            "ndim": 768,
+            "nlist": 4096,
+            "nthread": 16,
+            "space": "ip"
+          },
+          "search_params": {
+            "topk": 100,
+            "nprobe": 100
+          }
+        },
+        "status": "success",
+        "search_params": {
+          "topk": 100,
+          "nprobe": 100
+        },
+        "training_time": 15.05028247833252,
+        "add_time": 133.01956748962402,
+        "quantizer_memory": 22019176.0,
+        "compression_rate": 0.125,
+        "mse": 0.0,
+        "query_time": 0.0961298942565918,
+        "queries_per_second": 10402.591282694855,
+        "recall": 0.03746,
+        "map": 0.037072189275173195,
+        "recall@1": 0.076,
         "rerank_results": [],
         "experiment": "distribution_shift",
         "distribution_shift": {
@@ -657,37 +1003,189 @@
     "results": [
       {
         "dataset": "laion-768-ip",
-        "quantizer": "SAQ",
+        "quantizer": "IVFSAQ",
         "dimreduction": null,
         "quantizer_config": {
           "build_params": {
             "data_bytes": 4,
             "nbit": 4,
             "ndim": 768,
-            "nlist": 1,
+            "nlist": 1024,
             "nthread": 16,
             "space": "ip"
           },
           "search_params": {
             "topk": 100,
-            "nprobe": 1
+            "nprobe": 100
           }
         },
         "status": "success",
         "search_params": {
           "topk": 100,
-          "nprobe": 1
+          "nprobe": 100
         },
-        "training_time": 0.13627076148986816,
-        "add_time": 98.95852947235107,
-        "quantizer_memory": 19498784.0,
+        "training_time": 4.191572904586792,
+        "add_time": 47.16038656234741,
+        "quantizer_memory": 22176824.0,
         "compression_rate": 0.125,
         "mse": 0.0,
-        "query_time": 0.08907961845397949,
-        "queries_per_second": 11225.912474205557,
-        "recall": 9e-05,
-        "map": 8.999999999999999e-05,
-        "recall@1": 0.0,
+        "query_time": 0.06473326683044434,
+        "queries_per_second": 15448.007631366685,
+        "recall": 0.02044,
+        "map": 0.02019276404972221,
+        "recall@1": 0.027,
+        "rerank_results": [],
+        "experiment": "distribution_shift",
+        "distribution_shift": {
+          "group_name": "distribution_shift_k100_cnt100_size10k",
+          "k": 100,
+          "seed": 42,
+          "selected_cluster_count": 100,
+          "selected_cluster_ids": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            74,
+            75,
+            76,
+            77,
+            78,
+            79,
+            80,
+            81,
+            82,
+            83,
+            84,
+            85,
+            86,
+            87,
+            88,
+            89,
+            90,
+            91,
+            92,
+            93,
+            94,
+            95,
+            96,
+            97,
+            98,
+            99
+          ],
+          "selected_cluster_id": null,
+          "selected_cluster_size": null,
+          "selected_cluster_fraction": null,
+          "candidate_pool_size": 2000000,
+          "candidate_pool_fraction": 1.0,
+          "shift_sample_size": 10000,
+          "shift_sample_fraction": 0.005,
+          "js_divergence": 0.001479050924700733
+        }
+      },
+      {
+        "dataset": "laion-768-ip",
+        "quantizer": "IVFSAQ",
+        "dimreduction": null,
+        "quantizer_config": {
+          "build_params": {
+            "data_bytes": 4,
+            "nbit": 4,
+            "ndim": 768,
+            "nlist": 4096,
+            "nthread": 16,
+            "space": "ip"
+          },
+          "search_params": {
+            "topk": 100,
+            "nprobe": 100
+          }
+        },
+        "status": "success",
+        "search_params": {
+          "topk": 100,
+          "nprobe": 100
+        },
+        "training_time": 15.05547046661377,
+        "add_time": 133.6224274635315,
+        "quantizer_memory": 21527392.0,
+        "compression_rate": 0.125,
+        "mse": 0.0,
+        "query_time": 0.09584259986877441,
+        "queries_per_second": 10433.773722428003,
+        "recall": 0.04394,
+        "map": 0.0435458697325357,
+        "recall@1": 0.083,
         "rerank_results": [],
         "experiment": "distribution_shift",
         "distribution_shift": {
