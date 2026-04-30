@@ -14,12 +14,13 @@ from benchmark.datasets import get_dataset
 DATASET = None
 
 KNOWN_DATASETS = [
-    "audio-128-euclidean",
-    "gist-960-euclidean",
-    "paper-200-euclidean",
-    "sift-128-euclidean",
-    "text2image-200-euclidean",
-    "video-1024-euclidean",
+    # "audio-128-euclidean",
+    # "gist-960-euclidean",
+    # "paper-200-euclidean",
+    # "sift-128-euclidean",
+    # "text2image-200-euclidean",
+    # "video-1024-euclidean",
+    "laion-768-ip",
 ]
 
 # k values for LID estimation (Levina-Bickel MLE)

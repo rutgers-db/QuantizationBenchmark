@@ -27,7 +27,7 @@ gist-960-euclidean:
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
+      nprobe: [100]
       nrerank: [200, 300, 500, 1000]
 
 audio-128-euclidean:
@@ -39,12 +39,12 @@ audio-128-euclidean:
     mode: "mse"
     use_data_centroid: true
   build:
-    bitwidth: [1,4]
+    bitwidth: [4]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
 
 video-1024-euclidean:
   common:
@@ -55,12 +55,12 @@ video-1024-euclidean:
     mode: "mse"
     use_data_centroid: true
   build:
-    bitwidth: [1,4]
+    bitwidth: [4]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
 
 text2image-200-euclidean:
   common:
@@ -71,12 +71,12 @@ text2image-200-euclidean:
     mode: "mse"
     use_data_centroid: true
   build:
-    bitwidth: [1,4]
+    bitwidth: [4]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
 
 paper-200-euclidean:
   common:
@@ -91,7 +91,7 @@ paper-200-euclidean:
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
+      nprobe: [100]
       nrerank: [200, 300, 500, 1000]
 
 siftsmall-128-euclidean:
@@ -107,5 +107,23 @@ siftsmall-128-euclidean:
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
+      nprobe: [100]
       nrerank: [200, 300, 500, 1000]
+
+laion-768-ip:
+  common:
+    data_bytes: 4
+    ndim: 768
+    nthread: 16
+    space: "ip"
+    mode: "mse"
+    use_data_centroid: true
+  build:
+    # IP mode: bitwidth-1 bits for centroid + 1 bit QJL = bitwidth bits total.
+    # bitwidth=1 -> 32x, bitwidth=2 -> 16x, bitwidth=4 -> 8x compression.
+    bitwidth: [4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]

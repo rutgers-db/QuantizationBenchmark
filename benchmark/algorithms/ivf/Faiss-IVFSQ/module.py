@@ -44,16 +44,17 @@ class ScalarQuantizationIVFFaiss(BaseQuantizer):
             raise ValueError(f"Unsupported nbit value: {nbit}. Supported values are 4, 6, 8, 16")
 
         # Create coarse quantizer (for IVF clustering)
-        self.coarse_quantizer = faiss.IndexFlatL2(ndim)
+        is_ip = space in ("ip", "inner_product")
+        metric = faiss.METRIC_INNER_PRODUCT if is_ip else faiss.METRIC_L2
+        self.coarse_quantizer = faiss.IndexFlatIP(ndim) if is_ip else faiss.IndexFlatL2(ndim)
 
         # Create IVF + Scalar Quantization index
-        metric = faiss.METRIC_L2 if space == "l2" else faiss.METRIC_INNER_PRODUCT
         self.index = faiss.IndexIVFScalarQuantizer(self.coarse_quantizer, ndim, nlist, qtype, metric)
 
         self.space = space
         self.data_bytes = data_bytes
         self.nthread = int(nthread)
-        self.refine = faiss.IndexFlatL2(self.ndim)
+        self.refine = faiss.IndexFlatIP(self.ndim) if is_ip else faiss.IndexFlatL2(self.ndim)
         self.dc = None
 
 
@@ -92,7 +93,16 @@ class ScalarQuantizationIVFFaiss(BaseQuantizer):
             self.index.add(self.data)
             self.index.make_direct_map()
             self.refine.add(self.data)
-            self.dc = self.index.get_distance_computer()
+            # IndexIVFScalarQuantizer's get_distance_computer() may be metric-
+            # specific; the dc is only used for graph traversal hooks, so
+            # tolerate failure and leave dc=None for IVF-only paths.
+            try:
+                self.dc = self.index.get_distance_computer()
+            except Exception:
+                # faiss may raise FaissException (or another SWIG-wrapped type)
+                # when the index doesn't expose a per-element distance computer
+                # for this metric. Catch broadly.
+                self.dc = None
         except Exception as e:
             print(f"Add error: {e}")
             return False

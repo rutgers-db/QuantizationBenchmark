@@ -8,6 +8,7 @@
 #include <limits>
 #include <queue>
 #include <stdexcept>
+#include <vector>
 
 #if defined(__x86_64__) || defined(_M_X64)
     #include <immintrin.h>
@@ -25,6 +26,7 @@ namespace bq {
 namespace {
 
 constexpr size_t kAlign = 64;
+constexpr size_t kBlock = 8;   // B: vectors per lane-interleaved storage block
 
 uint64_t* aligned_alloc_words(size_t n_words) {
     if (n_words == 0) return nullptr;
@@ -49,8 +51,6 @@ void aligned_free_words(uint64_t* p) {
 #endif
 }
 
-inline size_t round_up(size_t x, size_t m) { return (x + m - 1) / m * m; }
-
 } // anonymous
 
 // ============================================================
@@ -65,8 +65,7 @@ KernelChoice detect_kernel() {
     __builtin_cpu_init();
     if (__builtin_cpu_supports("avx512vpopcntdq")
         && __builtin_cpu_supports("avx512f")
-        && __builtin_cpu_supports("avx512vl"))  // needed for 256-bit popcnt_epi64
-    {
+        && __builtin_cpu_supports("avx512vl")) {
         return KernelChoice::AVX512VPopcnt;
     }
     if (__builtin_cpu_supports("avx2")) {
@@ -89,25 +88,11 @@ Kernel active_kernel() {
 }
 
 // ============================================================
-// Symmetric kernel: plain XOR + popcount over n_words (multiple of 8).
-// Used when query_encoding == SameAsStorage.
+// AVX2 popcount helper (64-bit-lane popcount via byte LUT + psadbw).
 // ============================================================
-namespace {
-
-inline int32_t xor_popcnt_scalar(const uint64_t* __restrict a,
-                                 const uint64_t* __restrict b,
-                                 size_t n_words) {
-    uint64_t acc = 0;
-    for (size_t i = 0; i < n_words; ++i) {
-        acc += __builtin_popcountll(a[i] ^ b[i]);
-    }
-    return static_cast<int32_t>(acc);
-}
-
 #if defined(__x86_64__) || defined(_M_X64)
-
 __attribute__((target("avx2")))
-inline __m256i avx2_popcnt_epi64(__m256i v) {
+static inline __m256i avx2_popcnt_epi64(__m256i v) {
     const __m256i lookup = _mm256_setr_epi8(
         0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4,
         0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4);
@@ -118,222 +103,261 @@ inline __m256i avx2_popcnt_epi64(__m256i v) {
                                         _mm256_shuffle_epi8(lookup, hi));
     return _mm256_sad_epu8(byte_pop, _mm256_setzero_si256());
 }
-
-__attribute__((target("avx2")))
-int32_t xor_popcnt_avx2(const uint64_t* __restrict a,
-                        const uint64_t* __restrict b,
-                        size_t n_words) {
-    __m256i acc = _mm256_setzero_si256();
-    const __m256i* pa = reinterpret_cast<const __m256i*>(a);
-    const __m256i* pb = reinterpret_cast<const __m256i*>(b);
-    size_t n_blocks = n_words / 8;
-    for (size_t i = 0; i < n_blocks; ++i) {
-        __m256i a0 = _mm256_load_si256(pa + 2*i + 0);
-        __m256i a1 = _mm256_load_si256(pa + 2*i + 1);
-        __m256i b0 = _mm256_load_si256(pb + 2*i + 0);
-        __m256i b1 = _mm256_load_si256(pb + 2*i + 1);
-        acc = _mm256_add_epi64(acc, avx2_popcnt_epi64(_mm256_xor_si256(a0, b0)));
-        acc = _mm256_add_epi64(acc, avx2_popcnt_epi64(_mm256_xor_si256(a1, b1)));
-    }
-    alignas(32) uint64_t t[4];
-    _mm256_store_si256(reinterpret_cast<__m256i*>(t), acc);
-    return static_cast<int32_t>(t[0] + t[1] + t[2] + t[3]);
-}
-
-__attribute__((target("avx512f,avx512vpopcntdq")))
-int32_t xor_popcnt_avx512(const uint64_t* __restrict a,
-                          const uint64_t* __restrict b,
-                          size_t n_words) {
-    __m512i acc = _mm512_setzero_si512();
-    const __m512i* pa = reinterpret_cast<const __m512i*>(a);
-    const __m512i* pb = reinterpret_cast<const __m512i*>(b);
-    size_t n_blocks = n_words / 8;
-    for (size_t i = 0; i < n_blocks; ++i) {
-        __m512i x = _mm512_xor_si512(_mm512_load_si512(pa + i),
-                                     _mm512_load_si512(pb + i));
-        acc = _mm512_add_epi64(acc, _mm512_popcnt_epi64(x));
-    }
-    return static_cast<int32_t>(_mm512_reduce_add_epi64(acc));
-}
-
-#endif // x86_64
-
-inline int32_t xor_popcnt(const uint64_t* a, const uint64_t* b, size_t n_words) {
-#if defined(__x86_64__) || defined(_M_X64)
-    switch (g_kernel) {
-        case KernelChoice::AVX512VPopcnt: return xor_popcnt_avx512(a, b, n_words);
-        case KernelChoice::AVX2:          return xor_popcnt_avx2(a, b, n_words);
-        default:                          return xor_popcnt_scalar(a, b, n_words);
-    }
-#else
-    return xor_popcnt_scalar(a, b, n_words);
 #endif
-}
 
 // ============================================================
-// Asymmetric kernel: xor_popcnt_scalar (qdrant-style).
-//
-//   Given per-DB-word interleaved query codes where q[w*K_q + b] is the
-//   b-th bit-plane of the K_q-bit scalar-quantized query for the dims
-//   packed into db[w], computes:
-//       H = Σ_w Σ_{b=0..K_q-1} popcount(db[w] ⊕ q[w*K_q+b]) << b
-//
-//   For K_q = 8 on AVX-512: broadcast db[w] into all 8 lanes of a ZMM,
-//   XOR with a single 512-bit load of the 8 query bit-plane words, then
-//   one _mm512_popcnt_epi64 gives 8 lane-wise popcounts. Accumulate into
-//   a per-lane ZMM; at the end extract and do sum_{b} lane[b] << b.
-//
-//   For K_q = 4 on AVX-512VL: the analogous 256-bit version with
-//   _mm256_popcnt_epi64.
+// Block-8 symmetric kernel.
+// Inputs:
+//   block_codes : lane-interleaved block, n_words * kBlock uint64s
+//   q           : query code, n_words uint64s
+// Output: out[i] = popcount over the XOR of query vs vector i in the block.
 // ============================================================
+namespace {
 
-template <int Kq>
-inline int64_t xor_popcnt_scalar_scalar(const uint64_t* __restrict db,
-                                        const uint64_t* __restrict q,
-                                        size_t n_words) {
-    // Per-bit-plane accumulators so adds stay 64-bit until the end.
-    uint64_t acc[Kq] = {};
+static inline void xor_popcnt_block8_sym_scalar(const uint64_t* __restrict block_codes,
+                                                const uint64_t* __restrict q,
+                                                size_t n_words,
+                                                int64_t out[kBlock]) {
+    int64_t acc[kBlock] = {};
     for (size_t w = 0; w < n_words; ++w) {
-        uint64_t dbv = db[w];
-        const uint64_t* qw = q + w * Kq;
-        for (int b = 0; b < Kq; ++b) {
-            acc[b] += __builtin_popcountll(dbv ^ qw[b]);
+        const uint64_t qw = q[w];
+        const uint64_t* bw = block_codes + w * kBlock;
+        for (size_t i = 0; i < kBlock; ++i) {
+            acc[i] += __builtin_popcountll(bw[i] ^ qw);
         }
     }
-    int64_t score = 0;
-    for (int b = 0; b < Kq; ++b) score += static_cast<int64_t>(acc[b]) << b;
-    return score;
+    for (size_t i = 0; i < kBlock; ++i) out[i] = acc[i];
 }
 
 #if defined(__x86_64__) || defined(_M_X64)
 
 __attribute__((target("avx512f,avx512vpopcntdq")))
-int64_t xor_popcnt_scalar8_avx512(const uint64_t* __restrict db,
-                                  const uint64_t* __restrict q,
-                                  size_t n_words) {
-    // Two interleaved accumulators for ILP. n_words is a multiple of 8,
-    // so always >= 2 unless the code is trivially small; handle odd tail.
-    __m512i acc0 = _mm512_setzero_si512();
-    __m512i acc1 = _mm512_setzero_si512();
-    size_t w = 0;
-    for (; w + 2 <= n_words; w += 2) {
-        __m512i dbv0 = _mm512_set1_epi64(static_cast<long long>(db[w + 0]));
-        __m512i dbv1 = _mm512_set1_epi64(static_cast<long long>(db[w + 1]));
-        __m512i qv0 = _mm512_load_si512(
-            reinterpret_cast<const __m512i*>(q + (w + 0) * 8));
-        __m512i qv1 = _mm512_load_si512(
-            reinterpret_cast<const __m512i*>(q + (w + 1) * 8));
-        acc0 = _mm512_add_epi64(acc0, _mm512_popcnt_epi64(_mm512_xor_si512(dbv0, qv0)));
-        acc1 = _mm512_add_epi64(acc1, _mm512_popcnt_epi64(_mm512_xor_si512(dbv1, qv1)));
-    }
-    for (; w < n_words; ++w) {
-        __m512i dbv = _mm512_set1_epi64(static_cast<long long>(db[w]));
-        __m512i qv  = _mm512_load_si512(
-            reinterpret_cast<const __m512i*>(q + w * 8));
-        acc0 = _mm512_add_epi64(acc0, _mm512_popcnt_epi64(_mm512_xor_si512(dbv, qv)));
-    }
-    __m512i acc = _mm512_add_epi64(acc0, acc1);
-    alignas(64) uint64_t lanes[8];
-    _mm512_store_si512(reinterpret_cast<__m512i*>(lanes), acc);
-    // Lane b holds the total popcount that should be weighted by 2^b.
-    int64_t score = 0;
-    for (int b = 0; b < 8; ++b) score += static_cast<int64_t>(lanes[b]) << b;
-    return score;
-}
-
-__attribute__((target("avx512f,avx512vl,avx512vpopcntdq")))
-int64_t xor_popcnt_scalar4_avx512(const uint64_t* __restrict db,
-                                  const uint64_t* __restrict q,
-                                  size_t n_words) {
-    __m256i acc0 = _mm256_setzero_si256();
-    __m256i acc1 = _mm256_setzero_si256();
-    size_t w = 0;
-    for (; w + 2 <= n_words; w += 2) {
-        __m256i dbv0 = _mm256_set1_epi64x(static_cast<long long>(db[w + 0]));
-        __m256i dbv1 = _mm256_set1_epi64x(static_cast<long long>(db[w + 1]));
-        __m256i qv0 = _mm256_load_si256(
-            reinterpret_cast<const __m256i*>(q + (w + 0) * 4));
-        __m256i qv1 = _mm256_load_si256(
-            reinterpret_cast<const __m256i*>(q + (w + 1) * 4));
-        acc0 = _mm256_add_epi64(acc0, _mm256_popcnt_epi64(_mm256_xor_si256(dbv0, qv0)));
-        acc1 = _mm256_add_epi64(acc1, _mm256_popcnt_epi64(_mm256_xor_si256(dbv1, qv1)));
-    }
-    for (; w < n_words; ++w) {
-        __m256i dbv = _mm256_set1_epi64x(static_cast<long long>(db[w]));
-        __m256i qv  = _mm256_load_si256(
-            reinterpret_cast<const __m256i*>(q + w * 4));
-        acc0 = _mm256_add_epi64(acc0, _mm256_popcnt_epi64(_mm256_xor_si256(dbv, qv)));
-    }
-    __m256i acc = _mm256_add_epi64(acc0, acc1);
-    alignas(32) uint64_t lanes[4];
-    _mm256_store_si256(reinterpret_cast<__m256i*>(lanes), acc);
-    int64_t score = 0;
-    for (int b = 0; b < 4; ++b) score += static_cast<int64_t>(lanes[b]) << b;
-    return score;
-}
-
-// AVX-2 fallback: uses the shuffle-LUT popcount. Same broadcast pattern,
-// but popcount is implemented via byte-LUT + _mm256_sad_epu8.
-__attribute__((target("avx2")))
-int64_t xor_popcnt_scalar4_avx2(const uint64_t* __restrict db,
-                                const uint64_t* __restrict q,
-                                size_t n_words) {
-    __m256i acc = _mm256_setzero_si256();
+static void xor_popcnt_block8_sym_avx512(const uint64_t* __restrict block_codes,
+                                         const uint64_t* __restrict q,
+                                         size_t n_words,
+                                         int64_t out[kBlock]) {
+    __m512i acc = _mm512_setzero_si512();
     for (size_t w = 0; w < n_words; ++w) {
-        __m256i dbv = _mm256_set1_epi64x(static_cast<long long>(db[w]));
-        __m256i qv  = _mm256_load_si256(
-            reinterpret_cast<const __m256i*>(q + w * 4));
-        acc = _mm256_add_epi64(acc, avx2_popcnt_epi64(_mm256_xor_si256(dbv, qv)));
+        __m512i dbv = _mm512_load_si512(
+            reinterpret_cast<const __m512i*>(block_codes + w * kBlock));
+        __m512i qv  = _mm512_set1_epi64(static_cast<long long>(q[w]));
+        acc = _mm512_add_epi64(
+            acc, _mm512_popcnt_epi64(_mm512_xor_si512(dbv, qv)));
     }
-    alignas(32) uint64_t lanes[4];
-    _mm256_store_si256(reinterpret_cast<__m256i*>(lanes), acc);
-    int64_t score = 0;
-    for (int b = 0; b < 4; ++b) score += static_cast<int64_t>(lanes[b]) << b;
-    return score;
+    _mm512_store_si512(reinterpret_cast<__m512i*>(out), acc);
 }
 
-// K_q=8 on AVX-2: no native 8-lane popcount; split into low/high halves.
 __attribute__((target("avx2")))
-int64_t xor_popcnt_scalar8_avx2(const uint64_t* __restrict db,
-                                const uint64_t* __restrict q,
-                                size_t n_words) {
+static void xor_popcnt_block8_sym_avx2(const uint64_t* __restrict block_codes,
+                                       const uint64_t* __restrict q,
+                                       size_t n_words,
+                                       int64_t out[kBlock]) {
     __m256i acc_lo = _mm256_setzero_si256();
     __m256i acc_hi = _mm256_setzero_si256();
     for (size_t w = 0; w < n_words; ++w) {
-        __m256i dbv = _mm256_set1_epi64x(static_cast<long long>(db[w]));
-        __m256i qvl = _mm256_load_si256(
-            reinterpret_cast<const __m256i*>(q + w * 8));
-        __m256i qvh = _mm256_load_si256(
-            reinterpret_cast<const __m256i*>(q + w * 8 + 4));
-        acc_lo = _mm256_add_epi64(acc_lo, avx2_popcnt_epi64(_mm256_xor_si256(dbv, qvl)));
-        acc_hi = _mm256_add_epi64(acc_hi, avx2_popcnt_epi64(_mm256_xor_si256(dbv, qvh)));
+        __m256i qv = _mm256_set1_epi64x(static_cast<long long>(q[w]));
+        __m256i dblo = _mm256_load_si256(
+            reinterpret_cast<const __m256i*>(block_codes + w * kBlock));
+        __m256i dbhi = _mm256_load_si256(
+            reinterpret_cast<const __m256i*>(block_codes + w * kBlock + 4));
+        acc_lo = _mm256_add_epi64(
+            acc_lo, avx2_popcnt_epi64(_mm256_xor_si256(dblo, qv)));
+        acc_hi = _mm256_add_epi64(
+            acc_hi, avx2_popcnt_epi64(_mm256_xor_si256(dbhi, qv)));
     }
-    alignas(32) uint64_t lo[4], hi[4];
-    _mm256_store_si256(reinterpret_cast<__m256i*>(lo), acc_lo);
-    _mm256_store_si256(reinterpret_cast<__m256i*>(hi), acc_hi);
-    int64_t score = 0;
-    for (int b = 0; b < 4; ++b) score += static_cast<int64_t>(lo[b]) << b;
-    for (int b = 0; b < 4; ++b) score += static_cast<int64_t>(hi[b]) << (b + 4);
-    return score;
+    _mm256_store_si256(reinterpret_cast<__m256i*>(out), acc_lo);
+    _mm256_store_si256(reinterpret_cast<__m256i*>(out + 4), acc_hi);
 }
 
 #endif // x86_64
 
-inline int64_t xor_popcnt_scalar_kq(const uint64_t* db, const uint64_t* q,
-                                    size_t n_words, int Kq) {
+inline void xor_popcnt_block8_sym(const uint64_t* block_codes,
+                                  const uint64_t* q,
+                                  size_t n_words,
+                                  int64_t out[kBlock]) {
 #if defined(__x86_64__) || defined(_M_X64)
-    if (g_kernel == KernelChoice::AVX512VPopcnt) {
-        if (Kq == 8) return xor_popcnt_scalar8_avx512(db, q, n_words);
-        if (Kq == 4) return xor_popcnt_scalar4_avx512(db, q, n_words);
-    } else if (g_kernel == KernelChoice::AVX2) {
-        if (Kq == 8) return xor_popcnt_scalar8_avx2(db, q, n_words);
-        if (Kq == 4) return xor_popcnt_scalar4_avx2(db, q, n_words);
+    switch (g_kernel) {
+        case KernelChoice::AVX512VPopcnt:
+            xor_popcnt_block8_sym_avx512(block_codes, q, n_words, out); return;
+        case KernelChoice::AVX2:
+            xor_popcnt_block8_sym_avx2(block_codes, q, n_words, out); return;
+        default: break;
     }
 #endif
-    if (Kq == 8) return xor_popcnt_scalar_scalar<8>(db, q, n_words);
-    if (Kq == 4) return xor_popcnt_scalar_scalar<4>(db, q, n_words);
-    // Shouldn't happen; we only support K_q in {4, 8}.
-    return 0;
+    xor_popcnt_block8_sym_scalar(block_codes, q, n_words, out);
+}
+
+// ============================================================
+// Block-8 asymmetric kernel (K_q in {4, 8}).
+// Weighted Hamming per lane:
+//   H_i = Σ_w Σ_{b=0..Kq-1} popcount(block_codes[w][i] ⊕ q[w*Kq + b]) << b
+// Query layout (unchanged from qdrant-style): for DB word w, the Kq bit-plane
+// words live contiguously at q[w*Kq .. (w+1)*Kq).
+// ============================================================
+
+template <int Kq>
+static inline void xor_popcnt_block8_asym_scalar(const uint64_t* __restrict block_codes,
+                                                 const uint64_t* __restrict q,
+                                                 size_t n_words,
+                                                 int64_t out[kBlock]) {
+    int64_t acc[Kq][kBlock] = {};
+    for (size_t w = 0; w < n_words; ++w) {
+        const uint64_t* bw = block_codes + w * kBlock;
+        const uint64_t* qw = q + w * Kq;
+        for (int b = 0; b < Kq; ++b) {
+            const uint64_t qv = qw[b];
+            for (size_t i = 0; i < kBlock; ++i) {
+                acc[b][i] += __builtin_popcountll(bw[i] ^ qv);
+            }
+        }
+    }
+    for (size_t i = 0; i < kBlock; ++i) {
+        int64_t s = 0;
+        for (int b = 0; b < Kq; ++b) s += acc[b][i] << b;
+        out[i] = s;
+    }
+}
+
+#if defined(__x86_64__) || defined(_M_X64)
+
+__attribute__((target("avx512f,avx512vpopcntdq")))
+static void xor_popcnt_block8_asym8_avx512(const uint64_t* __restrict block_codes,
+                                           const uint64_t* __restrict q,
+                                           size_t n_words,
+                                           int64_t out[kBlock]) {
+    // 8 per-plane accumulators; per-lane popcount stays in int64 until the
+    // final shift+reduce. Register pressure: 8 ZMM accs + 1 db + 1 qv scratch.
+    __m512i a0 = _mm512_setzero_si512();
+    __m512i a1 = _mm512_setzero_si512();
+    __m512i a2 = _mm512_setzero_si512();
+    __m512i a3 = _mm512_setzero_si512();
+    __m512i a4 = _mm512_setzero_si512();
+    __m512i a5 = _mm512_setzero_si512();
+    __m512i a6 = _mm512_setzero_si512();
+    __m512i a7 = _mm512_setzero_si512();
+    for (size_t w = 0; w < n_words; ++w) {
+        __m512i dbv = _mm512_load_si512(
+            reinterpret_cast<const __m512i*>(block_codes + w * kBlock));
+        const uint64_t* qw = q + w * 8;
+        a0 = _mm512_add_epi64(a0, _mm512_popcnt_epi64(
+            _mm512_xor_si512(dbv, _mm512_set1_epi64((long long)qw[0]))));
+        a1 = _mm512_add_epi64(a1, _mm512_popcnt_epi64(
+            _mm512_xor_si512(dbv, _mm512_set1_epi64((long long)qw[1]))));
+        a2 = _mm512_add_epi64(a2, _mm512_popcnt_epi64(
+            _mm512_xor_si512(dbv, _mm512_set1_epi64((long long)qw[2]))));
+        a3 = _mm512_add_epi64(a3, _mm512_popcnt_epi64(
+            _mm512_xor_si512(dbv, _mm512_set1_epi64((long long)qw[3]))));
+        a4 = _mm512_add_epi64(a4, _mm512_popcnt_epi64(
+            _mm512_xor_si512(dbv, _mm512_set1_epi64((long long)qw[4]))));
+        a5 = _mm512_add_epi64(a5, _mm512_popcnt_epi64(
+            _mm512_xor_si512(dbv, _mm512_set1_epi64((long long)qw[5]))));
+        a6 = _mm512_add_epi64(a6, _mm512_popcnt_epi64(
+            _mm512_xor_si512(dbv, _mm512_set1_epi64((long long)qw[6]))));
+        a7 = _mm512_add_epi64(a7, _mm512_popcnt_epi64(
+            _mm512_xor_si512(dbv, _mm512_set1_epi64((long long)qw[7]))));
+    }
+    __m512i s = a0;
+    s = _mm512_add_epi64(s, _mm512_slli_epi64(a1, 1));
+    s = _mm512_add_epi64(s, _mm512_slli_epi64(a2, 2));
+    s = _mm512_add_epi64(s, _mm512_slli_epi64(a3, 3));
+    s = _mm512_add_epi64(s, _mm512_slli_epi64(a4, 4));
+    s = _mm512_add_epi64(s, _mm512_slli_epi64(a5, 5));
+    s = _mm512_add_epi64(s, _mm512_slli_epi64(a6, 6));
+    s = _mm512_add_epi64(s, _mm512_slli_epi64(a7, 7));
+    _mm512_store_si512(reinterpret_cast<__m512i*>(out), s);
+}
+
+__attribute__((target("avx512f,avx512vpopcntdq")))
+static void xor_popcnt_block8_asym4_avx512(const uint64_t* __restrict block_codes,
+                                           const uint64_t* __restrict q,
+                                           size_t n_words,
+                                           int64_t out[kBlock]) {
+    __m512i a0 = _mm512_setzero_si512();
+    __m512i a1 = _mm512_setzero_si512();
+    __m512i a2 = _mm512_setzero_si512();
+    __m512i a3 = _mm512_setzero_si512();
+    for (size_t w = 0; w < n_words; ++w) {
+        __m512i dbv = _mm512_load_si512(
+            reinterpret_cast<const __m512i*>(block_codes + w * kBlock));
+        const uint64_t* qw = q + w * 4;
+        a0 = _mm512_add_epi64(a0, _mm512_popcnt_epi64(
+            _mm512_xor_si512(dbv, _mm512_set1_epi64((long long)qw[0]))));
+        a1 = _mm512_add_epi64(a1, _mm512_popcnt_epi64(
+            _mm512_xor_si512(dbv, _mm512_set1_epi64((long long)qw[1]))));
+        a2 = _mm512_add_epi64(a2, _mm512_popcnt_epi64(
+            _mm512_xor_si512(dbv, _mm512_set1_epi64((long long)qw[2]))));
+        a3 = _mm512_add_epi64(a3, _mm512_popcnt_epi64(
+            _mm512_xor_si512(dbv, _mm512_set1_epi64((long long)qw[3]))));
+    }
+    __m512i s = a0;
+    s = _mm512_add_epi64(s, _mm512_slli_epi64(a1, 1));
+    s = _mm512_add_epi64(s, _mm512_slli_epi64(a2, 2));
+    s = _mm512_add_epi64(s, _mm512_slli_epi64(a3, 3));
+    _mm512_store_si512(reinterpret_cast<__m512i*>(out), s);
+}
+
+#endif // x86_64
+
+inline void xor_popcnt_block8_asym(const uint64_t* block_codes,
+                                   const uint64_t* q,
+                                   size_t n_words,
+                                   int Kq,
+                                   int64_t out[kBlock]) {
+#if defined(__x86_64__) || defined(_M_X64)
+    if (g_kernel == KernelChoice::AVX512VPopcnt) {
+        if (Kq == 8) { xor_popcnt_block8_asym8_avx512(block_codes, q, n_words, out); return; }
+        if (Kq == 4) { xor_popcnt_block8_asym4_avx512(block_codes, q, n_words, out); return; }
+    }
+#endif
+    if (Kq == 8) { xor_popcnt_block8_asym_scalar<8>(block_codes, q, n_words, out); return; }
+    if (Kq == 4) { xor_popcnt_block8_asym_scalar<4>(block_codes, q, n_words, out); return; }
+}
+
+// ============================================================
+// Single-vector scoring (for score_one). Scalar is fine here — not hot.
+// ============================================================
+
+inline int64_t xor_popcnt_one_sym(const uint64_t* a, const uint64_t* b,
+                                  size_t n_words) {
+    uint64_t acc = 0;
+    for (size_t i = 0; i < n_words; ++i) {
+        acc += __builtin_popcountll(a[i] ^ b[i]);
+    }
+    return static_cast<int64_t>(acc);
+}
+
+inline int64_t xor_popcnt_one_asym(const uint64_t* db, const uint64_t* q,
+                                   size_t n_words, int Kq) {
+    int64_t score = 0;
+    for (int b = 0; b < Kq; ++b) {
+        uint64_t acc = 0;
+        for (size_t w = 0; w < n_words; ++w) {
+            acc += __builtin_popcountll(db[w] ^ q[w * Kq + b]);
+        }
+        score += static_cast<int64_t>(acc) << b;
+    }
+    return score;
+}
+
+// Scatter / gather between per-vector code and lane-interleaved block storage.
+inline void scatter_to_block(uint64_t* codes, size_t n_words, size_t id,
+                             const uint64_t* src) {
+    const size_t block = id / kBlock;
+    const size_t lane  = id % kBlock;
+    uint64_t* base = codes + block * n_words * kBlock;
+    for (size_t w = 0; w < n_words; ++w) {
+        base[w * kBlock + lane] = src[w];
+    }
+}
+
+inline void gather_from_block(const uint64_t* codes, size_t n_words, size_t id,
+                              uint64_t* dst) {
+    const size_t block = id / kBlock;
+    const size_t lane  = id % kBlock;
+    const uint64_t* base = codes + block * n_words * kBlock;
+    for (size_t w = 0; w < n_words; ++w) {
+        dst[w] = base[w * kBlock + lane];
+    }
 }
 
 } // anonymous
@@ -367,8 +391,7 @@ BinaryQuantizer::BinaryQuantizer(size_t d_,
       metric(metric_) {
     if (d == 0) throw std::invalid_argument("BinaryQuantizer: d must be > 0");
     const size_t n_bits = static_cast<size_t>(k_db()) * d;
-    size_t raw_words = (n_bits + 63) / 64;
-    n_words   = round_up(raw_words, 8);      // 8 words = 64 B
+    n_words   = (n_bits + 63) / 64;              // real words, no pad-up
     code_size = n_words * sizeof(uint64_t);
     thresholds.assign(static_cast<size_t>(k_db()) * d, 0.0f);
     center.assign(d, 0.0f);
@@ -386,10 +409,19 @@ void BinaryQuantizer::reset() {
 void BinaryQuantizer::reserve(size_t n_vectors) {
     if (n_vectors <= codes_capacity) return;
     size_t new_cap = std::max<size_t>(codes_capacity * 2, n_vectors);
-    new_cap = std::max<size_t>(new_cap, 64);
-    uint64_t* new_codes = aligned_alloc_words(new_cap * n_words);
+    new_cap = std::max<size_t>(new_cap, kBlock * 8);                    // 64-vector floor
+    new_cap = ((new_cap + kBlock - 1) / kBlock) * kBlock;               // multiple of B
+    const size_t new_blocks = new_cap / kBlock;
+    const size_t new_words_total = new_blocks * n_words * kBlock;
+    uint64_t* new_codes = aligned_alloc_words(new_words_total);
+    // Zero whole allocation: (a) tail-block unused lanes must be zero so the
+    // SIMD kernel produces deterministic "large" distances that we still mask
+    // out at the top-k layer, (b) future partial writes preserve sibling lanes.
+    std::memset(new_codes, 0, new_words_total * sizeof(uint64_t));
     if (codes) {
-        std::memcpy(new_codes, codes, ntotal * n_words * sizeof(uint64_t));
+        const size_t blocks_in_use = (ntotal + kBlock - 1) / kBlock;
+        std::memcpy(new_codes, codes,
+                    blocks_in_use * n_words * kBlock * sizeof(uint64_t));
         aligned_free_words(codes);
     }
     codes = new_codes;
@@ -405,7 +437,6 @@ void BinaryQuantizer::train(size_t n, const float* x) {
         return;
     }
 
-    // Per-dim mean and stddev in one pass using Welford-ish two-pass (simpler).
     std::vector<double> mean(d, 0.0), m2(d, 0.0);
     for (size_t i = 0; i < n; ++i) {
         const float* v = x + i * d;
@@ -439,12 +470,8 @@ void BinaryQuantizer::train(size_t n, const float* x) {
 }
 
 void BinaryQuantizer::encode_db(const float* x, uint64_t* code) const {
-    std::memset(code, 0, code_size);
+    std::memset(code, 0, n_words * sizeof(uint64_t));
     const int K = k_db();
-    // Virtual bit position of plane p, dim i is p*d + i.
-    // Because the planes are laid out one after another, we can split by plane
-    // and encode each plane's bit positions contiguously — this makes the
-    // inner loop branchless and cache-linear.
     for (int p = 0; p < K; ++p) {
         const float* thr = thresholds.data() + static_cast<size_t>(p) * d;
         const size_t base_bit = static_cast<size_t>(p) * d;
@@ -466,46 +493,35 @@ void BinaryQuantizer::encode_query(const float* x, uint64_t* code) const {
     const int Kdb = k_db();
     const size_t n_bits = static_cast<size_t>(Kdb) * d;
 
-    // Zero the whole query code (includes padding words past n_bits).
     std::memset(code, 0, query_code_words() * sizeof(uint64_t));
 
-    // Per-query scalar-quantization range (qdrant-style max|.|, but taken
-    // on the *centered* query so the quantized bit that represents "0" of
-    // the query aligns with the DB's threshold split).
     float max_abs = 0.0f;
     for (size_t i = 0; i < d; ++i) {
         float a = std::fabs(x[i] - center[i]);
         if (a > max_abs) max_abs = a;
     }
     const float vmin = -max_abs;
-    const int ranges = (1 << Kq) - 1;                // 15 or 255
+    const int ranges = (1 << Kq) - 1;
     const float delta = (max_abs <= 0.0f)
                             ? 0.0f
                             : (2.0f * max_abs) / static_cast<float>(ranges);
 
-    // Emit bits for every virtual dim v in [0, n_bits).
-    // Virtual dim v maps to original dim (v mod d); the same query value
-    // is replicated across K_db planes (qdrant's extend_from_slice trick).
-    // Per-word interleaved layout: the K_q output words for DB word w are
-    // at code[w*K_q .. (w+1)*K_q).
     for (size_t v = 0; v < n_bits; ++v) {
-        const size_t i = v % d;                       // original dim
-        const float val = x[i] - center[i];           // centered query value
-        // Uniform K_q-bit scalar quant onto [-max_abs, +max_abs].
+        const size_t i = v % d;
+        const float val = x[i] - center[i];
         int q_int;
         if (delta <= 0.0f) {
             q_int = 0;
         } else {
-            float shifted = val - vmin;               // in [0, 2*max_abs]
+            float shifted = val - vmin;
             int r = static_cast<int>(std::lrintf(shifted / delta));
             if (r < 0) r = 0;
             if (r > ranges) r = ranges;
             q_int = r;
         }
-        const size_t w  = v >> 6;                     // DB-word index
-        const size_t sh = v & 63;                     // bit position within word
+        const size_t w  = v >> 6;
+        const size_t sh = v & 63;
         uint64_t* out_word = code + w * static_cast<size_t>(Kq);
-        // Scatter the K_q bits of q_int into K_q output words.
         for (int b = 0; b < Kq; ++b) {
             const uint64_t bit = static_cast<uint64_t>((q_int >> b) & 1);
             out_word[b] |= (bit << sh);
@@ -517,13 +533,21 @@ void BinaryQuantizer::add(size_t n, const float* x) {
     if (!is_trained) throw std::runtime_error("BinaryQuantizer::add called before train");
     if (n == 0) return;
     reserve(ntotal + n);
+    const size_t base_id = ntotal;
 #ifdef _OPENMP
     const int _nt_add = (num_threads > 0) ? num_threads : omp_get_max_threads();
-    #pragma omp parallel for schedule(static) num_threads(_nt_add) if (n > 256)
+    #pragma omp parallel num_threads(_nt_add) if (n > 256)
 #endif
-    for (long long i = 0; i < static_cast<long long>(n); ++i) {
-        encode_db(x + static_cast<size_t>(i) * d,
-                  codes + (ntotal + static_cast<size_t>(i)) * n_words);
+    {
+        std::vector<uint64_t> tmp(n_words);
+#ifdef _OPENMP
+        #pragma omp for schedule(static)
+#endif
+        for (long long i = 0; i < static_cast<long long>(n); ++i) {
+            encode_db(x + static_cast<size_t>(i) * d, tmp.data());
+            scatter_to_block(codes, n_words,
+                             base_id + static_cast<size_t>(i), tmp.data());
+        }
     }
     ntotal += n;
 }
@@ -540,6 +564,50 @@ float BinaryQuantizer::h_to_metric(int64_t h) const {
         case Metric::IP:      return static_cast<float>(n_eff) - 2.0f * h_scale;
     }
     return h_scale;
+}
+
+float BinaryQuantizer::score_one(const uint64_t* qcode, size_t db_id) const {
+    if (!is_trained) throw std::runtime_error("BinaryQuantizer::score_one called before train");
+    if (db_id >= ntotal) throw std::out_of_range("BinaryQuantizer::score_one: db_id out of range");
+    std::vector<uint64_t> tmp(n_words);
+    gather_from_block(codes, n_words, db_id, tmp.data());
+    int64_t h;
+    if (query_encoding == QueryEncoding::SameAsStorage) {
+        h = xor_popcnt_one_sym(tmp.data(), qcode, n_words);
+    } else {
+        h = xor_popcnt_one_asym(tmp.data(), qcode, n_words, k_q());
+    }
+    return h_to_metric(h);
+}
+
+void BinaryQuantizer::score_range(const uint64_t* qcode,
+                                  size_t begin, size_t end,
+                                  float* out) const {
+    if (!is_trained) throw std::runtime_error("BinaryQuantizer::score_range called before train");
+    if (begin > end || end > ntotal)
+        throw std::out_of_range("BinaryQuantizer::score_range: bad [begin, end)");
+    if (begin == end) return;
+
+    const bool symmetric = (query_encoding == QueryEncoding::SameAsStorage);
+    const int Kq = k_q();
+    const size_t first_block = begin / kBlock;
+    const size_t last_block  = (end - 1) / kBlock;   // inclusive
+    alignas(64) int64_t block_out[kBlock];
+
+    for (size_t bi = first_block; bi <= last_block; ++bi) {
+        const uint64_t* block_codes_ = codes + bi * n_words * kBlock;
+        if (symmetric) {
+            xor_popcnt_block8_sym(block_codes_, qcode, n_words, block_out);
+        } else {
+            xor_popcnt_block8_asym(block_codes_, qcode, n_words, Kq, block_out);
+        }
+        const size_t id_base = bi * kBlock;
+        const size_t lane_lo = (begin > id_base) ? (begin - id_base) : 0;
+        const size_t lane_hi = (end   < id_base + kBlock) ? (end - id_base) : kBlock;
+        for (size_t li = lane_lo; li < lane_hi; ++li) {
+            out[(id_base + li) - begin] = h_to_metric(block_out[li]);
+        }
+    }
 }
 
 namespace {
@@ -560,7 +628,7 @@ void BinaryQuantizer::search(size_t nq,
     if (!is_trained) throw std::runtime_error("BinaryQuantizer::search called before train");
 
     const size_t qwords = query_code_words();
-    uint64_t* qcodes = aligned_alloc_words(nq * qwords);
+    uint64_t* qcodes = aligned_alloc_words(std::max<size_t>(nq * qwords, 1));
     struct G { uint64_t* p; ~G() { aligned_free_words(p); } } guard{qcodes};
 
 #ifdef _OPENMP
@@ -578,6 +646,8 @@ void BinaryQuantizer::search(size_t nq,
                                : std::numeric_limits<float>::infinity();
     const bool symmetric = (query_encoding == QueryEncoding::SameAsStorage);
     const int Kq = k_q();
+    const size_t tail = ntotal % kBlock;
+    const size_t total_blocks = (ntotal + kBlock - 1) / kBlock;
 
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) num_threads(_nt_search) if (nq > 1)
@@ -585,19 +655,29 @@ void BinaryQuantizer::search(size_t nq,
     for (long long qi = 0; qi < static_cast<long long>(nq); ++qi) {
         const uint64_t* q = qcodes + static_cast<size_t>(qi) * qwords;
         std::priority_queue<Cand> heap;
+        alignas(64) int64_t block_out[kBlock];
 
-        for (size_t di = 0; di < ntotal; ++di) {
-            int64_t h;
+        for (size_t bi = 0; bi < total_blocks; ++bi) {
+            const uint64_t* block_codes_ = codes + bi * n_words * kBlock;
             if (symmetric) {
-                h = static_cast<int64_t>(xor_popcnt(codes + di * n_words, q, n_words));
+                xor_popcnt_block8_sym(block_codes_, q, n_words, block_out);
             } else {
-                h = xor_popcnt_scalar_kq(codes + di * n_words, q, n_words, Kq);
+                xor_popcnt_block8_asym(block_codes_, q, n_words, Kq, block_out);
             }
-            if (heap.size() < eff_k) {
-                heap.push({h, static_cast<int64_t>(di)});
-            } else if (h < heap.top().h) {
-                heap.pop();
-                heap.push({h, static_cast<int64_t>(di)});
+            // Last block may be partially populated; pad lanes are zero-filled
+            // code vs arbitrary query → spurious small/large H, exclude them.
+            const size_t lanes_valid =
+                (bi + 1 < total_blocks || tail == 0) ? kBlock : tail;
+            const size_t id_base = bi * kBlock;
+            for (size_t li = 0; li < lanes_valid; ++li) {
+                const int64_t h = block_out[li];
+                const int64_t id = static_cast<int64_t>(id_base + li);
+                if (heap.size() < eff_k) {
+                    heap.push({h, id});
+                } else if (h < heap.top().h) {
+                    heap.pop();
+                    heap.push({h, id});
+                }
             }
         }
 

@@ -22,7 +22,8 @@ class PyTurboQuant {
                bool use_data_centroid,
                std::size_t nlist,
                std::size_t nprobe)
-      : dim_(dim)
+      : dim_(dim),
+        mode_int_(mode_int)
   {
     TQIndex::Config cfg;
     cfg.dim               = dim;
@@ -75,8 +76,12 @@ class PyTurboQuant {
 
     py::array_t<std::int64_t> labels({nq, k});
     py::array_t<float>        dists ({nq, k});
-    // Convenience overload: always uses L2 (Euclidean) distance
-    index_->query(nq, static_cast<const float*>(buf.ptr), k,
+    // Pick SearchMetric from the index Mode: IP-mode index -> kInnerProduct,
+    // MSE-mode -> kL2. The index must be configured to match the dataset.
+    using turboquant::SearchMetric;
+    SearchMetric metric = (mode_int_ == 1) ? SearchMetric::kInnerProduct
+                                           : SearchMetric::kL2;
+    index_->query(nq, static_cast<const float*>(buf.ptr), k, metric,
                   dists.mutable_data(), labels.mutable_data());
     return {labels, dists};
   }
@@ -254,6 +259,7 @@ class PyTurboQuant {
  private:
   std::unique_ptr<TQIndex> index_;
   std::size_t dim_;
+  int mode_int_ = 0;                // 0 = kMSE, 1 = kInnerProduct (matches ctor)
   std::size_t n_data_ = 0;
   std::vector<float> data_copy_;    // original float32 data (added via add())
   std::vector<float> recon_cache_;  // lazily-computed reconstruction cache

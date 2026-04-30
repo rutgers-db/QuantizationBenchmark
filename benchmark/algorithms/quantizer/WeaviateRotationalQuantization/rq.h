@@ -33,6 +33,23 @@ class RotationalQuantizer {
               float* distances, int64_t* labels) const;
   void reset();
 
+  // Self-contained encoded query, valid for either bits=1 (BRQ) or bits>=2
+  // (uniform). Produced by `encode_query_full`, consumed by `score_one`.
+  struct EncodedQuery {
+    std::vector<uint8_t>  qcode;   // uniform path: out_d_ bytes
+    std::vector<uint64_t> qbits;   // BRQ path:    5 * (out_d_/64) words
+    float qmeta[4] = {0.f, 0.f, 0.f, 0.f};
+    float q_step = 0.f;
+    float q_norm2 = 0.f;
+  };
+
+  // Rotate + encode a single query. Cheap enough to call once per probed list.
+  EncodedQuery encode_query_full(const float* x) const;
+
+  // Score an already-encoded query against a single db id, returning the
+  // metric value (same scale as `search` distances).
+  float score_one(const EncodedQuery& q, size_t db_id) const;
+
   size_t ntotal() const { return ntotal_; }
   int d() const { return d_; }
   int out_dim() const { return out_d_; }

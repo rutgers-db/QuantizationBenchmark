@@ -47,11 +47,11 @@ audio-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsubvec: [16, 32, 64]
+    nsubvec: [64]
     nbit: [8]
   search:
     - topk: 100
-      nrerank: [200, 300, 500, 800, 1000]
+      # nrerank: [200, 300, 500, 800, 1000]
 
 video-1024-euclidean:
   # Product Quantization with build/search separation format
@@ -62,11 +62,11 @@ video-1024-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsubvec: [128, 256, 512]
+    nsubvec: [512]
     nbit: [8]
   search:
     - topk: 100
-      nrerank: [200, 300, 500, 800, 1000]
+      # nrerank: [200, 300, 500, 800, 1000]
 
 text2image-200-euclidean:
   # Product Quantization with build/search separation format
@@ -77,11 +77,11 @@ text2image-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nsubvec: [25, 50, 100]
+    nsubvec: [100]
     nbit: [8]
   search:
     - topk: 100
-      nrerank: [200, 300, 500, 800, 1000]
+      # nrerank: [200, 300, 500, 800, 1000]
 
 paper-200-euclidean:
   # Product Quantization with build/search separation format
@@ -97,6 +97,20 @@ paper-200-euclidean:
   search:
     - topk: 100
       nrerank: [200, 300, 500, 800, 1000]
+
+laion-768-ip:
+  common:
+    data_bytes: 4
+    ndim: 768
+    nthread: 16
+    space: "ip"
+  build:
+    # nsubvec=96 -> 32x, nsubvec=192 -> 16x, nsubvec=384 -> 8x compression at nbit=8
+    nsubvec: [384]
+    nbit: [8]
+  search:
+    - topk: 100
+      # nrerank: [200, 300, 500, 800, 1000]
 # Example with build/search separation (for IVF-based methods):
 # sift-128-euclidean:
 #   build:

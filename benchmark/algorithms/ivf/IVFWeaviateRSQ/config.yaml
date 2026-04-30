@@ -1,0 +1,103 @@
+# IVF + Weaviate Rotational Quantization on residuals.
+#
+# bits           : 1 (BRQ path) or 2 | 4 | 8 (uniform RQ path)
+# nlist / nprobe : standard IVF parameters.
+
+sift-128-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 128
+    nthread: 16
+    space: "l2"
+  build:
+    bits: [1, 2, 4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [100]
+      nrerank: [200, 300, 500, 1000]
+
+gist-960-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 960
+    nthread: 16
+    space: "l2"
+  build:
+    bits: [1, 2, 4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [100]
+      nrerank: [200, 300, 500, 1000]
+
+audio-128-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 128
+    nthread: 16
+    space: "l2"
+  build:
+    bits: [4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
+
+video-1024-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 1024
+    nthread: 16
+    space: "l2"
+  build:
+    bits: [4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
+
+text2image-200-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 200
+    nthread: 16
+    space: "l2"
+  build:
+    bits: [4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
+
+paper-200-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 200
+    nthread: 16
+    space: "l2"
+  build:
+    bits: [1, 2, 4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [100]
+      nrerank: [200, 300, 500, 1000]
+
+laion-768-ip:
+  common:
+    data_bytes: 4
+    ndim: 768
+    nthread: 16
+    space: "ip"
+  build:
+    # bits=1 -> 32x, bits=2 -> 16x, bits=4 -> 8x compression
+    bits: [4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]

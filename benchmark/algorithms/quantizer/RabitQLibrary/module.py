@@ -71,6 +71,7 @@ class RabitQLibrary(BaseQuantizer):
         """Learn IVF centroids on the given training sample."""
         try:
             train_data = np.ascontiguousarray(data, dtype=np.float32)
+            is_ip = self.space in ("ip", "inner_product")
 
             if self.nlist == 1:
                 centroids = np.ascontiguousarray(
@@ -78,18 +79,21 @@ class RabitQLibrary(BaseQuantizer):
                 )
             else:
                 faiss.omp_set_num_threads(self.nthread)
+                # For IP, use spherical k-means (matches the official RaBitQ ivf.py
+                # which trains "IVF{K},Flat" with METRIC_INNER_PRODUCT).
                 kmeans = faiss.Kmeans(
                     d=self.ndim,
                     k=self.nlist,
                     niter=25,
                     verbose=False,
                     seed=1234,
+                    spherical=is_ip,
                 )
                 kmeans.train(train_data)
                 centroids = np.ascontiguousarray(kmeans.centroids.astype(np.float32))
 
             self._trained_centroids = centroids
-            self.coarse_index = faiss.IndexFlatL2(self.ndim)
+            self.coarse_index = faiss.IndexFlatIP(self.ndim) if is_ip else faiss.IndexFlatL2(self.ndim)
             self.coarse_index.add(centroids)
 
             self.trained = False

@@ -96,7 +96,7 @@ def write_output(train: numpy.ndarray, test: numpy.ndarray, fn: str, distance: s
     """
     import faiss
 
-    if distance not in ("euclidean"):
+    if distance not in ("euclidean", "inner_product"):
         raise NotImplementedError
 
     with h5py.File(fn, "w") as f:

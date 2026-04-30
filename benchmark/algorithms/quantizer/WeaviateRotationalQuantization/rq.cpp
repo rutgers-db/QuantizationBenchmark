@@ -435,6 +435,33 @@ void RotationalQuantizer::add(size_t n, const float* x) {
   ntotal_ += n;
 }
 
+RotationalQuantizer::EncodedQuery
+RotationalQuantizer::encode_query_full(const float* x) const {
+  EncodedQuery eq;
+  std::vector<float> rx(static_cast<size_t>(out_d_));
+  rotate(x, rx.data());
+  if (bits_ == 1) {
+    const int nwords = out_d_ / 64;
+    eq.qbits.assign(static_cast<size_t>(5 * nwords), 0ULL);
+    encode_brq_query(rx.data(), eq.qbits.data(), eq.q_step, eq.q_norm2);
+  } else {
+    eq.qcode.assign(code_bytes_, 0);
+    encode_uniform(rx.data(), eq.qcode.data(), eq.qmeta);
+  }
+  return eq;
+}
+
+float RotationalQuantizer::score_one(const EncodedQuery& q, size_t db_id) const {
+  if (db_id >= ntotal_)
+    throw std::out_of_range("RotationalQuantizer::score_one: db_id out of range");
+  const uint8_t* cx = codes_.data() + db_id * code_bytes_;
+  const float*   mx = meta_.data()  + db_id * 4;
+  if (bits_ == 1) {
+    return dist_brq(cx, mx, q.qbits.data(), q.q_step, q.q_norm2);
+  }
+  return dist_uniform(cx, mx, q.qcode.data(), q.qmeta);
+}
+
 void RotationalQuantizer::search(size_t nq, const float* queries, size_t k,
                                  float* distances, int64_t* labels) const {
   if (k == 0) return;

@@ -89,6 +89,12 @@ class PyBinaryQuantizer {
 
     void set_num_threads(int n) { index_->set_num_threads(n); }
 
+    // Swap the query encoding without rebuilding the index. Safe because
+    // DB codes are independent of Kq.
+    void set_query_encoding(const std::string& qe) {
+        index_->set_query_encoding(parse_query_encoding(qe));
+    }
+
     std::size_t ntotal()    const { return index_->ntotal; }
     std::size_t code_size() const { return index_->code_size; }
     std::size_t get_dim()   const { return d_; }
@@ -113,7 +119,8 @@ PYBIND11_MODULE(bq_cpp, m) {
         .def("train",           &PyBinaryQuantizer::train,           py::arg("data"))
         .def("add",             &PyBinaryQuantizer::add,             py::arg("data"))
         .def("search",          &PyBinaryQuantizer::search,          py::arg("queries"), py::arg("k"))
-        .def("set_num_threads", &PyBinaryQuantizer::set_num_threads, py::arg("n"))
+        .def("set_num_threads",    &PyBinaryQuantizer::set_num_threads,    py::arg("n"))
+        .def("set_query_encoding", &PyBinaryQuantizer::set_query_encoding, py::arg("query_encoding"))
         .def("ntotal",          &PyBinaryQuantizer::ntotal)
         .def("code_size",       &PyBinaryQuantizer::code_size)
         .def("get_dim",         &PyBinaryQuantizer::get_dim)

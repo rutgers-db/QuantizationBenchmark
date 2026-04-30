@@ -59,6 +59,7 @@ class SAQ(BaseQuantizer):
                 "Make sure the C++ module was built correctly in the Docker image."
             )
 
+        self._dist_type = "ip" if self.space in ("ip", "inner_product") else "l2"
         self.cpp_index = saq_cpp.PySAQ(
             avg_bits=float(nbit),
             enable_segmentation=self.enable_segmentation,
@@ -67,6 +68,7 @@ class SAQ(BaseQuantizer):
             use_fastscan=True,
             caq_adj_eps=1e-8,
             vars_bound_m=vars_bound_m,
+            dist_type=self._dist_type,
         )
 
     def _compute_pca(self, data):
@@ -92,6 +94,13 @@ class SAQ(BaseQuantizer):
 
     def _apply_pca(self, data):
         """Apply PCA rotation to data."""
+        # For IP, skip the mean shift: <P(q-m), P(d-m)> = <q-m, d-m> ≠ <q, d>.
+        # The rotation P is orthogonal so <Pq, Pd> = <q, d>; SAQ's per-cluster
+        # centroid subtraction handles the recentering needed for quantization
+        # quality. With centering, IP rankings are wrong even after the C++
+        # searcher fix, so this path is required for correct IP recall.
+        if self._dist_type == "ip":
+            return np.ascontiguousarray((data @ self.pca_matrix.T).astype(np.float32))
         centered = data - self.data_mean
         return np.ascontiguousarray((centered @ self.pca_matrix.T).astype(np.float32))
 
@@ -109,7 +118,10 @@ class SAQ(BaseQuantizer):
             # Step 2: Transform training data to PCA space
             data_pca = self._apply_pca(train_data)
 
-            # Step 3: Run k-means on PCA-transformed data
+            # Step 3: Run k-means on PCA-transformed data.
+            # For IP, use spherical k-means so the coarse partition matches
+            # the IP-aware searcher (PCA is orthogonal so IP is preserved).
+            is_ip = self._dist_type == "ip"
             if self.nlist == 1:
                 self.coarse_quantizer = np.ascontiguousarray(
                     data_pca.mean(axis=0, keepdims=True).astype(np.float32)
@@ -121,6 +133,7 @@ class SAQ(BaseQuantizer):
                     niter=25,
                     verbose=False,
                     seed=1234,
+                    spherical=is_ip,
                 )
                 kmeans.train(data_pca)
                 self.coarse_quantizer = np.ascontiguousarray(
@@ -128,7 +141,7 @@ class SAQ(BaseQuantizer):
                 )
 
             # Step 4: Build coarse index for cluster assignment
-            self.coarse_index = faiss.IndexFlatL2(self.ndim)
+            self.coarse_index = faiss.IndexFlatIP(self.ndim) if is_ip else faiss.IndexFlatL2(self.ndim)
             self.coarse_index.add(self.coarse_quantizer)
 
             self.trained = False

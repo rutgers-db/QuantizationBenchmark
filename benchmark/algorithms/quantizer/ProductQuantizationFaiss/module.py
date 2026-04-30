@@ -16,7 +16,8 @@ class ProductQuantizationFaiss(BaseQuantizer):
         self.ndim = ndim
         self.nsubvec = nsubvec
         self.nbit = nbit
-        self.index = faiss.IndexPQ(ndim, nsubvec, nbit)
+        metric = faiss.METRIC_INNER_PRODUCT if space in ("ip", "inner_product") else faiss.METRIC_L2
+        self.index = faiss.IndexPQ(ndim, nsubvec, nbit, metric)
         self.space = space
         self.data_bytes = data_bytes
         self.data = None
@@ -48,7 +49,13 @@ class ProductQuantizationFaiss(BaseQuantizer):
         self.ndata = nd
         try:
             self.index.add(self.data)
-            self.dc = self.index.get_distance_computer()
+            # Some metrics (e.g. METRIC_INNER_PRODUCT on certain index types)
+            # don't expose get_distance_computer(); the dc is only used by the
+            # graph-traversal hooks, so tolerate failure.
+            try:
+                self.dc = self.index.get_distance_computer()
+            except Exception:
+                self.dc = None
         except Exception as e:
             print(f"Add error: {e}")
             return False

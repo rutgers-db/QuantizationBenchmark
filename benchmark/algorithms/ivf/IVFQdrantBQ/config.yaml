@@ -1,0 +1,111 @@
+# IVF + Qdrant Binary Quantization on residuals.
+#
+# encoding       : 1 = OneBit (sign around mean), 2 = TwoBits (mean ± 2/3·std)
+# query_encoding : "same" | "scalar4" | "scalar8"
+# nlist / nprobe : standard IVF parameters.
+
+sift-128-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 128
+    nthread: 16
+    space: "l2"
+  build:
+    encoding: [1, 2]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      query_encoding: ["same", "scalar4", "scalar8"]
+      nprobe: [100]
+      nrerank: [200, 300, 500, 1000]
+
+gist-960-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 960
+    nthread: 16
+    space: "l2"
+  build:
+    encoding: [1, 2]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      query_encoding: ["same", "scalar4", "scalar8"]
+      nprobe: [100]
+      nrerank: [200, 300, 500, 1000]
+
+audio-128-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 128
+    nthread: 16
+    space: "l2"
+  build:
+    encoding: [1]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      query_encoding: ["scalar8"]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
+
+video-1024-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 1024
+    nthread: 16
+    space: "l2"
+  build:
+    encoding: [1]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      query_encoding: ["scalar8"]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
+
+text2image-200-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 200
+    nthread: 16
+    space: "l2"
+  build:
+    encoding: [1]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      query_encoding: ["scalar8"]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
+
+paper-200-euclidean:
+  common:
+    data_bytes: 4
+    ndim: 200
+    nthread: 16
+    space: "l2"
+  build:
+    encoding: [1, 2]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      query_encoding: ["same", "scalar4", "scalar8"]
+      nprobe: [100]
+      nrerank: [200, 300, 500, 1000]
+
+laion-768-ip:
+  # encoding=1 -> 32x, encoding=2 -> 16x; QdrantBQ cannot reach 8x.
+  common:
+    data_bytes: 4
+    ndim: 768
+    nthread: 16
+    space: "ip"
+  build:
+    encoding: [1]
+    query_encoding: ["scalar8"]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]

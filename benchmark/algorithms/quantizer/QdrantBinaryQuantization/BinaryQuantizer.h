@@ -12,8 +12,15 @@
 //     TwoBits : { mean - (2/3)·sd, mean + (2/3)·sd }   [matches qdrant]
 //
 //   Bit layout in the packed code: plane p occupies virtual bit positions
-//   [p*d, (p+1)*d). Every code is zero-padded up to a multiple of 64 B
-//   so the whole code is a sequence of aligned AVX-512 blocks.
+//   [p*d, (p+1)*d). The logical per-vector code is n_words = ceil(K_db*d/64)
+//   uint64 words (no padding). Storage is lane-interleaved in blocks of
+//   B=8 vectors: for block b, word w, lane i, the word lives at
+//       codes[b*n_words*B + w*B + i]
+//   One ZMM load at that address brings in word w of 8 consecutive DB
+//   vectors, one per uint64 lane, so XOR+popcount against a broadcast of
+//   the query's word w produces 8 per-vector partial Hamming sums in one
+//   instruction. The final (partial) block is zero-padded in any unused
+//   lanes.
 //
 // Query encoding (per-word interleaved, exactly as qdrant):
 //   - SameAsStorage : encode the query with the same thermometer as db.
@@ -88,15 +95,20 @@ public:
 
     // --- code layout ---
     // n_bits  = K_db * d
-    // n_words = ceil(n_bits / 64), rounded up to a multiple of 8 (= 64 B).
+    // n_words = ceil(n_bits / 64)                   (real words per vector)
+    // B       = 8                                    (lane-interleaved block size)
+    // Storage is grouped into blocks of B consecutive vectors. For block b,
+    // word w (0 <= w < n_words), lane i (0 <= i < B):
+    //     codes[b*n_words*B + w*B + i]
+    // Each per-word group of B = 8 uint64 is one 64-B ZMM.
     size_t n_words;
-    size_t code_size;   // n_words * 8
+    size_t code_size;   // n_words * 8 (bytes of one vector's logical code)
 
     // --- db state ---
     bool   is_trained = false;
     size_t ntotal = 0;
-    size_t codes_capacity = 0;
-    uint64_t* codes = nullptr;   // 64-B aligned; ntotal * n_words uint64s in use
+    size_t codes_capacity = 0;   // capacity in vectors; storage rounded to a multiple of B
+    uint64_t* codes = nullptr;   // 64-B aligned; block-interleaved (see above)
 
     // Number of OpenMP threads used by add() / search(). 0 or negative
     // means "OpenMP default" (OMP_NUM_THREADS). Settable via set_num_threads.
@@ -136,10 +148,30 @@ public:
     // Size of one encoded query, in uint64 words (depends on query_encoding).
     size_t query_code_words() const;
 
+    // Score an already-encoded query against a single db id and return the
+    // metric value (same scale as `search` distances). Caller is responsible
+    // for ensuring `qcode` is the encoding produced by `encode_query`.
+    float score_one(const uint64_t* qcode, size_t db_id) const;
+
+    // Score a contiguous range [begin, end) of db ids against an already-
+    // encoded query. Writes (end - begin) floats to `out`: out[k] is the
+    // metric value for db_id = begin + k. Uses the SIMD block kernel over
+    // every block the range touches, which is substantially faster than
+    // calling score_one in a loop. Intended for scanning one inverted list.
+    void score_range(const uint64_t* qcode,
+                     size_t begin, size_t end,
+                     float* out) const;
+
     void reset();
 
     int k_db() const { return static_cast<int>(encoding); }
     int k_q()  const; // 1 for SameAsStorage, 4 or 8 for scalar modes
+
+    // Switch the query-side encoding (symmetric vs asymmetric Kq-bit scalar)
+    // at search time. DB storage is independent of this choice, so swapping
+    // it does NOT invalidate any codes — it only affects how queries are
+    // encoded and scored on subsequent calls.
+    void set_query_encoding(QueryEncoding qe) { query_encoding = qe; }
 
 private:
     void reserve(size_t n_vectors);
