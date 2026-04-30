@@ -94,6 +94,13 @@ class SAQ(BaseQuantizer):
 
     def _apply_pca(self, data):
         """Apply PCA rotation to data."""
+        # For IP, skip the mean shift: <P(q-m), P(d-m)> = <q-m, d-m> ≠ <q, d>.
+        # The rotation P is orthogonal so <Pq, Pd> = <q, d>; SAQ's per-cluster
+        # centroid subtraction handles the recentering needed for quantization
+        # quality. With centering, IP rankings are wrong even after the C++
+        # searcher fix, so this path is required for correct IP recall.
+        if self._dist_type == "ip":
+            return np.ascontiguousarray((data @ self.pca_matrix.T).astype(np.float32))
         centered = data - self.data_mean
         return np.ascontiguousarray((centered @ self.pca_matrix.T).astype(np.float32))
 

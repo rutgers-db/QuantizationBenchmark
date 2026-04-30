@@ -116,6 +116,13 @@ class IVFSAQ(BaseQuantizer):
 
     def _apply_pca(self, data):
         """Apply PCA rotation to data."""
+        # For IP, skip the mean shift: <P(q-m), P(d-m)> = <q-m, d-m> ≠ <q, d>.
+        # The rotation P is orthogonal so <Pq, Pd> = <q, d>; SAQ's per-cluster
+        # centroid subtraction handles the recentering needed for quantization
+        # quality. With centering, IP rankings are wrong even after the C++
+        # searcher fix, so this path is required for correct IP recall.
+        if self._dist_type == "ip":
+            return np.ascontiguousarray((data @ self.pca_matrix.T).astype(np.float32))
         centered = data - self.data_mean
         return np.ascontiguousarray((centered @ self.pca_matrix.T).astype(np.float32))
 
@@ -139,7 +146,9 @@ class IVFSAQ(BaseQuantizer):
                 # together under an SAQ-specific key so multiple nbit runs over the
                 # same data and nlist reuse the same training output.
                 # Distinguish L2 vs IP so spherical-vs-flat k-means don't share a key.
-                saq_key = f"saq_pca_{fp}_nlist{self.nlist}_d{self.ndim}_{self._dist_type}"
+                # v2: IP no longer subtracts the mean, so the centroid geometry
+                # differs from v1 cached values. Bump the key to force retrain.
+                saq_key = f"saq_pca_v2_{fp}_nlist{self.nlist}_d{self.ndim}_{self._dist_type}"
                 cached = load_npz(saq_key)
                 if (
                     cached is not None
