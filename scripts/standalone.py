@@ -58,19 +58,25 @@ STYLES = {
     "ProductQuantizationFaiss": {
         "alias": "PQ",
         "param_key": "nbit",
-        "param_colors": {4: "#1f77b4", 8: "#aec7e8"},
+        "param_colors": {4: "#1f77b4", 8: "#191c21"},
     },
     "OptimizedProductQuantizationFaiss": {
         "alias": "OPQ",
         "param_key": "nbit",
-        "param_colors": {4: "#9467bd", 8: "#c5b0d5"},
+        "param_colors": {4: "#7dae02", 8: "#6000a9"},
     },
-    "ProductQuantizationFastScanFaiss": {"alias": "PQFast", "color": "#7f7f7f"},
+    "ProductQuantizationFastScanFaiss": {"alias": "PQFastScan", "color": "#7f7f7f"},
     "ScalarQuatizationFaiss":           {"alias": "SQ",     "color": "#08087b"},
-    "OptimizedScalarQuantization":      {"alias": "OSQ",    "color": "#8c564b"},
-    "RabitQLibrary":                    {"alias": "RabitQ", "color": "#d62728"},
+    "OptimizedScalarQuantization":      {"alias": "OSQ",    "color": "#8e5044"},
+    "RabitQLibrary":                    {"alias": "RaBitQ", "color": "#d62728"},
     "SAQ":                       {"alias": "SAQ",    "color": "#066909"},
-    "TurboQuant":                       {"alias": "Turbo",  "color": "#00acc1"},
+    "TurboQuant":                       {"alias": "TurboQuant",  "color": "#00acc1"},
+    "QdrantBinaryQuantization": {
+        "alias": "BQ", "param_key": "query_encoding", "param_colors":{"same":"#312800", "scalar4":"#773A00", "scalar8":"#6D7700"}
+    },
+    "WeaviateRotationalQuantization": {
+        "alias": "RSQ", "color" : "#D09797"
+    }
 }
 
 # ── Load data ──────────────────────────────────────────────────
@@ -258,9 +264,14 @@ for dataset, topk_data in sorted(data.items()):
             ax.yaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter())
             ax.yaxis.get_major_formatter().set_scientific(False)
 
-        ax.set_xlabel(f"Recall@{topk}")
+        ax.set_xlabel(f"Recall@{topk} (%)")
         ax.set_ylabel("Queries per Second")
         # ax.set_title(f"{dataset}  —  top{topk}")
+        ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(0.1))
+        ax.xaxis.set_major_formatter(
+            matplotlib.ticker.FuncFormatter(lambda x, _: f"{x*100:.0f}")
+        )
+        ax.tick_params(axis="x", labelsize=10)
         ax.grid(True, which="both", linestyle="--", alpha=0.5)
 
         fig.tight_layout()

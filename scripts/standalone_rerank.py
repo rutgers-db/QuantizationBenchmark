@@ -80,11 +80,11 @@ def _build_ticks():
 
 def _fmt_r(r):
     if r < 0.90 - 1e-9:
-        return f"{r:.1f}"
+        return f"{r*100:.0f}"
     elif r < 0.98 - 1e-9:
-        return f"{r:.2f}"
+        return f"{r*100:.0f}"
     else:
-        return f"{r:.3f}"
+        return f"{r*100:.1f}"
 
 TICK_RECALLS = _build_ticks()
 TICK_DISPS   = [_r2d(r) for r in TICK_RECALLS]
@@ -105,19 +105,25 @@ STYLES = {
     "ProductQuantizationFaiss": {
         "alias": "PQ",
         "param_key": "nbit",
-        "param_colors": {4: "#1f77b4", 8: "#aec7e8"},
+        "param_colors": {4: "#1f77b4", 8: "#191c21"},
     },
     "OptimizedProductQuantizationFaiss": {
         "alias": "OPQ",
         "param_key": "nbit",
-        "param_colors": {4: "#9467bd", 8: "#c5b0d5"},
+        "param_colors": {4: "#7dae02", 8: "#6000a9"},
     },
-    "ProductQuantizationFastScanFaiss": {"alias": "PQFast", "color": "#7f7f7f"},
+    "ProductQuantizationFastScanFaiss": {"alias": "PQFastScan", "color": "#7f7f7f"},
     "ScalarQuatizationFaiss":           {"alias": "SQ",     "color": "#08087b"},
-    "OptimizedScalarQuantization":      {"alias": "OSQ",    "color": "#8c564b"},
-    "RabitQLibrary":                    {"alias": "RabitQ", "color": "#d62728"},
-    "SAQ":                              {"alias": "SAQ",    "color": "#066909"},
-    "TurboQuant":                       {"alias": "Turbo",  "color": "#00acc1"},
+    "OptimizedScalarQuantization":      {"alias": "OSQ",    "color": "#8e5044"},
+    "RabitQLibrary":                    {"alias": "RaBitQ", "color": "#d62728"},
+    "SAQ":                       {"alias": "SAQ",    "color": "#066909"},
+    "TurboQuant":                       {"alias": "TurboQuant",  "color": "#00acc1"},
+    "QdrantBinaryQuantization": {
+        "alias": "BQ", "param_key": "query_encoding", "param_colors":{"same":"#312800", "scalar4":"#773A00", "scalar8":"#6D7700"}
+    },
+    "WeaviateRotationalQuantization": {
+        "alias": "RSQ", "color" : "#D09797"
+    }
 }
 
 # ── Load data ──────────────────────────────────────────────────
@@ -247,7 +253,7 @@ def save_legend(algo_handles, rate_handles, algo_rates, stem):
 
     # Rate legend: compression rate entries + one "w/o rerank" baseline entry (gold patch).
     baseline_handle = matplotlib.patches.Patch(
-        facecolor=(0.85, 0.60, 0.0), label="w/o rerank",
+        facecolor=(0.85, 0.60, 0.0), label="w/o re-rank",
     )
     rate_handles_list = list(rate_handles.values()) + [baseline_handle]
     _save_handles(
@@ -386,7 +392,7 @@ for dataset, topk_data in sorted(data.items()):
         disp_max = max(all_disp_x) if all_disp_x else _r2d(1.0)
         _apply_x_axis(ax, disp_min, disp_max)
 
-        ax.set_xlabel(f"Recall@{topk}")
+        ax.set_xlabel(f"Recall@{topk} (%)")
         ax.set_ylabel("ΔQPS (no-rerank − rerank)")
 
         fig.tight_layout()
@@ -468,8 +474,8 @@ for dataset, topk_data in sorted(data.items()):
         disp_max2 = max(all_disp_x2) if all_disp_x2 else _r2d(1.0)
         _apply_x_axis(ax2, disp_min2, disp_max2)
 
-        ax2.set_xlabel(f"Recall@{topk}")
-        ax2.set_ylabel("Rerank QPS")
+        ax2.set_xlabel(f"Recall@{topk} (%)")
+        ax2.set_ylabel("Re-rank QPS")
 
         fig2.tight_layout()
         stem2 = os.path.join(FIGURES_DIR,
@@ -478,4 +484,4 @@ for dataset, topk_data in sorted(data.items()):
         plt.close(fig2)
 
 save_legend(algo_handles, rate_handles, algo_rates,
-            os.path.join(LEGENDS_DIR, "standalone_rerank_legend"))
+            os.path.join(LEGENDS_DIR, "standalone_re-rank_legend"))
