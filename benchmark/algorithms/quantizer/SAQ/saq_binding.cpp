@@ -156,7 +156,15 @@ public:
             Eigen::RowVectorXf query_copy = query;
 
             std::vector<PID> results(topk);
-            ivf_->search(query_copy, topk, nprobe, scfg, results.data(), nullptr);
+            // Dispatch on dist_type so SAQSearcher's kDistType is the correct
+            // specialization. Without this the template defaults to
+            // DistType::Any and the L2-hardcoded fast-path comparisons in
+            // saq_searcher.hpp reject every block in IP mode → recall=0.
+            if (dist_type_ == DistType::IP) {
+                ivf_->search<DistType::IP>(query_copy, topk, nprobe, scfg, results.data(), nullptr);
+            } else {
+                ivf_->search<DistType::L2Sqr>(query_copy, topk, nprobe, scfg, results.data(), nullptr);
+            }
 
             for (uint32_t j = 0; j < topk; j++) {
                 idx_ptr[i * topk + j] = static_cast<int64_t>(results[j]);
@@ -200,13 +208,18 @@ public:
 
             // Use estimate to get both IDs and distances
             std::vector<std::pair<PID, float>> dist_list;
-            ivf_->estimate(query_copy, nprobe, scfg, dist_list, nullptr, nullptr, nullptr);
+            if (dist_type_ == DistType::IP) {
+                ivf_->estimate<DistType::IP>(query_copy, nprobe, scfg, dist_list, nullptr, nullptr, nullptr);
+            } else {
+                ivf_->estimate<DistType::L2Sqr>(query_copy, nprobe, scfg, dist_list, nullptr, nullptr, nullptr);
+            }
 
-            // Sort by distance and take topk
+            // Sort by distance and take topk. For IP larger-is-better, so flip.
+            const bool ip = (dist_type_ == DistType::IP);
             std::partial_sort(dist_list.begin(),
                             dist_list.begin() + std::min((size_t)topk, dist_list.size()),
                             dist_list.end(),
-                            [](const auto& a, const auto& b) { return a.second < b.second; });
+                            [ip](const auto& a, const auto& b) { return ip ? a.second > b.second : a.second < b.second; });
 
             for (uint32_t j = 0; j < topk; j++) {
                 if (j < dist_list.size()) {
@@ -319,8 +332,13 @@ public:
         scfg.dist_type = dist_type_;
 
         std::vector<std::pair<PID, float>> dist_list;
-        ivf_->estimate(query_states_[thread_id].query, num_cen_, scfg,
-                       dist_list, nullptr, nullptr, nullptr);
+        if (dist_type_ == DistType::IP) {
+            ivf_->estimate<DistType::IP>(query_states_[thread_id].query, num_cen_, scfg,
+                           dist_list, nullptr, nullptr, nullptr);
+        } else {
+            ivf_->estimate<DistType::L2Sqr>(query_states_[thread_id].query, num_cen_, scfg,
+                           dist_list, nullptr, nullptr, nullptr);
+        }
 
         for (auto& [pid, dist] : dist_list) {
             if (pid == idx) {
