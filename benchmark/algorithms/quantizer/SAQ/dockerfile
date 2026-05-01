@@ -22,19 +22,34 @@ RUN cd /opt && git clone https://github.com/howarlii/SAQ.git
 # Apply SAQ patch:
 #   1. CAQ encoder: allow num_bits==1 path (upstream gated with `> 1`, but
 #      packer + DP bit allocator both require the fields).
-#   2. saq_searcher.hpp: fix IP fast-path. Upstream's reduce/>distk/<distk/>=distk
-#      comparisons and SIMD LT-predicate are L2-only ("smaller is better"). With
-#      kDistType=IP and initial distk=-max_float, every block is rejected → KNN
-#      pool stays default-zeroed → recall=0. Even after flipping directions, the
-#      IP "fast-distance" estimate is a noisy estimate of accurate IP (not a
-#      one-sided bound), so once distk rises, noise wrongly rejects good
-#      candidates and search halts after ~200 inserts. L2 stays correct because
-#      its var-prune bound makes the fast estimate conservative; IP has no
-#      equivalent margin. Patch dispatches comparisons on kDistType AND for IP
-#      skips the fast-distance gate entirely (process every lane through
-#      compAccurateDist; slower but correct). Also disables the partial-sum
-#      early break in the multi-segment accumulation loop for IP (running IP
-#      isn't monotone like running L2).
+#   2. saq_searcher.hpp + caq_estimator.hpp: fix IP search to be correct AND
+#      fast, by mirroring L2's per-lane bound structure.
+#
+#      Upstream's L2-only comparisons (reduce_min, `>distk`, `<distk`, SIMD
+#      LT-predicate) reject every block in IP mode → recall=0. The fix needs
+#      a one-sided per-lane upper bound on <q, o> so the searcher can prune
+#      symmetric to L2's per-lane LB on ||q-o||^2.
+#
+#      caq_estimator.hpp:
+#        a. varsEstDist IP: per-lane Cauchy-Schwarz UB
+#               UB(<q,o>)[j] = <q,c> + ||q|| * ||o-c||[j]
+#           uses the existing factor_o_l2norm[] (per-vector ||o-c||) and the
+#           segment query norm. Guaranteed by the inequality -- no statistical
+#           assumption -- so cannot wrongly skip a true top-K.
+#        b. compFastDist IP: combine the 1-bit residual estimate with <q,c>,
+#           then add a RaBitQ-tight per-lane margin
+#               eps * ||q|| * ||o-c||[j],   eps = 1.9 / sqrt(D-1)
+#           (D = segment padded dim; matches the kConstEpsilon=1.9 the SAQ
+#           encoder already uses). For high D this is ~sqrt(D) tighter than
+#           Cauchy-Schwarz, so step 2 genuinely shrinks the per-lane UB and
+#           step 3 lane gates can prune.
+#
+#      saq_searcher.hpp: drop the L2-only comparison hard-codes; reduce on
+#      max for IP / min for L2; entry/lane/per-cluster gates all compare
+#      curr_dist directly against distk -- no separate margin tracking, since
+#      vars/fast already return per-lane UBs. Per-cluster acc-loop early
+#      break is now safe for IP too (partial sum stays a valid UB until full
+#      refinement completes).
 COPY benchmark/algorithms/quantizer/SAQ/saq_ip.patch /tmp/saq_ip.patch
 RUN cd /opt/SAQ && git apply /tmp/saq_ip.patch && rm /tmp/saq_ip.patch
 
