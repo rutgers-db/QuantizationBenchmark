@@ -33,12 +33,12 @@ audio-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [4]
+    nbit: [1,2,4]
     nlist: [1]
   search:
     - topk: 100
       nprobe: [1]
-      # nrerank: [200, 300, 500, 800, 1000]
+      nrerank: [200, 300, 500, 800, 1000]
 
 video-1024-euclidean:
   common:
@@ -47,12 +47,12 @@ video-1024-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [4]
+    nbit: [1,2,4]
     nlist: [1]
   search:
     - topk: 100
       nprobe: [1]
-      # nrerank: [200, 300, 500, 800, 1000]
+      nrerank: [200, 300, 500, 800, 1000]
 
 text2image-200-euclidean:
   common:
@@ -61,12 +61,12 @@ text2image-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [4]
+    nbit: [1,2,4]
     nlist: [1]
   search:
     - topk: 100
       nprobe: [1]
-      # nrerank: [200, 300, 500, 800, 1000]
+      nrerank: [200, 300, 500, 800, 1000]
 
 paper-200-euclidean:
   common:
