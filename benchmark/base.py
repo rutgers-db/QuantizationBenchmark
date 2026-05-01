@@ -133,7 +133,7 @@ def _parallel_l2_topk(
 
     workers = max(1, min(int(nthread), nq))
     step = max(1, (nq + workers - 1) // workers)
-    with threadpool_limits(limits=1):
+    with _pin_blas(1):
         with ThreadPoolExecutor(max_workers=workers) as ex:
             list(ex.map(lambda s: rerank_chunk(s, min(s + step, nq)), range(0, nq, step)))
     return out_I, out_D

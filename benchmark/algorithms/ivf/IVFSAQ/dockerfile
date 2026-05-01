@@ -25,11 +25,26 @@ RUN sed -i 's/if (num_bits_ > 1) {/if (num_bits_ >= 1) {/' \
     /opt/SAQ/saqlib/quantization/caq/caq_encoder.hpp && \
     grep -q "num_bits_ >= 1" /opt/SAQ/saqlib/quantization/caq/caq_encoder.hpp
 
-# Patch SAQ searcher fast-path: upstream's reduce_min / `>distk` / `<distk` /
-# SIMD LT-predicate are L2-only (smaller-is-better). With kDistType=IP they
-# always reject every block (initial distk for IP = -max_float), so KNN pool
-# never gets an insert and search returns the default-zeroed ids array,
-# making IP recall=0. Rewrite the comparisons to dispatch on kDistType.
+# Patch SAQ searcher fast-path for IP. Two upstream issues:
+#
+# (1) The reduce/`>distk`/`<distk`/`>=distk` comparisons and SIMD LT-predicate
+#     are L2-only ("smaller is better"). With kDistType=IP and initial distk
+#     = -max_float, every block is rejected → KNN pool stays at the default
+#     zero ids array → recall=0.
+#
+# (2) Even after flipping comparison directions, the IP "fast-distance"
+#     estimate is a NOISY estimate of accurate IP, not a one-sided bound.
+#     Once the top-K is full and distk rises, noisy fast-IP estimates that
+#     happen to fall below distk wrongly reject good candidates. Recall
+#     stays near 0 because the search effectively halts after ~200 inserts.
+#     L2's fast estimate doesn't have this issue because the var-prune
+#     bound makes it conservative (lower bound on dist²), so the gate is
+#     permissive. There is no equivalent safety margin in the IP estimator.
+#
+# Fix: dispatch comparisons on kDistType, AND for IP skip the fast-distance
+# gate entirely (process every lane through compAccurateDist). Slower, but
+# correct. Also disable the partial-sum early break in the multi-segment
+# accumulation loop for IP (running IP isn't monotone like running L2).
 RUN python3 <<'PY'
 import pathlib
 p = pathlib.Path("/opt/SAQ/saqlib/quantization/saq_searcher.hpp")
@@ -57,23 +72,28 @@ s = s.replace(
     "mi = reduce_pessimistic(curr_dist512[0], curr_dist512[1]);",
 )
 s = s.replace("if (mi > distk) {\n                    continue;",
-              "if (!better_than_thresh(mi, distk)) {\n                    continue;")
+              "if (!kIp && !better_than_thresh(mi, distk)) {\n                    continue;")
 s = s.replace("if (mi > distk) {\n                    break;",
-              "if (!better_than_thresh(mi, distk)) {\n                    break;")
-s = s.replace("if (mi <= distk) {", "if (better_than_thresh(mi, distk)) {")
+              "if (!kIp && !better_than_thresh(mi, distk)) {\n                    break;")
+s = s.replace("if (mi <= distk) {",
+              "if (kIp || better_than_thresh(mi, distk)) {")
 s = s.replace("if (curr_dist[j] < distk) {",
-              "if (better_than_thresh(curr_dist[j], distk)) {")
+              "if (kIp || better_than_thresh(curr_dist[j], distk)) {")
 s = s.replace("if (acc_dist >= distk) {\n                                break;",
-              "if (worse_or_eq_thresh(acc_dist, distk)) {\n                                break;")
+              "if (!kIp && worse_or_eq_thresh(acc_dist, distk)) {\n                                break;")
 
 old_mask = (
     "uint32_t mask = ((uint32_t)_mm512_cmp_ps_mask(est_dist[0], simd_distk, 1)) |\n"
     "                            ((uint32_t)_mm512_cmp_ps_mask(est_dist[1], simd_distk, 1) << 16);"
 )
 new_mask = (
-    "constexpr int kPred = kIp ? 14 : 1; // 14=GT (NLE), 1=LT\n"
-    "            uint32_t mask = ((uint32_t)_mm512_cmp_ps_mask(est_dist[0], simd_distk, kPred)) |\n"
-    "                            ((uint32_t)_mm512_cmp_ps_mask(est_dist[1], simd_distk, kPred) << 16);"
+    "uint32_t mask;\n"
+    "            if constexpr (kIp) {\n"
+    "                mask = 0xFFFFFFFFu;  // process every lane; fast IP is too noisy to gate on safely\n"
+    "            } else {\n"
+    "                mask = ((uint32_t)_mm512_cmp_ps_mask(est_dist[0], simd_distk, 1)) |\n"
+    "                       ((uint32_t)_mm512_cmp_ps_mask(est_dist[1], simd_distk, 1) << 16);\n"
+    "            }"
 )
 assert old_mask in s, "scanCluster mask block not found"
 s = s.replace(old_mask, new_mask, 1)
@@ -81,7 +101,7 @@ s = s.replace(old_mask, new_mask, 1)
 p.write_text(s)
 PY
 RUN grep -q "static constexpr bool kIp" /opt/SAQ/saqlib/quantization/saq_searcher.hpp && \
-    grep -q "reduce_pessimistic" /opt/SAQ/saqlib/quantization/saq_searcher.hpp
+    grep -q "fast IP is too noisy" /opt/SAQ/saqlib/quantization/saq_searcher.hpp
 
 # Install Python dependencies including pybind11
 RUN pip install --no-cache-dir \
