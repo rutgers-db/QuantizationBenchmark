@@ -204,18 +204,18 @@ class SAQ(BaseQuantizer):
 
         return I, D
 
-    def searchAndRerank(self, nq: int, queries: np.ndarray, topk: int, nrerank: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
-        if not self.trained:
-            raise RuntimeError("Index not trained. Call fit() first.")
+    # def searchAndRerank(self, nq: int, queries: np.ndarray, topk: int, nrerank: int, **search_params) -> Tuple[np.ndarray, np.ndarray]:
+    #     if not self.trained:
+    #         raise RuntimeError("Index not trained. Call fit() first.")
 
-        queries = np.ascontiguousarray(queries.astype(np.float32))
+    #     queries = np.ascontiguousarray(queries.astype(np.float32))
 
-        # Get nrerank candidates using approximate search
-        I_candidates, _ = self.query(nq, queries, nrerank, **search_params)
+    #     # Get nrerank candidates using approximate search
+    #     I_candidates, _ = self.query(nq, queries, nrerank, **search_params)
 
-        # Rerank using exact L2 on original data
-        prepared_candidates = self.prepareRerankCandidates(queries, I_candidates)
-        return self.rerankPreparedCandidates(queries, prepared_candidates, nrerank, topk)
+    #     # Rerank using exact L2 on original data
+    #     prepared_candidates = self.prepareRerankCandidates(queries, I_candidates)
+    #     return self.rerankPreparedCandidates(queries, prepared_candidates, nrerank, topk)
 
     def getMemoryUsage(self) -> float:
         return psutil.Process().memory_info().rss / 1024
