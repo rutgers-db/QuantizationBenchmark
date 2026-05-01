@@ -24,7 +24,8 @@ DATASET = None
 KNOWN_DATASETS = [
     "audio-128-euclidean",
     "gist-960-euclidean",
-    "paper-200-euclidean",
+    # "paper-200-euclidean",
+    "laion-768-ip",
     "sift-128-euclidean",
     "text2image-200-euclidean",
     "video-1024-euclidean",
@@ -72,7 +73,7 @@ STYLES = {
     "SAQ":                       {"alias": "SAQ",    "color": "#066909"},
     "TurboQuant":                       {"alias": "TurboQuant",  "color": "#00acc1"},
     "QdrantBinaryQuantization": {
-        "alias": "BQ", "param_key": "query_encoding", "param_colors":{"same":"#312800", "scalar4":"#773A00", "scalar8":"#6D7700"}
+        "alias": "BQ", "param_key": "query_encoding", "param_colors":{"same" :"#6D7700"}
     },
     "WeaviateRotationalQuantization": {
         "alias": "RSQ", "color" : "#D09797"
@@ -227,7 +228,9 @@ for dataset, topk_data in sorted(data.items()):
                                             key=lambda kv: (kv[0] is None, kv[0])):
                     # Color
                     if param_key and group is not None:
-                        color = style["param_colors"].get(group, "#999999")
+                        if group not in style["param_colors"]:
+                            continue
+                        color = style["param_colors"][group]
                     else:
                         color = style["color"]
 

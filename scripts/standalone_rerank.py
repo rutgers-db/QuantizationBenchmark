@@ -23,7 +23,8 @@ DATASET = None
 KNOWN_DATASETS = [
     "audio-128-euclidean",
     "gist-960-euclidean",
-    "paper-200-euclidean",
+    # "paper-200-euclidean",
+    "laion-768-ip",
     "sift-128-euclidean",
     "text2image-200-euclidean",
     "video-1024-euclidean",
@@ -333,7 +334,9 @@ for dataset, topk_data in sorted(data.items()):
                 for group, points in sorted(rate_map[rate].items(),
                                             key=lambda kv: (kv[0] is None, kv[0])):
                     if param_key and group is not None:
-                        color = style["param_colors"].get(group, "#999999")
+                        if group not in style["param_colors"]:
+                            continue
+                        color = style["param_colors"][group]
                     else:
                         color = style["color"]
 
@@ -416,7 +419,9 @@ for dataset, topk_data in sorted(data.items()):
                 for group, points in sorted(rate_map[rate].items(),
                                             key=lambda kv: (kv[0] is None, kv[0])):
                     if param_key and group is not None:
-                        color = style["param_colors"].get(group, "#999999")
+                        if group not in style["param_colors"]:
+                            continue
+                        color = style["param_colors"][group]
                     else:
                         color = style["color"]
 
