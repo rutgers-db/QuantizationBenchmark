@@ -56,3 +56,11 @@ python run.py --dataset text2image-200-euclidean --algorithm IVFTurboQuant --dat
 python run.py --dataset text2image-200-euclidean --algorithm Faiss-IVFPQFastScan --data-dir /data/local/embedding_dataset/hdf5/ --distribution-shift-test --debug
 python run.py --dataset text2image-200-euclidean --algorithm IVFQdrantBQ --data-dir /data/local/embedding_dataset/hdf5/ --distribution-shift-test --debug
 python run.py --dataset text2image-200-euclidean --algorithm IVFWeaviateRSQ --data-dir /data/local/embedding_dataset/hdf5/ --distribution-shift-test --debug
+
+
+python run.py --algorithm SAQ --build-images --force-rebuild
+python run.py --dataset laion-768-ip --algorithm SAQ --data-dir /data/local/embedding_dataset/hdf5/ --distribution-shift-test --debug
+
+python run.py --algorithm IVFSAQ --build-images --force-rebuild
+python run.py --dataset laion-768-ip --algorithm IVFSAQ --data-dir /data/local/embedding_dataset/hdf5/ --distribution-shift-test --debug
+python run.py --dataset text2image-200-euclidean --algorithm IVFSAQ --data-dir /data/local/embedding_dataset/hdf5/ --distribution-shift-test --debug

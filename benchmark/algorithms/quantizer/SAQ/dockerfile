@@ -19,69 +19,24 @@ RUN apt-get update && apt-get install -y \
 # Clone SAQ repository
 RUN cd /opt && git clone https://github.com/howarlii/SAQ.git
 
-# Patch CAQ encoder: allow num_bits==1 path so sign-bit codes populate base_code
-# (upstream gated with `> 1`, but packer + DP bit allocator both require the fields)
-RUN sed -i 's/if (num_bits_ > 1) {/if (num_bits_ >= 1) {/' \
-    /opt/SAQ/saqlib/quantization/caq/caq_encoder.hpp && \
-    grep -q "num_bits_ >= 1" /opt/SAQ/saqlib/quantization/caq/caq_encoder.hpp
-
-# Patch SAQ searcher fast-path: upstream's reduce_min / `>distk` / `<distk` /
-# SIMD LT-predicate are L2-only (smaller-is-better). With kDistType=IP they
-# always reject every block (initial distk for IP = -max_float), so KNN pool
-# never gets an insert and search returns the default-zeroed ids array,
-# making IP recall=0. Rewrite the comparisons to dispatch on kDistType.
-RUN python3 <<'PY'
-import pathlib
-p = pathlib.Path("/opt/SAQ/saqlib/quantization/saq_searcher.hpp")
-s = p.read_text()
-
-helpers = """
-    static constexpr bool kIp = (kDistType == DistType::IP);
-    static inline bool worse_or_eq_thresh(float d, float thr) {
-        if constexpr (kIp) return d <= thr; else return d >= thr;
-    }
-    static inline bool better_than_thresh(float d, float thr) {
-        if constexpr (kIp) return d > thr; else return d < thr;
-    }
-    static inline float reduce_pessimistic(__m512 a, __m512 b) {
-        if constexpr (kIp) return _mm512_reduce_max_ps(_mm512_max_ps(a, b));
-        else return _mm512_reduce_min_ps(_mm512_min_ps(a, b));
-    }
-"""
-anchor = "    float *clu_dist_;\n    __m512 *clu_dist512_;"
-assert anchor in s, "anchor for helpers not found"
-s = s.replace(anchor, anchor + helpers, 1)
-
-s = s.replace(
-    "mi = _mm512_reduce_min_ps(_mm512_min_ps(curr_dist512[0], curr_dist512[1]));",
-    "mi = reduce_pessimistic(curr_dist512[0], curr_dist512[1]);",
-)
-s = s.replace("if (mi > distk) {\n                    continue;",
-              "if (!better_than_thresh(mi, distk)) {\n                    continue;")
-s = s.replace("if (mi > distk) {\n                    break;",
-              "if (!better_than_thresh(mi, distk)) {\n                    break;")
-s = s.replace("if (mi <= distk) {", "if (better_than_thresh(mi, distk)) {")
-s = s.replace("if (curr_dist[j] < distk) {",
-              "if (better_than_thresh(curr_dist[j], distk)) {")
-s = s.replace("if (acc_dist >= distk) {\n                                break;",
-              "if (worse_or_eq_thresh(acc_dist, distk)) {\n                                break;")
-
-old_mask = (
-    "uint32_t mask = ((uint32_t)_mm512_cmp_ps_mask(est_dist[0], simd_distk, 1)) |\n"
-    "                            ((uint32_t)_mm512_cmp_ps_mask(est_dist[1], simd_distk, 1) << 16);"
-)
-new_mask = (
-    "constexpr int kPred = kIp ? 14 : 1; // 14=GT (NLE), 1=LT\n"
-    "            uint32_t mask = ((uint32_t)_mm512_cmp_ps_mask(est_dist[0], simd_distk, kPred)) |\n"
-    "                            ((uint32_t)_mm512_cmp_ps_mask(est_dist[1], simd_distk, kPred) << 16);"
-)
-assert old_mask in s, "scanCluster mask block not found"
-s = s.replace(old_mask, new_mask, 1)
-
-p.write_text(s)
-PY
-RUN grep -q "static constexpr bool kIp" /opt/SAQ/saqlib/quantization/saq_searcher.hpp && \
-    grep -q "reduce_pessimistic" /opt/SAQ/saqlib/quantization/saq_searcher.hpp
+# Apply SAQ patch:
+#   1. CAQ encoder: allow num_bits==1 path (upstream gated with `> 1`, but
+#      packer + DP bit allocator both require the fields).
+#   2. saq_searcher.hpp: fix IP fast-path. Upstream's reduce/>distk/<distk/>=distk
+#      comparisons and SIMD LT-predicate are L2-only ("smaller is better"). With
+#      kDistType=IP and initial distk=-max_float, every block is rejected → KNN
+#      pool stays default-zeroed → recall=0. Even after flipping directions, the
+#      IP "fast-distance" estimate is a noisy estimate of accurate IP (not a
+#      one-sided bound), so once distk rises, noise wrongly rejects good
+#      candidates and search halts after ~200 inserts. L2 stays correct because
+#      its var-prune bound makes the fast estimate conservative; IP has no
+#      equivalent margin. Patch dispatches comparisons on kDistType AND for IP
+#      skips the fast-distance gate entirely (process every lane through
+#      compAccurateDist; slower but correct). Also disables the partial-sum
+#      early break in the multi-segment accumulation loop for IP (running IP
+#      isn't monotone like running L2).
+COPY benchmark/algorithms/quantizer/SAQ/saq_ip.patch /tmp/saq_ip.patch
+RUN cd /opt/SAQ && git apply /tmp/saq_ip.patch && rm /tmp/saq_ip.patch
 
 # Install Python dependencies including pybind11
 RUN pip install --no-cache-dir \
@@ -89,6 +44,7 @@ RUN pip install --no-cache-dir \
     h5py \
     pyyaml \
     psutil \
+    threadpoolctl \
     pybind11 \
     faiss-cpu
 
