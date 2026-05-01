@@ -1,23 +1,40 @@
+diff --git a/saqlib/quantization/caq/caq_encoder.hpp b/saqlib/quantization/caq/caq_encoder.hpp
+index 48f4431..cb0ef17 100644
+--- a/saqlib/quantization/caq/caq_encoder.hpp
++++ b/saqlib/quantization/caq/caq_encoder.hpp
+@@ -236,7 +236,10 @@ class CAQEncoder {
+         base_code.o_l2norm = caq.o_l2norm;
+         base_code.fac_rescale = caq.fac_rescale;
+         base_code.fac_error = caq.fac_error;
+-        if (num_bits_ > 1) {
++        // Allow num_bits_==1 to populate base_code.{ip_cent_oa,norm_ip_o_oa,code}.
++        // Upstream gated with `> 1` but the packer + DP bit allocator both
++        // require those fields when a 1-bit segment appears in the plan.
++        if (num_bits_ >= 1) {
+             if (centroid) {
+                 base_code.ip_cent_oa = centroid->dot(caq.get_oa());
+             }
 diff --git a/saqlib/quantization/caq/caq_estimator.hpp b/saqlib/quantization/caq/caq_estimator.hpp
-index 04efb5b..00bbddc 100644
+index 04efb5b..f62e944 100644
 --- a/saqlib/quantization/caq/caq_estimator.hpp
 +++ b/saqlib/quantization/caq/caq_estimator.hpp
-@@ -37,6 +37,14 @@ class CaqCluEstimator {
+@@ -37,6 +37,15 @@ class CaqCluEstimator {
      const double sq_delta_ = 0;
      float ip_q_c_ = 0;
      float q_l2sqr_ = 0;
 +    float q_l2norm_ = 0;            // ||q_segment|| in IP mode (unused for L2).
-+    // Per-segment fast-IP error scale per RaBitQ analysis: bound on the 1-bit
-+    // residual estimate's deviation from <q, o-c> is roughly
++    // Per-segment fast-IP error scale = 1.9 / sqrt(D-1), matching the
++    // kConstEpsilon=1.9 the encoder uses. Bound on the 1-bit residual
++    // estimate's deviation from <q, o-c> is roughly
 +    //   |fast_estimate - <q, o-c>|  <=  fast_eps_ * ||q|| * ||o-c||
-+    // with eps = kConstEpsilon / sqrt(D-1) (kConstEpsilon = 1.9 to match
-+    // SAQ/RaBitQ's encoder constant). For high-D random rotations this is
-+    // ~sqrt(D) tighter than the Cauchy-Schwarz bound used at the vars stage.
++    // (assumes worst-case tan(theta_v) = 1; per-vector fac_error would be
++    // tighter but the scalar gather to read it costs more than the extra
++    // pruning is worth -- the dominant prune already happens at step 1).
 +    const float fast_eps_ = 0;
      Lut lut_;
      const CAQClusterData *curr_cluster_;
  
-@@ -57,6 +65,7 @@ class CaqCluEstimator {
+@@ -57,6 +66,7 @@ class CaqCluEstimator {
          : num_dim_padded_(data.num_dim_pad), num_bits_(data.num_bits),
            ex_bits_(num_bits_ ? num_bits_ - 1 : 0), cfg_(std::move(cfg)),
            sq_delta_(2.0 / (1 << num_bits_)),
@@ -25,7 +42,7 @@ index 04efb5b..00bbddc 100644
            lut_(num_dim_padded_, ex_bits_) {
          CHECK(kDistType == DistType::Any || kDistType == cfg_.dist_type) << "distance type mismatch";
          CHECK(data.cfg.use_fastscan) << "CaqEstimator require fastscan enabled. Please use CaqSingleEstimator instead.";
-@@ -99,6 +108,9 @@ class CaqCluEstimator {
+@@ -99,6 +109,9 @@ class CaqCluEstimator {
              ip_q_c_ = query_data_.dot(centroid);
              lut_.prepare(query_data_);
              q_l2sqr_ = lut_.getQL2Sqr();
@@ -35,7 +52,7 @@ index 04efb5b..00bbddc 100644
          } else {
              lut_.prepare(query_data_ - centroid);
              q_l2sqr_ = lut_.getQL2Sqr();
-@@ -118,9 +130,20 @@ class CaqCluEstimator {
+@@ -118,9 +131,20 @@ class CaqCluEstimator {
              return;
          }
          if (isIpDist()) {
@@ -58,7 +75,7 @@ index 04efb5b..00bbddc 100644
              }
              return;
          }
-@@ -159,10 +182,27 @@ class CaqCluEstimator {
+@@ -159,10 +183,27 @@ class CaqCluEstimator {
          }
  
          if (isIpDist()) {
