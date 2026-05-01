@@ -1,0 +1,99 @@
+diff --git a/saqlib/quantization/caq/caq_encoder.hpp b/saqlib/quantization/caq/caq_encoder.hpp
+index 48f4431..404e2d9 100644
+--- a/saqlib/quantization/caq/caq_encoder.hpp
++++ b/saqlib/quantization/caq/caq_encoder.hpp
+@@ -236,7 +236,7 @@ class CAQEncoder {
+         base_code.o_l2norm = caq.o_l2norm;
+         base_code.fac_rescale = caq.fac_rescale;
+         base_code.fac_error = caq.fac_error;
+-        if (num_bits_ > 1) {
++        if (num_bits_ >= 1) {
+             if (centroid) {
+                 base_code.ip_cent_oa = centroid->dot(caq.get_oa());
+             }
+diff --git a/saqlib/quantization/saq_searcher.hpp b/saqlib/quantization/saq_searcher.hpp
+index d31148f..413302b 100644
+--- a/saqlib/quantization/saq_searcher.hpp
++++ b/saqlib/quantization/saq_searcher.hpp
+@@ -25,6 +25,18 @@ class SAQSearcher : public SaqCluEstimator<kDistType> {
+ 
+     float *clu_dist_;
+     __m512 *clu_dist512_;
++    static constexpr bool kIp = (kDistType == DistType::IP);
++    static inline bool worse_or_eq_thresh(float d, float thr) {
++        if constexpr (kIp) return d <= thr; else return d >= thr;
++    }
++    static inline bool better_than_thresh(float d, float thr) {
++        if constexpr (kIp) return d > thr; else return d < thr;
++    }
++    static inline float reduce_pessimistic(__m512 a, __m512 b) {
++        if constexpr (kIp) return _mm512_reduce_max_ps(_mm512_max_ps(a, b));
++        else return _mm512_reduce_min_ps(_mm512_min_ps(a, b));
++    }
++
+     QueryRuntimeMetrics runtime_metrics_;
+ 
+   public:
+@@ -102,8 +114,8 @@ class SAQSearcher : public SaqCluEstimator<kDistType> {
+                     curr_dist512[1] = _mm512_add_ps(curr_dist512[1], cd[1]);
+                 }
+ 
+-                mi = _mm512_reduce_min_ps(_mm512_min_ps(curr_dist512[0], curr_dist512[1]));
+-                if (mi > distk) {
++                mi = reduce_pessimistic(curr_dist512[0], curr_dist512[1]);
++                if (!kIp && !better_than_thresh(mi, distk)) {
+                     continue;
+                 }
+             }
+@@ -125,14 +137,14 @@ class SAQSearcher : public SaqCluEstimator<kDistType> {
+                 curr_dist512[0] = _mm512_add_ps(curr_dist512[0], cd[0]);
+                 curr_dist512[1] = _mm512_add_ps(curr_dist512[1], cd[1]);
+ 
+-                mi = _mm512_reduce_min_ps(_mm512_min_ps(curr_dist512[0], curr_dist512[1]));
+-                if (mi > distk) {
++                mi = reduce_pessimistic(curr_dist512[0], curr_dist512[1]);
++                if (!kIp && !better_than_thresh(mi, distk)) {
+                     break;
+                 }
+             }
+ 
+             // 3. use full bits to compute accurate distance
+-            if (mi <= distk) {
++            if (kIp || better_than_thresh(mi, distk)) {
+                 _mm512_store_ps(curr_dist, curr_dist512[0]);
+                 _mm512_store_ps(curr_dist + 16, curr_dist512[1]);
+ 
+@@ -141,7 +153,7 @@ class SAQSearcher : public SaqCluEstimator<kDistType> {
+                     _mm512_store_ps(clu_dist_ + c_i * KFastScanSize + 16, clu_dist512_[c_i * FAST_ARRAY + 1]);
+                 }
+                 for (size_t j = 0; j < KFastScanSize; ++j) {
+-                    if (curr_dist[j] < distk) {
++                    if (kIp || better_than_thresh(curr_dist[j], distk)) {
+                         auto idx = blk_begin + j;
+                         if (idx >= num_points) {
+                             break;
+@@ -150,7 +162,7 @@ class SAQSearcher : public SaqCluEstimator<kDistType> {
+                         for (size_t c_i = 0; c_i < clus_num; ++c_i) {
+                             auto &estimator = estimators_[c_i];
+                             acc_dist += estimator.compAccurateDist(idx) - clu_dist_[c_i * KFastScanSize + j];
+-                            if (acc_dist >= distk) {
++                            if (!kIp && worse_or_eq_thresh(acc_dist, distk)) {
+                                 break;
+                             }
+                         }
+@@ -188,8 +200,13 @@ class SAQSearcher : public SaqCluEstimator<kDistType> {
+             estimator.compFastDist(blk_idx, est_dist);
+ 
+             __m512 simd_distk = _mm512_set1_ps(distk);
+-            uint32_t mask = ((uint32_t)_mm512_cmp_ps_mask(est_dist[0], simd_distk, 1)) |
+-                            ((uint32_t)_mm512_cmp_ps_mask(est_dist[1], simd_distk, 1) << 16);
++            uint32_t mask;
++            if constexpr (kIp) {
++                mask = 0xFFFFFFFFu;  // process every lane; fast IP is too noisy to gate on safely
++            } else {
++                mask = ((uint32_t)_mm512_cmp_ps_mask(est_dist[0], simd_distk, 1)) |
++                       ((uint32_t)_mm512_cmp_ps_mask(est_dist[1], simd_distk, 1) << 16);
++            }
+ 
+             // The following line is important: the number of num_points is not necessarily 32.
+             mask = (mask & ((1ull << curr_num_points) - 1));
