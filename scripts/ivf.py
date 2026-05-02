@@ -33,8 +33,8 @@ os.makedirs(LEGENDS_DIR, exist_ok=True)
 IVF_STYLES = {
     # "Faiss-IVFPQ":        {"color": "#1f77b4", "name": "IVFPQ"},
     # "Faiss-OPQ-IVFPQ":    {"color": "#9467bd", "name": "IVFOPQ"},
-    "IVFE8":  {"color": "#17becf", "name": "IVFE8"},   # new - no standalone match
-    "IVFE8FastScan":      {"color": "#f39c12", "name": "IVFE8FastScan"},  
+    "IVFE8PQ":  {"color": "#17becf", "name": "IVFE8PQ"},   # new - no standalone match
+    "IVFE8PQFastScan":      {"color": "#f39c12", "name": "IVFE8PQFastScan"},  
     # "Faiss-IVFSQ":        {"color": "#ff7f0e", "name": "IVFSQ"},
     # "IVFOSQ":             {"color": "#8c564b", "name": "IVFOSQ"},
     "IVFRabitQLibrary":   {"color": "#d62728", "name": "IVFRabitQ"},

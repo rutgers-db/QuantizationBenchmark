@@ -1,6 +1,3 @@
-# Configuration for IVFRabitQLibrary (RaBitQ with IVF)
-# Uses multiple IVF clusters (nlist) with nprobe-based search
-
 sift-128-euclidean:
   common:
     data_bytes: 4
@@ -8,7 +5,8 @@ sift-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [1, 2, 4]
+    nsubvec: [32, 128]
+    nbit: [4]
     nlist: [1024]
   search:
     - topk: 100
@@ -22,12 +20,13 @@ gist-960-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [1,4]
+    nsubvec: [240, 960]
+    nbit: [4]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
 
 audio-128-euclidean:
   common:
@@ -36,12 +35,13 @@ audio-128-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [1,4]
+    nsubvec: [128]
+    nbit: [4]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
 
 video-1024-euclidean:
   common:
@@ -50,12 +50,13 @@ video-1024-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [1,4]
+    nsubvec: [1024]
+    nbit: [4]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
 
 text2image-200-euclidean:
   common:
@@ -64,12 +65,13 @@ text2image-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [1,4]
+    nsubvec: [200]
+    nbit: [4]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
 
 paper-200-euclidean:
   common:
@@ -78,9 +80,26 @@ paper-200-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nbit: [1,4]
+    nsubvec: [200]
+    nbit: [4]
     nlist: [1024, 4096]
   search:
     - topk: 100
-      nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]
+
+laion-768-ip:
+  common:
+    data_bytes: 4
+    ndim: 768
+    nthread: 16
+    space: "ip"
+  build:
+    # nbit=4 fixed for FastScan; nsubvec=192 -> 32x, 384 -> 16x, 768 -> 8x compression
+    nsubvec: [768]
+    nbit: [4]
+    nlist: [1024, 4096]
+  search:
+    - topk: 100
+      nprobe: [100]
+      # nrerank: [200, 300, 500, 1000]

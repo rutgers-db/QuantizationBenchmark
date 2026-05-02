@@ -11,7 +11,7 @@ sift-128-euclidean:
     space: "l2"
   build:
     nlist: [1024]
-    nsubvec: [16]
+    nsubvec: [16, 32, 64]
     nbit: [8]
   search:
     - topk: 100
@@ -25,13 +25,13 @@ gist-960-euclidean:
     nthread: 16
     space: "l2"
   build:
-    nlist: [1024, 4096]
-    nsubvec: [120, 480]
+    nlist: [1024]
+    nsubvec: [120, 240, 480]
     nbit: [8]
   search:
     - topk: 100
       nprobe: [10, 20, 30, 50, 75, 100]
-      nrerank: [200, 300, 500, 1000]
+      # nrerank: [200, 300, 500, 1000]
 
 audio-128-euclidean:
   common:

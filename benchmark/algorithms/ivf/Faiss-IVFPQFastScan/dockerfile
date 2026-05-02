@@ -1,0 +1,33 @@
+FROM python:3.9-slim
+
+# Build arguments
+ARG ALGO_TYPE
+ARG ALGO_NAME
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    numpy \
+    h5py \
+    pyyaml \
+    psutil \
+    threadpoolctl \
+    faiss-cpu
+
+# Copy the benchmark framework code
+COPY benchmark/ /benchmark/
+
+# Copy the algorithm module
+COPY benchmark/algorithms/${ALGO_TYPE}/${ALGO_NAME}/ /algorithms/${ALGO_TYPE}/${ALGO_NAME}/
+
+# Set Python path to include the root directory
+ENV PYTHONPATH=/
+
+# Set working directory
+WORKDIR /workspace
+
+# The entrypoint will be provided by the framework at runtime
