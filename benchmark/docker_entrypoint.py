@@ -15,6 +15,29 @@ from typing import Any, Dict
 from benchmark.base import BaseQuantizer
 
 
+QUERY_TIMING_RUNS = 5
+
+
+def timed_trimmed_mean(fn, n_runs: int = QUERY_TIMING_RUNS):
+    """Run fn() n_runs times; return (last_result, trimmed-mean elapsed seconds, all samples).
+
+    Trimmed mean drops the single highest and single lowest sample when
+    n_runs >= 3, otherwise falls back to a plain mean.
+    """
+    times = []
+    result = None
+    for _ in range(n_runs):
+        start = time.time()
+        result = fn()
+        times.append(time.time() - start)
+    if len(times) >= 3:
+        trimmed = sorted(times)[1:-1]
+    else:
+        trimmed = times
+    mean_time = sum(trimmed) / len(trimmed) if trimmed else 0.0
+    return result, mean_time, times
+
+
 def load_module_class(module_path: str, base_class_name: str):
     """
     Dynamically load a class from a module file.
@@ -271,10 +294,11 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
 
             # Step 1: Run base query with topk (no reranking)
             print(f"\n=== Base Query Phase (k={topk}) ===")
-            start_time = time.time()
-            I, D = quantizer.query(nq, test_data, topk, **search_params_clean)
-            query_time = time.time() - start_time
-            print(f"Base query time: {query_time:.4f}s")
+            (I, D), query_time, query_time_samples = timed_trimmed_mean(
+                lambda: quantizer.query(nq, test_data, topk, **search_params_clean)
+            )
+            print(f"Base query times ({QUERY_TIMING_RUNS} runs): {[f'{t:.4f}s' for t in query_time_samples]}")
+            print(f"Base query time (trimmed mean): {query_time:.4f}s")
 
             recall = calculate_recall(I, ground_truth[:, :topk])
             map_score = calculate_map(I, ground_truth[:, :topk])
@@ -295,13 +319,14 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
                     print("Using algorithm-specific searchAndRerank implementation.")
                     for nrerank in nrerank_values:
                         print(f"\nTesting nrerank={nrerank}...")
-                        start_time = time.time()
 
                         try:
-                            I_rerank, D_rerank = quantizer.searchAndRerank(
-                                nq, test_data, topk, nrerank, **search_params_clean
+                            (I_rerank, D_rerank), rerank_time, rerank_time_samples = timed_trimmed_mean(
+                                lambda nr=nrerank: quantizer.searchAndRerank(
+                                    nq, test_data, topk, nr, **search_params_clean
+                                )
                             )
-                            rerank_time = time.time() - start_time
+                            print(f"  Search+rerank times ({QUERY_TIMING_RUNS} runs): {[f'{t:.4f}s' for t in rerank_time_samples]}")
 
                             rerank_recall = calculate_recall(I_rerank, ground_truth[:, :topk])
                             rerank_map = calculate_map(I_rerank, ground_truth[:, :topk])
@@ -337,23 +362,22 @@ def run_quantizer(input_path: str, output_path: str, module_path: str):
                         print(f"\nTesting nrerank={nrerank}...")
 
                         try:
-                            # Run independent query with k=nrerank to get candidates
-                            search_start_time = time.time()
-                            I_candidates, D_candidates = quantizer.query(
-                                nq, test_data, nrerank, **search_params_clean
+                            # Run independent query with k=nrerank to get candidates (timed with trimmed mean)
+                            (I_candidates, D_candidates), search_time, search_time_samples = timed_trimmed_mean(
+                                lambda nr=nrerank: quantizer.query(
+                                    nq, test_data, nr, **search_params_clean
+                                )
                             )
-                            search_time = time.time() - search_start_time
+                            print(f"  Search times ({QUERY_TIMING_RUNS} runs, k={nrerank}): {[f'{t:.4f}s' for t in search_time_samples]}")
 
-                            # Prepare and rerank candidates
-                            rerank_start_time = time.time()
-                            prepared_candidates = quantizer.prepareRerankCandidates(test_data, I_candidates)
-                            I_rerank, D_rerank = quantizer.rerankPreparedCandidates(
-                                test_data,
-                                prepared_candidates,
-                                nrerank,
-                                topk
-                            )
-                            rerank_only_time = time.time() - rerank_start_time
+                            # Prepare and rerank candidates (timed with trimmed mean; recomputes each run)
+                            def _rerank_once(I_cand=I_candidates, nr=nrerank):
+                                prepared = quantizer.prepareRerankCandidates(test_data, I_cand)
+                                return quantizer.rerankPreparedCandidates(
+                                    test_data, prepared, nr, topk
+                                )
+                            (I_rerank, D_rerank), rerank_only_time, rerank_only_samples = timed_trimmed_mean(_rerank_once)
+                            print(f"  Rerank-only times ({QUERY_TIMING_RUNS} runs): {[f'{t:.4f}s' for t in rerank_only_samples]}")
                             rerank_time = search_time + rerank_only_time
 
                             rerank_recall = calculate_recall(I_rerank, ground_truth[:, :topk])
@@ -551,16 +575,18 @@ def run_graph(input_path: str, output_path: str, quantizer_module_path: str, gra
             topk = search_params_copy.pop('topk', 100)
             print(f"\nSearch configuration {search_idx + 1}/{len(search_params_list)}: {search_params}")
 
-            start_time = time.time()
-            I, D, hops, comps, nrerank = graph_index.search(nq, test_data, topk, **search_params_copy)
-            query_time = time.time() - start_time
+            (search_out, query_time, query_time_samples) = timed_trimmed_mean(
+                lambda: graph_index.search(nq, test_data, topk, **search_params_copy)
+            )
+            I, D, hops, comps, nrerank = search_out
 
             # Calculate metrics
             recall = calculate_recall(I, ground_truth[:, :topk])
             map_score = calculate_map(I, ground_truth[:, :topk])
             recall_at_1 = calculate_recall_at_1(I, ground_truth[:, :topk])
 
-            print(f"  Query time: {query_time:.4f}s")
+            print(f"  Query times ({QUERY_TIMING_RUNS} runs): {[f'{t:.4f}s' for t in query_time_samples]}")
+            print(f"  Query time (trimmed mean): {query_time:.4f}s")
             print(f"  Queries per second: {len(test_data) / query_time:.2f}")
             print(f"  Recall@{topk}: {recall:.4f}")
             print(f"  MAP@{topk}: {map_score:.4f}")
@@ -811,16 +837,18 @@ def run_graph_only(input_path: str, output_path: str, graph_module_path: str):
         topk = search_params_copy.pop('topk', 100)
         print(f"\nSearch configuration {search_idx + 1}/{len(search_params_list)}: {search_params}")
 
-        start_time = time.time()
-        I, D, hops, comps, nrerank = graph_index.search(nq, test_data, topk, **search_params_copy)
-        query_time = time.time() - start_time
+        (search_out, query_time, query_time_samples) = timed_trimmed_mean(
+            lambda: graph_index.search(nq, test_data, topk, **search_params_copy)
+        )
+        I, D, hops, comps, nrerank = search_out
 
         # Calculate metrics
         recall = calculate_recall(I, ground_truth[:, :topk])
         map_score = calculate_map(I, ground_truth[:, :topk])
         recall_at_1 = calculate_recall_at_1(I, ground_truth[:, :topk])
 
-        print(f"  Query time: {query_time:.4f}s")
+        print(f"  Query times ({QUERY_TIMING_RUNS} runs): {[f'{t:.4f}s' for t in query_time_samples]}")
+        print(f"  Query time (trimmed mean): {query_time:.4f}s")
         print(f"  Queries per second: {len(test_data) / query_time:.2f}")
         print(f"  Recall@{topk}: {recall:.4f}")
         print(f"  MAP@{topk}: {map_score:.4f}")

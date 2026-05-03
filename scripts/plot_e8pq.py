@@ -45,6 +45,13 @@ CURVES = [
         "nbit": None,
     },
     {
+        "key": "IVFE8FastScan",
+        "file_algo": "IVFE8FastScan",
+        "display_name": "IVFE8FastScan",
+        "color": "#9467bd",
+        "nbit": None,
+    },
+    {
         "key": "IVFE8PQFastScan-nbit4",
         "file_algo": "IVFE8PQFastScan",
         "display_name": "IVFE8PQFastScan (nbit=4)",

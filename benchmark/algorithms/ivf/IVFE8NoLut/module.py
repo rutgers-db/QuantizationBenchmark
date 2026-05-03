@@ -26,12 +26,14 @@ class IVFE8NoLut(BaseQuantizer):
     avoiding the 256-entry per-query LUT and its gather.
     """
 
-    def __init__(self, ndim, nlist, data_bytes=4, nthread=1, space="l2"):
+    def __init__(self, ndim, nlist, data_bytes=4, nthread=1, space="l2", bits=1):
         super().__init__()
         self.ndim = ndim
         self.nlist = nlist
         self.data_bytes = data_bytes
-        self.bits = 1
+        if bits not in (1, 1.5):
+            raise ValueError(f"bits must be 1 or 1.5, got {bits}")
+        self.bits = bits
         self.nthread = nthread
         self.space = space
         faiss.omp_set_num_threads(self.nthread)
@@ -48,6 +50,11 @@ class IVFE8NoLut(BaseQuantizer):
                 "C++ module 'e8nolut_cpp' is not available. "
                 "Make sure the C++ module was built correctly in the Docker image."
             )
+
+        if self.bits == 1:
+            self._cpp_class = e8nolut_cpp.IVFE8NoLut
+        else:
+            self._cpp_class = e8nolut_cpp.IVFE8NoLut15
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
         return self.train(nd, data) and self.add(nd, data)
@@ -97,7 +104,7 @@ class IVFE8NoLut(BaseQuantizer):
 
             metric_str = "ip" if self.space == "ip" else "l2"
 
-            self.index = e8nolut_cpp.IVFE8NoLut(
+            self.index = self._cpp_class(
                 nd,
                 self.ndim,
                 int(self._trained_centroids.shape[0]),
