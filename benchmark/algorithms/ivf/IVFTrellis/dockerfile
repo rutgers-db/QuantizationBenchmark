@@ -1,0 +1,48 @@
+FROM python:3.9-slim
+
+ARG ALGO_TYPE
+ARG ALGO_NAME
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Eigen 3.4.0 (rabitqlib needs it)
+RUN cd /tmp && \
+    wget https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz && \
+    tar -xzf eigen-3.4.0.tar.gz && \
+    cd eigen-3.4.0 && \
+    mkdir build && cd build && \
+    cmake .. && \
+    make install && \
+    cd / && rm -rf /tmp/eigen-3.4.0*
+
+RUN pip install --no-cache-dir \
+    numpy \
+    h5py \
+    pyyaml \
+    psutil \
+    pybind11 \
+    threadpoolctl \
+    faiss-cpu
+
+COPY benchmark/ /benchmark/
+
+COPY benchmark/algorithms/${ALGO_TYPE}/${ALGO_NAME}/ /algorithms/${ALGO_TYPE}/${ALGO_NAME}/
+
+RUN cd /algorithms/${ALGO_TYPE}/${ALGO_NAME}/ && \
+    mkdir -p build && \
+    cd build && \
+    cmake .. && \
+    make && \
+    cp trellis_cpp*.so .. && \
+    cd .. && \
+    rm -rf build
+
+ENV PYTHONPATH=/:/algorithms/${ALGO_TYPE}/${ALGO_NAME}
+
+WORKDIR /workspace
