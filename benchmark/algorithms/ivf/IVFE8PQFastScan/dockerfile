@@ -64,7 +64,7 @@ COPY benchmark/ /benchmark/
 COPY benchmark/algorithms/ivf/IVFE8/include/ /algorithms/${ALGO_TYPE}/${ALGO_NAME}/include/
 COPY benchmark/algorithms/ivf/IVFE8PQ/ /algorithms/${ALGO_TYPE}/${ALGO_NAME}/
 COPY benchmark/algorithms/${ALGO_TYPE}/${ALGO_NAME}/module.py /algorithms/${ALGO_TYPE}/${ALGO_NAME}/module.py
-COPY benchmark/algorithms/${ALGO_TYPE}/${ALGO_NAME}/config.yaml /algorithms/${ALGO_TYPE}/${ALGO_NAME}/config.yaml
+COPY benchmark/algorithms/${ALGO_TYPE}/${ALGO_NAME}/config.json /algorithms/${ALGO_TYPE}/${ALGO_NAME}/config.json
 
 # Build the Python binding (e8pq_cpp.so contains both IVFE8PQ and IVFE8PQFastScan).
 RUN cd /algorithms/${ALGO_TYPE}/${ALGO_NAME}/ && \

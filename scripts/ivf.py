@@ -45,7 +45,7 @@ IVF_STYLES = {
 
 KNOWN_DATASETS = [
     # "audio-128-euclidean",
-    # "gist-960-euclidean",
+    "gist-960-euclidean",
     # "paper-200-euclidean",
     "sift-128-euclidean",
     # "text2image-200-euclidean",

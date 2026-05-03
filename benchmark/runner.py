@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import yaml
 from typing import Optional, Dict, Any, List
@@ -5,6 +6,25 @@ from .datasets import get_dataset, get_distribution_shift_data
 from .docker_runner import DockerRunner
 import os
 from itertools import product
+
+
+def _resolve_config_path(base_dir: str, name: str = "config") -> Optional[str]:
+    """Return the config file path under ``base_dir`` with ``.json`` preferred
+    over ``.yaml`` when both are present, or None if neither exists."""
+    for ext in (".json", ".yaml"):
+        candidate = os.path.join(base_dir, name + ext)
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _load_config_file(path: str) -> Any:
+    """Load a config file, dispatching on extension. JSON and YAML are both
+    accepted; JSON is parsed strictly (no comments)."""
+    with open(path, "r") as f:
+        if path.endswith(".json"):
+            return json.load(f)
+        return yaml.safe_load(f)
 
 
 def expand_param_combinations(config: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -71,11 +91,50 @@ def expand_param_combinations(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     return result
 
 
+def _expand_build_dict(build_dict: Dict[str, Any],
+                       common_params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Cartesian-product the list-valued fields of a single ``build`` dict
+    against the scalar fields and ``common_params`` shared across the group."""
+    list_params = {}
+    fixed_params = common_params.copy()
+    for key, value in build_dict.items():
+        if isinstance(value, list):
+            list_params[key] = value
+        else:
+            fixed_params[key] = value
+
+    if not list_params:
+        return [fixed_params]
+
+    names = list(list_params.keys())
+    values = [list_params[n] for n in names]
+    combos = []
+    for combination in product(*values):
+        combo = fixed_params.copy()
+        for name, value in zip(names, combination):
+            combo[name] = value
+        combos.append(combo)
+    return combos
+
+
 def _expand_build_search_combinations(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Expand build/search parameter combinations.
 
-    Supports two search formats:
+    Supports two ``build`` formats:
+    1. Dict (legacy): one cartesian product over all list-valued fields.
+       build:
+         nsubvec: [16, 32, 64]
+         nbit: [4, 8]      # -> 6 combinations
+
+    2. List of dicts: each entry expands independently, results are
+       concatenated. Use this to break the cartesian product when different
+       branches of one knob need different sweeps of another:
+       build:
+         - {nbit: 4, nsubvec: [32, 64, 128]}
+         - {nbit: 8, nsubvec: [16, 32, 64]}      # 6 combinations, paired
+
+    Supports two ``search`` formats:
     1. List format (new): Each topk can have its own nrerank values
        search:
          - topk: 100
@@ -99,28 +158,13 @@ def _expand_build_search_combinations(config: Dict[str, Any]) -> List[Dict[str, 
     build_config = config.get('build', {}) or {}  # Handle None case
     search_config = config.get('search', {}) or {}  # Handle None case
 
-    # Expand build parameters (include common params)
-    build_list_params = {}
-    build_fixed_params = common_params.copy()
-
-    for key, value in build_config.items():
-        if isinstance(value, list):
-            build_list_params[key] = value
-        else:
-            build_fixed_params[key] = value
-
-    # Generate all build combinations
-    if build_list_params:
-        build_param_names = list(build_list_params.keys())
-        build_param_values = [build_list_params[name] for name in build_param_names]
+    # Expand build parameters (include common params).
+    if isinstance(build_config, list):
         build_combinations = []
-        for combination in product(*build_param_values):
-            build_combo = build_fixed_params.copy()
-            for name, value in zip(build_param_names, combination):
-                build_combo[name] = value
-            build_combinations.append(build_combo)
+        for group in build_config:
+            build_combinations.extend(_expand_build_dict(group or {}, common_params))
     else:
-        build_combinations = [build_fixed_params]
+        build_combinations = _expand_build_dict(build_config, common_params)
 
     # Expand search parameters
     # Check if search is a list (new format)
@@ -390,11 +434,14 @@ class BenchmarkRunner:
         Load configuration for an algorithm.
 
         Supports four formats:
-        1. Dataset-specific with single config: config.yaml contains a dict with dataset names as keys
-        2. Dataset-specific with multiple configs: config.yaml contains a list for each dataset
+        1. Dataset-specific with single config: config contains a dict with dataset names as keys
+        2. Dataset-specific with multiple configs: config contains a list for each dataset
         3. Dataset-specific with parameter combinations: config contains list values that get expanded
            Example: {nsubvec: [16, 32], nbit: [4, 8]} -> 4 combinations
-        4. Default: config.yaml contains parameters directly
+        4. Default: config contains parameters directly
+
+        The config file may be either ``config.json`` (preferred) or
+        ``config.yaml``; if both exist, the JSON one wins.
 
         Args:
             algo_type: 'quantizer', 'dimreduction', or 'graph'
@@ -404,50 +451,51 @@ class BenchmarkRunner:
             List of configuration dicts for the current dataset
         """
         if algo_type == 'graph':
-            config_path = os.path.join(
-                "benchmark/graphs", algo_name, "config.yaml"
-            )
+            config_dirs = [os.path.join("benchmark/graphs", algo_name)]
         elif algo_type == 'quantizer':
-            quantizer_config_paths = [
-                os.path.join("benchmark/algorithms", "quantizer", algo_name, "config.yaml"),
-                os.path.join("benchmark/algorithms", "ivf", algo_name, "config.yaml"),
+            config_dirs = [
+                os.path.join("benchmark/algorithms", "quantizer", algo_name),
+                os.path.join("benchmark/algorithms", "ivf", algo_name),
             ]
-            config_path = next((path for path in quantizer_config_paths if os.path.exists(path)), quantizer_config_paths[0])
         else:
-            config_path = os.path.join(
-                "benchmark/algorithms", algo_type, algo_name, "config.yaml"
-            )
+            config_dirs = [os.path.join("benchmark/algorithms", algo_type, algo_name)]
 
-        if os.path.exists(config_path):
-            with open(config_path, 'r') as f:
-                config = yaml.safe_load(f)
-                if not config:
-                    return [{}]
+        config_path = None
+        for d in config_dirs:
+            config_path = _resolve_config_path(d)
+            if config_path is not None:
+                break
 
-                # Check if config is organized by dataset
-                if self.dataset_name in config:
-                    # Return dataset-specific config
-                    dataset_config = config[self.dataset_name]
-                    # Check if it's a list of configs
-                    if isinstance(dataset_config, list):
-                        # Expand each config in case they contain list parameters
-                        all_configs = []
-                        for cfg in dataset_config:
-                            all_configs.extend(expand_param_combinations(cfg))
-                        return all_configs
-                    else:
-                        # Single config dict, expand parameter combinations
-                        return expand_param_combinations(dataset_config)
-                elif isinstance(config, dict) and any(
-                    key in config for key in ['ndim', 'nsubvec', 'nbit', 'target_dim']
-                ):
-                    # Config contains parameters directly (not organized by dataset)
-                    return expand_param_combinations(config)
-                else:
-                    # Assume first key is a dataset name, return empty if current dataset not found
-                    print(f"Warning: No configuration found for dataset '{self.dataset_name}' in {config_path}")
-                    return [{}]
-        return [{}]
+        if config_path is None or not os.path.exists(config_path):
+            return [{}]
+
+        config = _load_config_file(config_path)
+        if not config:
+            return [{}]
+
+        # Check if config is organized by dataset
+        if self.dataset_name in config:
+            # Return dataset-specific config
+            dataset_config = config[self.dataset_name]
+            # Check if it's a list of configs
+            if isinstance(dataset_config, list):
+                # Expand each config in case they contain list parameters
+                all_configs = []
+                for cfg in dataset_config:
+                    all_configs.extend(expand_param_combinations(cfg))
+                return all_configs
+            else:
+                # Single config dict, expand parameter combinations
+                return expand_param_combinations(dataset_config)
+        elif isinstance(config, dict) and any(
+            key in config for key in ['ndim', 'nsubvec', 'nbit', 'target_dim']
+        ):
+            # Config contains parameters directly (not organized by dataset)
+            return expand_param_combinations(config)
+        else:
+            # Assume first key is a dataset name, return empty if current dataset not found
+            print(f"Warning: No configuration found for dataset '{self.dataset_name}' in {config_path}")
+            return [{}]
 
     def run_benchmark(
         self,

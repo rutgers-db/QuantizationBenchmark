@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import importlib.util
@@ -141,7 +142,7 @@ class AlgorithmLoader:
 
     def _load_config(self, algo_dir: str) -> Dict[str, Any]:
         """
-        Load configuration from config.yaml.
+        Load configuration from ``config.json`` (preferred) or ``config.yaml``.
 
         Args:
             algo_dir: Directory containing the algorithm
@@ -149,10 +150,11 @@ class AlgorithmLoader:
         Returns:
             Dict containing configuration parameters
         """
-        config_path = os.path.join(algo_dir, "config.yaml")
-        if os.path.exists(config_path):
-            with open(config_path, 'r') as f:
-                return yaml.safe_load(f) or {}
+        for ext, parser in ((".json", json.load), (".yaml", yaml.safe_load)):
+            config_path = os.path.join(algo_dir, "config" + ext)
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    return parser(f) or {}
         return {}
 
     def get_quantizer(self, algo_name: str, **override_params) -> BaseQuantizer:

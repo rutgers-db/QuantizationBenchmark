@@ -20,11 +20,14 @@ class IVFE8PQFastScan(BaseQuantizer):
     Same training pipeline as IVFE8PQ (FHT-Kac rotation, IVF coarse quantizer,
     learned PQ codebook on the normalized residual `o = (x_r - c) / ||x_r - c||`,
     RaBitQ scoring factors). Search differs: codes are stored in 32-wide
-    block-major tiles, the per-query float LUT is quantized to uint8 with a
-    per-subvec offset and a single global scale, and the lookup is performed
-    via _mm512_permutex2var_epi8 on AVX512VBMI machines (zero L1 traffic in the
-    inner loop). On non-VBMI machines the binding falls back to a 32-wide
-    gather from the float LUT.
+    block-major tiles and the per-query LUT is quantized to uint8 for an
+    in-register lookup. Two backends, dispatched by ``nbit``:
+      * nbit=8 → e8pq_cpp.IVFE8PQFastScan: 256-entry LUT, AVX512VBMI
+        ``_mm512_permutex2var_epi8`` (zero L1 traffic), or a 32-wide gather
+        fallback on non-VBMI machines.
+      * nbit=4 → e8pq_cpp.IVFE8PQFastScan4: 16-entry LUT, classic PQ4 fastscan
+        kernel using ``_mm256_shuffle_epi8`` on broadcast 16-byte LUTs, with
+        nibble-paired packed codes (M/2 bytes per vector).
     """
 
     def __init__(self, ndim, nlist, nsubvec, nbit=8, data_bytes=4,
@@ -33,7 +36,7 @@ class IVFE8PQFastScan(BaseQuantizer):
         self.ndim = ndim
         self.nlist = nlist
         self.nsubvec = nsubvec
-        self.nbit = nbit
+        self.nbit = int(nbit)
         self.data_bytes = data_bytes
         self.nthread = nthread
         self.space = space
@@ -48,10 +51,18 @@ class IVFE8PQFastScan(BaseQuantizer):
                 "C++ module 'e8pq_cpp' is not available. "
                 "Make sure it was built in the Docker image."
             )
-        if not hasattr(e8pq_cpp, 'IVFE8PQFastScan'):
+        if self.nbit == 8:
+            self._cpp_cls_name = 'IVFE8PQFastScan'
+        elif self.nbit == 4:
+            self._cpp_cls_name = 'IVFE8PQFastScan4'
+        else:
+            raise ValueError(
+                f"IVFE8PQFastScan supports nbit ∈ {{4, 8}}, got nbit={self.nbit}"
+            )
+        if not hasattr(e8pq_cpp, self._cpp_cls_name):
             raise RuntimeError(
-                "e8pq_cpp.IVFE8PQFastScan not found — rebuild with the updated "
-                "e8pq_binding.cpp."
+                f"e8pq_cpp.{self._cpp_cls_name} not found — rebuild with the "
+                "updated e8pq_binding.cpp."
             )
 
     def fit(self, nd: int, data: np.ndarray) -> bool:
@@ -67,7 +78,8 @@ class IVFE8PQFastScan(BaseQuantizer):
             self.ndata = nd
 
             metric_str = "ip" if self.space == "ip" else "l2"
-            self.index = e8pq_cpp.IVFE8PQFastScan(
+            cpp_cls = getattr(e8pq_cpp, self._cpp_cls_name)
+            self.index = cpp_cls(
                 nd,
                 self.ndim,
                 int(self.nlist),

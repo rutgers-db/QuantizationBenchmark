@@ -248,12 +248,18 @@ public:
                 // ---- Build float LUT (vectorized over codeword index) ----
                 build_lut_(rotated.data(), lut_f.data());
 
-                // ---- Per-subvec offset + global scale uint8 quantization ----
-                // q_offset = sum_b min_b   (constant adder)
-                // q_scale  = max_b(max_b - min_b) / 255
-                // u8[b][k] = clip(((f[b][k] - min_b) / q_scale) + 0.5, 0, 255)
-                float q_offset = 0.0f;
-                float max_range = 0.0f;
+                // ---- Per-subvec offset + adaptive global scale (Faiss style) ----
+                // Per-subvec offset: q_offset = sum_b min_b. Global scale a is
+                // the tighter of two bounds (see Faiss quantize_lut.cpp:157):
+                //   a = min(255 / max_span_LUT,  65535 / sum_span)
+                // where max_span_LUT = max_b (max_b - min_b) keeps each
+                // quantized u8 in [0, 255], and sum_span = Σ_b (max_b - min_b)
+                // bounds the worst-case sum of M u8 values, keeping the uint16
+                // accumulator safe for any M (small M uses full 8-bit precision;
+                // large M auto-tightens the scale).
+                float q_offset      = 0.0f;
+                float max_span_LUT  = 0.0f;
+                float sum_span      = 0.0f;
                 for (size_t b = 0; b < nsubvec; ++b) {
                     const float* row = lut_f.data() + b * kPQKFS;
                     float mn = row[0], mx = row[0];
@@ -263,18 +269,28 @@ public:
                     }
                     subvec_min[b] = mn;
                     q_offset += mn;
-                    float r = mx - mn;
-                    if (r > max_range) max_range = r;
+                    float span = mx - mn;
+                    sum_span += span;
+                    if (span > max_span_LUT) max_span_LUT = span;
                 }
-                float q_scale = (max_range > 0.0f) ? (max_range / 255.0f) : 1.0f;
+                float a;
+                if (max_span_LUT <= 0.0f) {
+                    a = 1.0f;          // degenerate: all LUT entries equal
+                } else {
+                    a = 255.0f / max_span_LUT;
+                    if (sum_span > 0.0f) {
+                        float a_sum = 65535.0f / sum_span;
+                        if (a_sum < a) a = a_sum;
+                    }
+                }
+                float q_scale = 1.0f / a;
                 {
-                    float q_inv = 1.0f / q_scale;
                     for (size_t b = 0; b < nsubvec; ++b) {
                         const float* row = lut_f.data() + b * kPQKFS;
                         uint8_t*     dst = lut_u8.data() + b * kPQKFS;
                         float mn = subvec_min[b];
                         for (size_t kk = 0; kk < kPQKFS; ++kk) {
-                            float v = (row[kk] - mn) * q_inv;
+                            float v = (row[kk] - mn) * a;
                             int   iv = (int)(v + 0.5f);
                             if (iv < 0)   iv = 0;
                             if (iv > 255) iv = 255;
