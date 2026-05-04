@@ -31,7 +31,7 @@ class IVFE8PQFastScan(BaseQuantizer):
     """
 
     def __init__(self, ndim, nlist, nsubvec, nbit=8, data_bytes=4,
-                 nthread=1, space="l2"):
+                 nthread=1, space="l2", use_opq=1):
         super().__init__()
         self.ndim = ndim
         self.nlist = nlist
@@ -40,6 +40,9 @@ class IVFE8PQFastScan(BaseQuantizer):
         self.data_bytes = data_bytes
         self.nthread = nthread
         self.space = space
+        # use_opq: 0=disable, 1=enable OPQ-on-normalized-residuals (default).
+        # Auto-skipped when dsub <= 2.
+        self.use_opq = int(use_opq)
 
         self.data = None
         self.ndata = 0
@@ -87,6 +90,8 @@ class IVFE8PQFastScan(BaseQuantizer):
                 int(self.nbit),
                 self.nthread,
                 metric_str,
+                "fht",
+                int(self.use_opq),
             )
             self.index.fit(self.data)
             self.trained = True

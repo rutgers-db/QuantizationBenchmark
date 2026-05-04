@@ -49,10 +49,13 @@
 #include <faiss/Clustering.h>
 #include <faiss/IndexFlat.h>
 #include <faiss/impl/ProductQuantizer.h>
+#include <faiss/VectorTransform.h>
 
 #include "rabitqlib/defines.hpp"
 #include "rabitqlib/utils/rotator.hpp"
 #include "rabitqlib/utils/space.hpp"
+
+#include "e8pq_pq_train.hpp"   // init_centroids_e8_
 
 namespace e8pqlib {
 
@@ -139,9 +142,9 @@ class IVFE8PQFastScan4 {
 public:
     IVFE8PQFastScan4(size_t n, size_t dim, size_t nlist, size_t nsubvec,
                      size_t nbit, int nthread, const std::string& metric,
-                     const std::string& rotator)
+                     const std::string& rotator, int use_opq = 1)
         : n_(n), dim_(dim), nlist_(nlist), nsubvec_(nsubvec),
-          nbit_(nbit), nthread_(nthread) {
+          nbit_(nbit), nthread_(nthread), use_opq_(use_opq) {
         (void)metric;
 
         if (nbit_ != kPQNBit4) {
@@ -189,6 +192,14 @@ public:
             std::vector<float> d_tmp(nb);
             coarse.search(static_cast<faiss::idx_t>(nb), data, 1,
                           d_tmp.data(), assign.data());
+        }
+
+        // ---------- 2b. OPQ rotation training (default mode=2 on residuals) ----------
+        // Skip OPQ at d_s <= 2 (no benefit, expensive training).
+        if (padded_dim_ == dim_ && dsub_ > 2) {
+            const char* opq_env = std::getenv("IVFE8PQ_USE_OPQ");
+            int on = (opq_env != nullptr) ? std::atoi(opq_env) : use_opq_;
+            if (on) train_opq_rotation_(data, nb, assign);
         }
 
         // ---------- 3. Rotate centroids once ----------
@@ -628,6 +639,78 @@ private:
                     nlist_ * dim_ * sizeof(float));
     }
 
+    // OPQ rotation training (see e8pq.hpp for design notes).
+    // OPQ on normalized residuals; see e8pq.hpp for design notes.
+    void train_opq_rotation_(const float* data, size_t nb,
+                             const std::vector<int64_t>& assign) {
+        size_t opq_n = std::min<size_t>(nb, size_t(256) * 1024);
+        std::vector<size_t> idx(nb);
+        std::iota(idx.begin(), idx.end(), size_t(0));
+        std::mt19937 rng(2025u);
+        for (size_t i = 0; i < opq_n; ++i) {
+            std::uniform_int_distribution<size_t> dist(i, nb - 1);
+            std::swap(idx[i], idx[dist(rng)]);
+        }
+        std::vector<float> opq_sample(opq_n * dim_);
+        std::vector<float> rotated_cents(nlist_ * padded_dim_);
+        for (size_t l = 0; l < nlist_; ++l)
+            rotator_->rotate(centroids_.data() + l * dim_,
+                             rotated_cents.data() + l * padded_dim_);
+        #pragma omp parallel
+        {
+            std::vector<float> rotated(padded_dim_);
+            #pragma omp for schedule(static)
+            for (int64_t s = 0; s < (int64_t)opq_n; ++s) {
+                size_t i = idx[s];
+                size_t cid = static_cast<size_t>(assign[i]);
+                rotator_->rotate(data + i * dim_, rotated.data());
+                const float* cr = rotated_cents.data() + cid * padded_dim_;
+                double sq = 0.0;
+                for (size_t j = 0; j < padded_dim_; ++j) {
+                    float v = rotated[j] - cr[j];
+                    rotated[j] = v;
+                    sq += double(v) * v;
+                }
+                float inv = (sq > 0) ? 1.0f / float(std::sqrt(sq)) : 0.0f;
+                for (size_t j = 0; j < dim_; ++j)
+                    opq_sample[s * dim_ + j] = rotated[j] * inv;
+            }
+        }
+
+        faiss::OPQMatrix opq(static_cast<int>(dim_),
+                             static_cast<int>(nsubvec_),
+                             static_cast<int>(padded_dim_));
+        opq.niter = 25;
+        opq.niter_pq = 4;
+        opq.niter_pq_0 = 25;
+        opq.verbose = false;
+        opq.train(static_cast<faiss::idx_t>(opq_n), opq_sample.data());
+
+        std::vector<float> R_existing(dim_ * padded_dim_, 0.0f);
+        std::vector<float> ei(dim_, 0.0f), out(padded_dim_);
+        for (size_t i = 0; i < dim_; ++i) {
+            std::fill(ei.begin(), ei.end(), 0.0f);
+            ei[i] = 1.0f;
+            rotator_->rotate(ei.data(), out.data());
+            std::memcpy(R_existing.data() + i * padded_dim_, out.data(),
+                        padded_dim_ * sizeof(float));
+        }
+
+        std::vector<float> rand_mat(dim_ * padded_dim_);
+        for (size_t i = 0; i < dim_; ++i) {
+            for (size_t j = 0; j < padded_dim_; ++j) {
+                double s = 0.0;
+                const float* re_row = R_existing.data() + i * padded_dim_;
+                const float* opq_row = opq.A.data() + j * dim_;
+                for (size_t k = 0; k < padded_dim_; ++k)
+                    s += double(re_row[k]) * double(opq_row[k]);
+                rand_mat[i * padded_dim_ + j] = float(s);
+            }
+        }
+
+        install_rotator_(rotator_, rand_mat, dim_, padded_dim_);
+    }
+
     void train_pq_(const float* data, size_t nb,
                    const std::vector<int64_t>& assign) {
         size_t n_sample = std::min<size_t>(nb, kPQTrainMaxFS4);
@@ -665,6 +748,9 @@ private:
             }
         }
 
+        // nbit=4 means K=16 - too few cells to seed from the 240 E_8 roots,
+        // so init_centroids_e8_ would return false; we skip the call entirely
+        // and use faiss's default L2 k-means init.
         faiss::ProductQuantizer pq(static_cast<size_t>(padded_dim_),
                                    nsubvec_, nbit_);
         pq.verbose = false;
@@ -993,6 +1079,7 @@ private:
     size_t n_pairs_;
     size_t code_size_;
     int    nthread_;
+    int    use_opq_;
 
     std::unique_ptr<rabitqlib::Rotator<float>> rotator_;
     std::vector<float> centroids_;            // (nlist * dim)

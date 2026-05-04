@@ -356,6 +356,11 @@ class DockerRunner:
                 "-e", f"NUMEXPR_NUM_THREADS={nthread}",
             ])
 
+        # Forward IVFE8PQ debug knobs to container if set on the host.
+        for _ivf_env in ("IVFE8PQ_DISABLE_E8", "IVFE8PQ_PRINT_KAPPA", "IVFE8PQ_USE_OPQ"):
+            if os.environ.get(_ivf_env):
+                cmd.extend(["-e", f"{_ivf_env}={os.environ[_ivf_env]}"])
+
         cmd.extend([
             image_name,
             "python", "-u", "/benchmark/docker_entrypoint.py",  # -u for unbuffered output
@@ -376,6 +381,13 @@ class DockerRunner:
             # Normal mode: capture output
             result = subprocess.run(cmd, capture_output=True, text=True)
         
+        # Always surface diagnostic lines from the C++ side (e.g.
+        # IVFE8PQ_KAPPA) even on success, so debug knobs print without
+        # requiring --debug.
+        if not self.debug and getattr(result, "stderr", None):
+            for line in result.stderr.splitlines():
+                if "IVFE8PQ_" in line:
+                    print(line)
         if result.returncode != 0:
             if not self.debug:
                 print(f"Docker returncode: {result.returncode}")
@@ -468,6 +480,11 @@ class DockerRunner:
                 "-e", f"OPENBLAS_NUM_THREADS={nthread}",
                 "-e", f"NUMEXPR_NUM_THREADS={nthread}",
             ])
+
+        # Forward IVFE8PQ debug knobs to container if set on the host.
+        for _ivf_env in ("IVFE8PQ_DISABLE_E8", "IVFE8PQ_PRINT_KAPPA", "IVFE8PQ_USE_OPQ"):
+            if os.environ.get(_ivf_env):
+                cmd.extend(["-e", f"{_ivf_env}={os.environ[_ivf_env]}"])
         else:
             nthread = 1
             cmd.extend([
@@ -476,6 +493,11 @@ class DockerRunner:
                 "-e", f"OPENBLAS_NUM_THREADS={nthread}",
                 "-e", f"NUMEXPR_NUM_THREADS={nthread}",
             ])
+
+        # Forward IVFE8PQ debug knobs to container if set on the host.
+        for _ivf_env in ("IVFE8PQ_DISABLE_E8", "IVFE8PQ_PRINT_KAPPA", "IVFE8PQ_USE_OPQ"):
+            if os.environ.get(_ivf_env):
+                cmd.extend(["-e", f"{_ivf_env}={os.environ[_ivf_env]}"])
 
 
         cmd.extend([
@@ -498,6 +520,11 @@ class DockerRunner:
             # Normal mode: capture output
             result = subprocess.run(cmd, capture_output=True, text=True)
 
+        # Always surface diagnostic lines (e.g. IVFE8PQ_KAPPA) on success.
+        if not self.debug and getattr(result, "stderr", None):
+            for line in result.stderr.splitlines():
+                if "IVFE8PQ_" in line:
+                    print(line)
         if result.returncode != 0:
             if not self.debug:
                 print(f"Docker returncode: {result.returncode}")
@@ -584,6 +611,11 @@ class DockerRunner:
                 "-e", f"OPENBLAS_NUM_THREADS={nthread}",
                 "-e", f"NUMEXPR_NUM_THREADS={nthread}",
             ])
+
+        # Forward IVFE8PQ debug knobs to container if set on the host.
+        for _ivf_env in ("IVFE8PQ_DISABLE_E8", "IVFE8PQ_PRINT_KAPPA", "IVFE8PQ_USE_OPQ"):
+            if os.environ.get(_ivf_env):
+                cmd.extend(["-e", f"{_ivf_env}={os.environ[_ivf_env]}"])
         else:
             nthread = 1
             cmd.extend([
@@ -592,6 +624,11 @@ class DockerRunner:
                 "-e", f"OPENBLAS_NUM_THREADS={nthread}",
                 "-e", f"NUMEXPR_NUM_THREADS={nthread}",
             ])
+
+        # Forward IVFE8PQ debug knobs to container if set on the host.
+        for _ivf_env in ("IVFE8PQ_DISABLE_E8", "IVFE8PQ_PRINT_KAPPA", "IVFE8PQ_USE_OPQ"):
+            if os.environ.get(_ivf_env):
+                cmd.extend(["-e", f"{_ivf_env}={os.environ[_ivf_env]}"])
 
         cmd.extend([
             image_name,
@@ -699,6 +736,11 @@ class DockerRunner:
                 "-e", f"OPENBLAS_NUM_THREADS={nthread}",
                 "-e", f"NUMEXPR_NUM_THREADS={nthread}",
             ])
+
+        # Forward IVFE8PQ debug knobs to container if set on the host.
+        for _ivf_env in ("IVFE8PQ_DISABLE_E8", "IVFE8PQ_PRINT_KAPPA", "IVFE8PQ_USE_OPQ"):
+            if os.environ.get(_ivf_env):
+                cmd.extend(["-e", f"{_ivf_env}={os.environ[_ivf_env]}"])
 
         cmd.extend([
             image_name,

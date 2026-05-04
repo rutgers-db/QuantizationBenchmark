@@ -30,8 +30,8 @@ class IVFE8PQWrapper {
 public:
     IVFE8PQWrapper(size_t n, size_t dim, size_t nlist, size_t nsubvec,
                    size_t nbit, int nthread, const std::string& metric,
-                   const std::string& rotator)
-        : impl_(n, dim, nlist, nsubvec, nbit, nthread, metric, rotator) {}
+                   const std::string& rotator, int use_opq)
+        : impl_(n, dim, nlist, nsubvec, nbit, nthread, metric, rotator, use_opq) {}
 
     void fit(py::array_t<float, py::array::c_style | py::array::forcecast> data) {
         auto d = data.request();
@@ -72,8 +72,8 @@ class IVFE8PQFastScanWrapper {
 public:
     IVFE8PQFastScanWrapper(size_t n, size_t dim, size_t nlist, size_t nsubvec,
                            size_t nbit, int nthread, const std::string& metric,
-                           const std::string& rotator)
-        : impl_(n, dim, nlist, nsubvec, nbit, nthread, metric, rotator) {}
+                           const std::string& rotator, int use_opq)
+        : impl_(n, dim, nlist, nsubvec, nbit, nthread, metric, rotator, use_opq) {}
 
     void fit(py::array_t<float, py::array::c_style | py::array::forcecast> data) {
         auto d = data.request();
@@ -114,8 +114,8 @@ class IVFE8PQFastScan4Wrapper {
 public:
     IVFE8PQFastScan4Wrapper(size_t n, size_t dim, size_t nlist, size_t nsubvec,
                             size_t nbit, int nthread, const std::string& metric,
-                            const std::string& rotator)
-        : impl_(n, dim, nlist, nsubvec, nbit, nthread, metric, rotator) {}
+                            const std::string& rotator, int use_opq)
+        : impl_(n, dim, nlist, nsubvec, nbit, nthread, metric, rotator, use_opq) {}
 
     void fit(py::array_t<float, py::array::c_style | py::array::forcecast> data) {
         auto d = data.request();
@@ -160,7 +160,7 @@ PYBIND11_MODULE(e8pq_cpp, m) {
 
     py::class_<IVFE8PQWrapper>(m, "IVFE8PQ")
         .def(py::init<size_t, size_t, size_t, size_t, size_t, int,
-                      const std::string&, const std::string&>(),
+                      const std::string&, const std::string&, int>(),
              py::arg("n"),
              py::arg("dim"),
              py::arg("nlist"),
@@ -168,14 +168,15 @@ PYBIND11_MODULE(e8pq_cpp, m) {
              py::arg("nbit") = 8,
              py::arg("nthread") = 1,
              py::arg("metric") = "l2",
-             py::arg("rotator") = "fht")
+             py::arg("rotator") = "fht",
+             py::arg("use_opq") = 1)
         .def("fit", &IVFE8PQWrapper::fit, py::arg("data"))
         .def("search_batch", &IVFE8PQWrapper::search_batch,
              py::arg("queries"), py::arg("k"), py::arg("nprobe"));
 
     py::class_<IVFE8PQFastScanWrapper>(m, "IVFE8PQFastScan")
         .def(py::init<size_t, size_t, size_t, size_t, size_t, int,
-                      const std::string&, const std::string&>(),
+                      const std::string&, const std::string&, int>(),
              py::arg("n"),
              py::arg("dim"),
              py::arg("nlist"),
@@ -183,14 +184,15 @@ PYBIND11_MODULE(e8pq_cpp, m) {
              py::arg("nbit") = 8,
              py::arg("nthread") = 1,
              py::arg("metric") = "l2",
-             py::arg("rotator") = "fht")
+             py::arg("rotator") = "fht",
+             py::arg("use_opq") = 1)
         .def("fit", &IVFE8PQFastScanWrapper::fit, py::arg("data"))
         .def("search_batch", &IVFE8PQFastScanWrapper::search_batch,
              py::arg("queries"), py::arg("k"), py::arg("nprobe"));
 
     py::class_<IVFE8PQFastScan4Wrapper>(m, "IVFE8PQFastScan4")
         .def(py::init<size_t, size_t, size_t, size_t, size_t, int,
-                      const std::string&, const std::string&>(),
+                      const std::string&, const std::string&, int>(),
              py::arg("n"),
              py::arg("dim"),
              py::arg("nlist"),
@@ -198,7 +200,8 @@ PYBIND11_MODULE(e8pq_cpp, m) {
              py::arg("nbit") = 4,
              py::arg("nthread") = 1,
              py::arg("metric") = "l2",
-             py::arg("rotator") = "fht")
+             py::arg("rotator") = "fht",
+             py::arg("use_opq") = 1)
         .def("fit", &IVFE8PQFastScan4Wrapper::fit, py::arg("data"))
         .def("search_batch", &IVFE8PQFastScan4Wrapper::search_batch,
              py::arg("queries"), py::arg("k"), py::arg("nprobe"));

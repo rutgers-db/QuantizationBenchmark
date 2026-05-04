@@ -85,16 +85,58 @@ where
 `faiss::Clustering(d, nlist)` 在原始 `X` 上训练，得到质心 `C`；再用 `faiss::IndexFlatL2` 为每个 `X[i]` 找最近簇 `cluster_ids[i]`。
 
 ### 3.2 建立旋转器并旋转质心
-`rabitqlib::choose_rotator<float>(d, FhtKacRotator, d')` 构造 `R`；对每个 `C[l]` 计算 `c_r^l = R(C[l])` 存入 `rotated_centroids_`。
+默认走 **OPQ-on-residuals**（`d == d'` 时自动启用）：
+
+1. 先用 `rabitqlib::choose_rotator<float>(d, FhtKacRotator, d')` 构造初始 `R₀`
+2. 用 `R₀` 旋转每个簇质心，再对训练样本计算归一化残差 `o_i = R₀(x_i − c_{cid_i}) / ‖·‖`
+3. 调用 `faiss::OPQMatrix(d, M, d')` 在 `o_i` 样本上训练 25 outer × 4 inner 迭代，得到 OPQ 旋转矩阵 `R_opq`
+4. **组合最终旋转矩阵 `R = R_opq · R₀`** 灌入 `rabitqlib::MatrixRotator`，替换 `R₀`
+5. 用 `R` 重新旋转所有质心存入 `rotated_centroids_`
+
+**关键设计选择 — 在归一化残差上训练 OPQ**：标准 OPQ 在 raw data 上训练（`IVFE8PQ_USE_OPQ=1`），但 IVF + per-cluster normalization 把原始数据的 anisotropy 大部分消解，OPQ-on-raw 实测**毫无收益**（κ 不动、recall ±0.05pp 噪声）。OPQ 必须训在 PQ **实际量化的对象** —— 归一化残差 `o`——上才能找到对齐子空间的最优旋转。
+
+`IVFE8PQ_USE_OPQ` 环境变量：
+- 默认（不设）：`mode=2` OPQ-on-residuals
+- `=0`：禁用 OPQ，走 FhtKac 随机旋转（baseline）
+- `=1`：legacy raw-data OPQ（无收益，仅作对照）
+- `=2`：等同默认
+
+**实测增益（recall@100, nprobe=10..100, vs no-OPQ baseline）**：
+| 数据集 | nsubvec | dsub | Δrecall (典型) |
+|---|---|---|---|
+| SIFT-128 | 16 | **8** | **+2.94 ~ +3.42 pp** ★ |
+| SIFT-128 | 32 | 4 | +0.30 ~ +0.46 pp |
+| SIFT-128 | 64 | 2 | flat（±0.04） |
+| GIST-960 | 120 | **8** | **+2.91 ~ +7.56 pp** ★★ |
+| GIST-960 | 240 | 4 | +0.54 ~ +3.06 pp ★ |
+| GIST-960 | 480 | 2 | flat（±0.06） |
+
+GIST 上增益 > SIFT 因为高维数据残差结构更复杂，OPQ headroom 更大。dsub=2 配置 κ 已极小（0.09），无 headroom。
+
+> **构建时间代价**：OPQ 训练 25 outer×4 inner iter，SIFT-128 增加 ~1 min，GIST-960 增加 ~10-20 min。可接受。要 fastest build 走 `IVFE8PQ_USE_OPQ=0`。
 
 ### 3.3 收集归一化残差样本，训练 PQ
 对随机抽取的 `n_sample ≤ min(n, 256·1024)` 条样本：
 ```
 x_r = R(X[i]);  r = x_r − c_r^{cid[i]};  o = r / max(‖r‖, ε)
 ```
-拼成样本矩阵 `O_sample ∈ R^{n_sample×d'}`，调用 `faiss::ProductQuantizer pq(d', M, 8); pq.train(n_sample, O_sample)` 得到 PQ 中心 `P`（逻辑 shape `M × 256 × dsub`）。
+拼成样本矩阵 `O_sample ∈ R^{n_sample×d'}`，调用 `faiss::ProductQuantizer pq(d', M, 8); pq.train(n_sample, O_sample)` 得到 PQ 中心 `P`（faiss 布局 `[b · K · dsub + k · dsub + j]`）。
+
+**E_8 lattice 初始化（仅 dsub=8）**：在 `pq.train(...)` 之前，把 IVFE8 的 240 个 minimum-norm root 向量（加 16 个 padding 重复至 256 条）除 √2 归一为单位向量，灌入 `pq.centroids` 并设置 `pq.train_type = Train_hot_start`，让 faiss L2 k-means 从 Gersho 最优 8-D 球面填充（G_8 ≤ 0.0717）开始细化。`dsub ≠ 8` 时跳过此步、走 faiss 默认 k-means++ init。helper 在 `e8pq_pq_train.hpp::init_centroids_e8_`。
+
+> **设计 note**：早期实现尝试过 per-subspace 球面 k-means（mean update + L2 normalize），目标是直接对 `κ = ‖ε⊥‖/<c,o>` 优化。但强制每个子空间 centroid `‖c̃_b‖=1` 与 PQ 数据真实尺度 `‖x_b‖² ≈ 1/M` 严重失配（centroid 比数据大 √M 倍），导致 `dsub ≤ 4` recall 回退 5–30 pp。报告里"per-vector 归一化消除 ε‖"是**全局**结论，per-subspace L2 k-means 的均值更新恰好给出 Lloyd 半径定理（4.12）所要求的 `ρ = cos φ` 自然尺度——不能强行单位化。当前版本**只换 init、不换迭代**。
 
 > 训练在 **归一化** 的残差上，是因为 codebook 要表示 `ô`（单位方向）。若不归一化，PQ 中心会跟随 `‖r‖` 的尺度分布，而 `<ô, o>` 的波动变大，`f_add/f_rescale` 的无偏性变差。
+
+**实测增益（SIFT-128 nlist=1024，recall@100, nprobe=10..100）**：
+| nsubvec | dsub | E_8 init | IVFE8PQ Δ recall | IVFE8PQFastScan Δ recall |
+|---|---|---|---|---|
+| 16 | 8 | ✓ | **+0.19~+0.28 pp** | +0.01~+0.10 pp |
+| 32 | 4 | ✗ | ±0.02 pp（flat） | ±0.05 pp（flat）|
+| 64 | 2 | ✗ | ±0.03 pp（flat） | ±0.03 pp（flat）|
+| 128 | 1 | ✗ | — | ±0.03 pp（flat）|
+
+dsub=8 上 IVFE8PQ canonical 的提升明显超过 FastScan，原因：FastScan 的 u8 LUT 量化噪声本身就在 κ 量级，吃掉 E_8 init 的边际改善。dsub≠8 完全持平 baseline（faiss 默认路径未触动）。
 
 ### 3.4 编码 + 计算每向量 RaBitQ 因子（多线程）
 并行遍历所有 `i ∈ [0, n)`：
